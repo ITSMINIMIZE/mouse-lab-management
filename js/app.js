@@ -697,13 +697,16 @@ const App = {
       `<button type="button" class="choice cage-grp-choice ${selG === i ? 'sel' : ''}" data-g="${i}">
          <span class="sw" style="background:${g.color}"></span>${g.name}
        </button>`).join('');
-    const countCards = [1, 2, 3, 4, 5].map(n =>
-      `<button type="button" class="count-card ${curMice === n ? 'sel' : ''}" data-count="${n}">${n}</button>`).join('')
+    // editing an existing cage: can only ADD mice, never reduce (removal is per-mouse: move/death)
+    const countCards = [1, 2, 3, 4, 5].map(n => {
+      const locked = curMice != null && n < curMice;
+      return `<button type="button" class="count-card ${curMice === n ? 'sel' : ''}" data-count="${n}" ${locked ? 'disabled' : ''}>${n}</button>`;
+    }).join('')
       + `<button type="button" class="count-card other ${otherPreset ? 'sel' : ''}" data-count="other">อื่นๆ</button>`;
 
     this.openModal(`
       <div class="modal-head">
-        <div><h3>${cage ? 'แก้ไขกรง' : 'เพิ่มกรง'} ${code}</h3><div class="sub">ชั้น ${shelf} · ตำแหน่ง ${pos}</div></div>
+        <div><h3>${cage ? 'แก้ไขกรง' : 'เพิ่มกรง'} ${code}</h3><div class="sub">ชั้น ${shelf} · ตำแหน่ง ${pos}${cage ? ` · ปัจจุบัน ${cage.mice.length} ตัว (เพิ่มได้เท่านั้น)` : ''}</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
       </div>
       <div class="modal-body">
@@ -733,11 +736,12 @@ const App = {
       if (selG == null) { this.toast('กรุณาเลือกกลุ่มก่อน'); return; }
       const groupId = p.groups[selG].id;
       if (cage) {
+        // increase-only: reducing headcount must go through per-mouse move/death, not silent deletion
+        if (mice < cage.mice.length) { this.toast('ลดจำนวนไม่ได้ — ต้องเอาหนูออกทีละตัว (ย้าย/บันทึกการตาย)'); return; }
         cage.groupId = groupId;
         cage.mice.forEach(m => { if (m.alive) m.sex = selSex; });
         let nextN = cage.mice.reduce((mx, m) => Math.max(mx, parseInt(m.code.split('-').pop()) || 0), 0);
         while (cage.mice.length < mice) { nextN++; cage.mice.push(this.freshMouse(`${cage.code}-${nextN}`, selSex)); }
-        while (cage.mice.length > mice) cage.mice.pop();
         this.log('แก้ไขกรง', `${cage.code} · ${p.groups[selG].name} · ${mice} ตัว (${selSex === 'M' ? '♂' : '♀'})`, p.name);
       } else {
         const newMice = Array.from({ length: mice }, (_, k) => this.freshMouse(`${code}-${k + 1}`, selSex));
