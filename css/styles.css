@@ -534,6 +534,12 @@ svg.chart { width: 100%; height: auto; display: block; }
 .add-member { display: flex; gap: 8px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
 .add-member select { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; }
 
+/* system-role toggle (user / admin) */
+.role-sys { flex: 1; padding: 11px; font-size: 15px; font-weight: 700; border: 1.5px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text-muted); }
+.role-sys.sel { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); }
+.role-sys[data-r="admin"].sel { border-color: var(--red); background: var(--red-soft); color: var(--red); }
+.role-sys:disabled { opacity: .4; cursor: not-allowed; }
+
 /* toast */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);

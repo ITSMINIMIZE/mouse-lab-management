@@ -26,14 +26,18 @@ const CAPABILITIES = [
 ];
 
 // mock user accounts (system role: admin = superuser, user = per-project roles)
+// `name` is the display name kept in sync with firstName + lastName.
+function makeUser(id, firstName, lastName, email, password, systemRole) {
+  return { id, firstName, lastName, email, password, systemRole, name: `${firstName} ${lastName}`.trim() };
+}
 const USERS = [
-  { id: 'u_admin', name: 'แอดมิน (ผู้ดูแลระบบ)', systemRole: 'admin' },
-  { id: 'u_pi',    name: 'ดร. สมชาย',            systemRole: 'user' },
-  { id: 'u_napa',  name: 'ดร. นภา',              systemRole: 'user' },
-  { id: 'u_vet',   name: 'สพ.ญ. กมล',           systemRole: 'user' },
-  { id: 'u_sci',   name: 'ปิยะ',                 systemRole: 'user' },
-  { id: 'u_ahs',   name: 'ก้อง',                 systemRole: 'user' },
-  { id: 'u_ec',    name: 'อ. วิไล (กรรมการ EC)', systemRole: 'user' },
+  makeUser('u_admin', 'แอดมิน', 'ระบบ',     'admin@lab.test',   'admin1234', 'admin'),
+  makeUser('u_pi',    'สมชาย',  'ใจดี',      'somchai@lab.test', 'demo1234',  'user'),
+  makeUser('u_napa',  'นภา',    'ศรีสุข',    'napa@lab.test',    'demo1234',  'user'),
+  makeUser('u_vet',   'กมล',    'รักสัตว์',  'kamon@lab.test',   'demo1234',  'user'),
+  makeUser('u_sci',   'ปิยะ',   'วิจัย',     'piya@lab.test',    'demo1234',  'user'),
+  makeUser('u_ahs',   'ก้อง',   'ดูแลสัตว์', 'kong@lab.test',    'demo1234',  'user'),
+  makeUser('u_ec',    'วิไล',   'ตรวจสอบ',   'wilai@lab.test',   'demo1234',  'user'),
 ];
 
 // ---- helpers for generating believable weight histories -----

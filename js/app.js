@@ -78,6 +78,7 @@ const App = {
       case 'create':   this.go('create'); break;
       case 'audit':    this.go('audit', this.route.projectId); break;
       case 'roles':    this.go('roles', this.route.projectId); break;
+      case 'users':    this.go('users'); break;
       case 'logout':   this.go('login'); break;
     }
   },
@@ -94,7 +95,12 @@ const App = {
     if (name === 'reports') return this.renderReports();
     if (name === 'audit') return this.renderAudit();
     if (name === 'roles') return this.renderRoles();
+    if (name === 'users') return this.renderUsers();
   },
+
+  // ---- user account helpers ----
+  adminCount() { return DB.users.filter(u => u.systemRole === 'admin').length; },
+  isLastAdmin(u) { return u.systemRole === 'admin' && this.adminCount() <= 1; },
 
   // ---- audit log (append-only, visible to everyone) ----
   log(action, detail, projectName = '') {
@@ -126,6 +132,7 @@ const App = {
           <div class="spacer"></div>
           <button class="btn btn-ghost" data-nav="audit">📋 Audit Log</button>
           <button class="btn btn-ghost" data-nav="roles">🔑 สิทธิ์</button>
+          ${this.isAdmin ? `<button class="btn btn-ghost" data-nav="users">👤 ผู้ใช้</button>` : ''}
           <div class="role-switch">
             ${projRole ? `<span class="role-badge" title="บทบาทในโครงการนี้">${projRole}</span>` : ''}
             <span style="font-size:12px;color:var(--text-muted)">เข้าใช้เป็น</span>
@@ -1632,6 +1639,7 @@ const App = {
       `<div class="page">
         <div class="page-head">
           <div><h2>🔑 บทบาท & สิทธิ์</h2><div class="desc">สิทธิ์เป็นรายโครงการ · ระดับระบบมี admin (ทำได้ทุกอย่าง) และ user · 1 คนถือได้หลายบทบาทต่อโครงการ (สิทธิ์รวมกัน)</div></div>
+          <button class="btn" id="myPwBtn">🔒 เปลี่ยนรหัสผ่านของฉัน</button>
         </div>
 
         <div class="section-title">บทบาทของฉันในแต่ละโครงการ · เข้าใช้เป็น <b>${this.user.name}</b> (${this.isAdmin ? 'admin' : 'user'})</div>
@@ -1646,6 +1654,162 @@ const App = {
         <p class="empty-note" style="margin-top:10px">การจัดสมาชิก/มอบสิทธิทำได้จากปุ่ม “👥 สมาชิก” ในหน้าโครงการ (เฉพาะ PI และ admin)</p>
       </div>`
     );
+    this.el('myPwBtn').onclick = () => this.openMyPassword();
+  },
+
+  // ---------------------------------------------------------
+  // 7. USER MANAGEMENT (admin only)
+  // ---------------------------------------------------------
+  renderUsers() {
+    if (!this.isAdmin) { this.toast('เฉพาะ admin เท่านั้น'); return this.go('projects'); }
+
+    const rows = DB.users.map(u => {
+      const self = u.id === this.user.id;
+      const lastAdmin = this.isLastAdmin(u);
+      return `<tr>
+        <td><b>${u.name}</b>${self ? ' <span class="role-tag">คุณ</span>' : ''}</td>
+        <td class="mono" style="color:var(--text-muted)">${u.email}</td>
+        <td><span class="audit-act ${u.systemRole === 'admin' ? 'red' : 'gray'}">${u.systemRole}</span></td>
+        <td style="white-space:nowrap">
+          <button class="mini-btn" data-edit="${u.id}">แก้ไข</button>
+          <button class="mini-btn danger" data-del="${u.id}" ${self || lastAdmin ? 'disabled title="ลบไม่ได้"' : ''}>ลบ</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    this.shell(
+      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="users">จัดการผู้ใช้</a>`,
+      `<div class="page">
+        <div class="page-head">
+          <div><h2>👤 จัดการผู้ใช้</h2><div class="desc">เพิ่ม แก้ไข ลบบัญชีผู้ใช้ในระบบ (เฉพาะ admin) · มี admin ${this.adminCount()} คน</div></div>
+          <button class="btn btn-primary" id="addUserBtn">➕ เพิ่มผู้ใช้</button>
+        </div>
+        <div class="report-canvas" style="padding:0;overflow:auto">
+          <table class="data">
+            <thead><tr><th>ชื่อ-สกุล</th><th>อีเมล</th><th>สิทธิ์ระบบ</th><th>จัดการ</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="empty-note" style="margin-top:10px">admin ลดสิทธิ์/ลบตัวเองไม่ได้ และต้องมี admin อย่างน้อย 1 คนเสมอ</p>
+      </div>`
+    );
+
+    this.el('addUserBtn').onclick = () => this.openUserForm(null);
+    document.querySelectorAll('[data-edit]').forEach(b => {
+      b.onclick = () => this.openUserForm(DB.users.find(u => u.id === b.dataset.edit));
+    });
+    document.querySelectorAll('[data-del]').forEach(b => {
+      if (b.disabled) return;
+      b.onclick = () => {
+        const u = DB.users.find(x => x.id === b.dataset.del);
+        if (u.id === this.user.id) { this.toast('ลบบัญชีตัวเองไม่ได้'); return; }
+        if (this.isLastAdmin(u)) { this.toast('ต้องมี admin อย่างน้อย 1 คน'); return; }
+        if (!confirm(`ลบผู้ใช้ ${u.name}? (จะถูกเอาออกจากทุกโครงการด้วย)`)) return;
+        DB.users = DB.users.filter(x => x.id !== u.id);
+        DB.projects.forEach(p => { if (p.members) p.members = p.members.filter(m => m.userId !== u.id); });
+        this.log('ลบผู้ใช้', `${u.name} (${u.email})`, '');
+        this.renderUsers();
+      };
+    });
+  },
+
+  openUserForm(user) {
+    const isNew = !user;
+    const u = user || { firstName: '', lastName: '', email: '', password: '', systemRole: 'user' };
+    const self = user && user.id === this.user.id;
+    const lockRole = self && user.systemRole === 'admin';   // admin can't demote self
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>${isNew ? 'เพิ่มผู้ใช้ใหม่' : 'แก้ไขผู้ใช้'}</h3><div class="sub">${isNew ? 'ตั้งค่าบัญชีเริ่มต้น' : u.email}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="two-col">
+          <div class="field"><label>ชื่อ <span style="color:var(--red)">*</span></label><input id="uFirst" value="${u.firstName}"></div>
+          <div class="field"><label>สกุล</label><input id="uLast" value="${u.lastName}"></div>
+        </div>
+        <div class="field"><label>อีเมล <span style="color:var(--red)">*</span></label><input id="uEmail" type="email" value="${u.email}"></div>
+        <div class="field"><label>รหัสผ่าน ${isNew ? '<span style="color:var(--red)">*</span>' : '<span style="font-weight:400;color:var(--text-muted)">(เว้นว่างหากไม่เปลี่ยน)</span>'}</label>
+          <input id="uPass" type="text" value="${isNew ? u.password : ''}" placeholder="${isNew ? 'อย่างน้อย 6 ตัวอักษร' : '••••••'}"></div>
+        <div class="field"><label>สิทธิ์ระดับระบบ</label>
+          <div class="sex-row" id="uRole">
+            <button type="button" class="role-sys ${u.systemRole === 'user' ? 'sel' : ''}" data-r="user" ${lockRole ? 'disabled' : ''}>user</button>
+            <button type="button" class="role-sys ${u.systemRole === 'admin' ? 'sel' : ''}" data-r="admin">admin</button>
+          </div>
+          ${lockRole ? '<p class="empty-note">admin ลดสิทธิ์ตัวเองไม่ได้</p>' : ''}
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="uCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="uSave">${isNew ? 'สร้างผู้ใช้' : 'บันทึก'}</button>
+      </div>
+    `);
+
+    let role = u.systemRole;
+    this.el('uRole').querySelectorAll('.role-sys').forEach(b => {
+      b.onclick = () => { if (b.disabled) return; role = b.dataset.r; this.el('uRole').querySelectorAll('.role-sys').forEach(x => x.classList.toggle('sel', x === b)); };
+    });
+    this.el('closeModal').onclick = () => this.renderUsers();
+    this.el('uCancel').onclick = () => this.renderUsers();
+    this.el('uSave').onclick = () => {
+      const firstName = this.el('uFirst').value.trim();
+      const lastName = this.el('uLast').value.trim();
+      const email = this.el('uEmail').value.trim();
+      const pass = this.el('uPass').value;
+      if (!firstName) { this.el('uFirst').focus(); this.toast('กรุณากรอกชื่อ'); return; }
+      if (!/^\S+@\S+\.\S+$/.test(email)) { this.el('uEmail').focus(); this.toast('อีเมลไม่ถูกต้อง'); return; }
+      if (DB.users.some(x => x.email.toLowerCase() === email.toLowerCase() && (!user || x.id !== user.id))) { this.toast('อีเมลนี้ถูกใช้แล้ว'); return; }
+      if (isNew && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
+      if (!isNew && pass && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
+      // last-admin safety net (role toggle is already disabled for self-admin)
+      if (user && user.systemRole === 'admin' && role !== 'admin' && this.isLastAdmin(user)) { this.toast('ต้องมี admin อย่างน้อย 1 คน'); return; }
+
+      if (isNew) {
+        DB.users.push({ id: 'u_' + Date.now().toString(36), firstName, lastName, email, password: pass, systemRole: role, name: `${firstName} ${lastName}`.trim() });
+        this.log('เพิ่มผู้ใช้', `${firstName} ${lastName} (${email}) · ${role}`, '');
+      } else {
+        user.firstName = firstName; user.lastName = lastName; user.email = email;
+        user.name = `${firstName} ${lastName}`.trim();
+        user.systemRole = role;
+        if (pass) user.password = pass;
+        this.log('แก้ไขผู้ใช้', `${user.name} (${email}) · ${role}`, '');
+      }
+      this.toast('บันทึกผู้ใช้แล้ว');
+      this.renderUsers();
+    };
+  },
+
+  // self-service password change (any user)
+  openMyPassword() {
+    const u = this.user;
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>🔒 เปลี่ยนรหัสผ่าน</h3><div class="sub">${u.name} · ${u.email}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>รหัสผ่านปัจจุบัน</label><input id="pwCur" type="password" placeholder="รหัสผ่านเดิม"></div>
+        <div class="field"><label>รหัสผ่านใหม่</label><input id="pwNew" type="password" placeholder="อย่างน้อย 6 ตัวอักษร"></div>
+        <div class="field"><label>ยืนยันรหัสผ่านใหม่</label><input id="pwNew2" type="password"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="pwCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="pwSave">บันทึกรหัสผ่าน</button>
+      </div>
+    `, { compact: true });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('pwCancel').onclick = () => this.closeModal();
+    this.el('pwSave').onclick = () => {
+      const cur = this.el('pwCur').value, nw = this.el('pwNew').value, nw2 = this.el('pwNew2').value;
+      if (cur !== u.password) { this.el('pwCur').focus(); this.toast('รหัสผ่านปัจจุบันไม่ถูกต้อง'); return; }
+      if (nw.length < 6) { this.el('pwNew').focus(); this.toast('รหัสผ่านใหม่อย่างน้อย 6 ตัวอักษร'); return; }
+      if (nw !== nw2) { this.el('pwNew2').focus(); this.toast('ยืนยันรหัสผ่านไม่ตรงกัน'); return; }
+      u.password = nw;
+      this.log('เปลี่ยนรหัสผ่าน', 'เปลี่ยนรหัสผ่านของตนเอง', '');
+      this.closeModal();
+      this.toast('เปลี่ยนรหัสผ่านแล้ว');
+    };
   },
 
   // ---------------------------------------------------------
@@ -1666,7 +1830,8 @@ const App = {
       </tr>`;
     }).join('');
 
-    const nonMembers = DB.users.filter(u => !p.members.some(m => m.userId === u.id));
+    // admins are system-wide superusers, not assignable as ordinary project members
+    const nonMembers = DB.users.filter(u => u.systemRole !== 'admin' && !p.members.some(m => m.userId === u.id));
     const addOpts = nonMembers.length
       ? `<select id="addUser">${nonMembers.map(u => `<option value="${u.id}">${u.name} · ${u.systemRole}</option>`).join('')}</select>
          <button class="btn btn-primary btn-sm" id="addMemberBtn">+ เพิ่มเป็นสมาชิก</button>`
