@@ -194,7 +194,7 @@ const App = {
       const mice = p.cages.reduce((s, c) => s + c.mice.length, 0);
       const roleLabel = this.myRoleLabel(p);
       return `
-        <div class="project-card ${closed ? 'closed' : ''}" ${closed ? '' : `data-nav="project" data-project-id="${p.id}"`}>
+        <div class="project-card ${closed ? 'closed' : ''}" data-nav="project" data-project-id="${p.id}">
           <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
             <h3>${p.name}</h3>
             <span class="pill ${closed ? 'closed' : 'active'}">${closed ? 'ปิดแล้ว' : 'กำลังดำเนิน'}</span>
@@ -562,8 +562,9 @@ const App = {
     if (!p) return this.go('projects');
     if (!this.hasAccess(p)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงโครงการนี้'); return this.go('projects'); }
 
-    const canWeigh = this.can('weigh', p);
-    const canEdit = this.can('editProject', p);
+    const closed = p.status === 'closed';   // closed projects are view-only
+    const canWeigh = !closed && this.can('weigh', p);
+    const canEdit = !closed && this.can('editProject', p);
     const canMembers = this.can('manageMembers', p);
     if (this.editing && !canEdit) this.editing = false;
     if (this.weighing && !canWeigh) this.weighing = false;
@@ -621,7 +622,7 @@ const App = {
       `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="project" data-project-id="${p.id}">${p.name}</a>`,
       `<div class="page wide">
         <div class="page-head">
-          <div><h2>${p.name}</h2><div class="desc">${p.description}</div></div>
+          <div><h2>${p.name} ${closed ? '<span class="pill closed">ปิดแล้ว</span>' : ''}</h2><div class="desc">${p.description}${closed ? ' · โครงการปิดแล้ว (ดูอย่างเดียว)' : ''}</div></div>
         </div>
         ${modeBar}
         ${shelves.join('')}
@@ -1750,8 +1751,8 @@ const App = {
     this.el('uRole').querySelectorAll('.role-sys').forEach(b => {
       b.onclick = () => { if (b.disabled) return; role = b.dataset.r; this.el('uRole').querySelectorAll('.role-sys').forEach(x => x.classList.toggle('sel', x === b)); };
     });
-    this.el('closeModal').onclick = () => this.renderUsers();
-    this.el('uCancel').onclick = () => this.renderUsers();
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('uCancel').onclick = () => this.closeModal();
     this.el('uSave').onclick = () => {
       const firstName = this.el('uFirst').value.trim();
       const lastName = this.el('uLast').value.trim();
@@ -1775,6 +1776,7 @@ const App = {
         if (pass) user.password = pass;
         this.log('แก้ไขผู้ใช้', `${user.name} (${email}) · ${role}`, '');
       }
+      this.closeModal();
       this.toast('บันทึกผู้ใช้แล้ว');
       this.renderUsers();
     };
