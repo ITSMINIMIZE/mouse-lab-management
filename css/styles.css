@@ -246,6 +246,18 @@ input, select { font-family: inherit; }
 }
 .weighing-banner .spacer { flex: 1; }
 
+.edit-banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a;
+  border-radius: var(--radius); padding: 12px 16px; margin-bottom: 18px; font-weight: 600;
+}
+.edit-banner .spacer { flex: 1; }
+.edit-num { font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.edit-num input { width: 56px; padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13px; }
+.cage.empty.editable { cursor: pointer; opacity: .8; border-color: var(--primary); color: var(--primary); }
+.cage.empty.editable:hover { background: var(--primary-soft); opacity: 1; }
+.cage.empty.editable .empty-mark { font-weight: 700; color: var(--primary); }
+
 .shelf { margin-bottom: 26px; }
 .shelf-label {
   display: flex; align-items: center; gap: 8px;

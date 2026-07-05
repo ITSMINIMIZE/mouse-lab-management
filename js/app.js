@@ -63,6 +63,7 @@ const App = {
   go(name, projectId = null) {
     this.route = { name, projectId };
     this.weighing = false;
+    this.editing = false;
     window.scrollTo(0, 0);
     if (name === 'login') return this.renderLogin();
     if (name === 'projects') return this.renderProjects();
@@ -530,7 +531,7 @@ const App = {
       const cells = [];
       for (let pos = 1; pos <= p.cagesPerShelf; pos++) {
         const cage = p.cages.find(c => c.shelf === s && c.position === pos);
-        cells.push(cage ? this.cageCard(p, cage, maxMice) : this.emptyCell(maxMice));
+        cells.push(cage ? this.cageCard(p, cage, maxMice) : this.emptyCell(maxMice, this.editing, s, pos));
       }
       shelves.push(`
         <div class="shelf">
@@ -546,6 +547,14 @@ const App = {
            <span class="spacer"></span>
            <button class="btn" id="exitWeighing">ออกจากโหมด</button>
          </div>`
+      : this.editing
+      ? `<div class="edit-banner">
+           <span>✏️ <b>โหมดจัดการกรง</b> — แตะกรงว่างเพื่อเพิ่ม · แตะกรงเพื่อแก้ไข/ลบ</span>
+           <span class="spacer"></span>
+           <label class="edit-num">ชั้น <input id="edShelves" type="number" min="1" max="10" value="${p.shelves}"></label>
+           <label class="edit-num">กรง/ชั้น <input id="edCols" type="number" min="1" max="12" value="${p.cagesPerShelf}"></label>
+           <button class="btn" id="exitEditing">เสร็จสิ้น</button>
+         </div>`
       : `<div class="mode-bar">
            <div class="legend">
              <b style="color:var(--text)">กรง:</b>
@@ -558,6 +567,7 @@ const App = {
              <span><i class="dot bad"></i> ลด/ไม่เพิ่ม</span>
            </div>
            <span style="flex:1"></span>
+           <button class="btn" id="startEditing">✏️ จัดการกรง</button>
            <button class="btn" data-nav="reports">📈 รายงาน</button>
            ${canWeigh ? `<button class="btn btn-primary" id="startWeighing">⚖️ ชั่งน้ำหนัก</button>` : ''}
          </div>`;
@@ -573,7 +583,7 @@ const App = {
       </div>`
     );
 
-    if (canWeigh && !this.weighing) {
+    if (canWeigh && !this.weighing && !this.editing) {
       this.el('startWeighing').addEventListener('click', () => {
         this.weighing = true;
         this.weighSession = { done: new Set() };   // no cage weighed yet this round
@@ -587,11 +597,35 @@ const App = {
         this.renderDashboard();
       });
     }
+    if (!this.weighing && !this.editing) {
+      this.el('startEditing').addEventListener('click', () => { this.editing = true; this.renderDashboard(); });
+    }
+    if (this.editing) {
+      this.el('exitEditing').addEventListener('click', () => { this.editing = false; this.renderDashboard(); });
+      // layout resize — clamp so existing cages are never orphaned
+      const applyLayout = () => {
+        const minShelves = p.cages.reduce((m, c) => Math.max(m, c.shelf), 1);
+        const minCols = p.cages.reduce((m, c) => Math.max(m, c.position), 1);
+        const shelves = Math.max(minShelves, Math.min(10, +this.el('edShelves').value || minShelves));
+        const cols = Math.max(minCols, Math.min(12, +this.el('edCols').value || minCols));
+        if (shelves !== p.shelves || cols !== p.cagesPerShelf) {
+          p.shelves = shelves; p.cagesPerShelf = cols;
+          this.log('แก้ผังโครงการ', `${shelves} ชั้น × ${cols} กรง/ชั้น`, p.name);
+        }
+        this.renderDashboard();
+      };
+      this.el('edShelves').addEventListener('change', applyLayout);
+      this.el('edCols').addEventListener('change', applyLayout);
+      document.querySelectorAll('[data-empty]').forEach(elm => {
+        elm.addEventListener('click', () => this.openCageEditor(p, +elm.dataset.shelf, +elm.dataset.pos, null));
+      });
+    }
     // cage clicks
     document.querySelectorAll('[data-cage]').forEach(elm => {
       elm.addEventListener('click', () => {
         const cage = Data.getCage(p, elm.dataset.cage);
-        if (this.weighing) this.startWizard(p, cage);
+        if (this.editing) this.openCageEditor(p, cage.shelf, cage.position, cage);
+        else if (this.weighing) this.startWizard(p, cage);
         else this.openCagePopup(p, cage);
       });
     });
@@ -643,8 +677,111 @@ const App = {
       </div>`;
   },
 
-  emptyCell(maxMice = 1) {
+  emptyCell(maxMice = 1, editing = false, shelf = 0, pos = 0) {
+    if (editing) {
+      return `<div class="cage empty editable" style="--maxmice:${maxMice}" data-empty data-shelf="${shelf}" data-pos="${pos}">
+        <div class="empty-mark">＋ เพิ่มกรง</div></div>`;
+    }
     return `<div class="cage empty" style="--maxmice:${maxMice}"><div class="empty-mark">ว่าง</div></div>`;
+  },
+
+  // Edit-mode: add a new cage, or edit/delete an existing one (group + sex + mice count)
+  openCageEditor(p, shelf, pos, cage) {
+    const code = cage ? cage.code : `${this.SHELF_LETTERS[shelf - 1]}-${String(pos).padStart(2, '0')}`;
+    let selG = cage ? Math.max(0, p.groups.findIndex(g => g.id === cage.groupId)) : 0;
+    let selSex = cage && cage.mice[0] ? cage.mice[0].sex : 'M';
+    const curMice = cage ? cage.mice.length : null;
+    const otherPreset = curMice != null && curMice > 5;
+
+    const groupChoices = p.groups.map((g, i) =>
+      `<button type="button" class="choice cage-grp-choice ${selG === i ? 'sel' : ''}" data-g="${i}">
+         <span class="sw" style="background:${g.color}"></span>${g.name}
+       </button>`).join('');
+    const countCards = [1, 2, 3, 4, 5].map(n =>
+      `<button type="button" class="count-card ${curMice === n ? 'sel' : ''}" data-count="${n}">${n}</button>`).join('')
+      + `<button type="button" class="count-card other ${otherPreset ? 'sel' : ''}" data-count="other">อื่นๆ</button>`;
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>${cage ? 'แก้ไขกรง' : 'เพิ่มกรง'} ${code}</h3><div class="sub">ชั้น ${shelf} · ตำแหน่ง ${pos}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="field"><label>1. กลุ่มทดลอง</label><div class="choice-row wrap" id="cageGrp">${groupChoices}</div></div>
+        <div class="field"><label>2. เพศ (ทั้งกรง)</label>
+          <div class="sex-row" id="cageSex">
+            <button type="button" class="sex-btn male ${selSex === 'M' ? 'sel' : ''}" data-sex="M">♂</button>
+            <button type="button" class="sex-btn female ${selSex === 'F' ? 'sel' : ''}" data-sex="F">♀</button>
+          </div>
+        </div>
+        <div class="field"><label>3. จำนวนหนูในกรง</label>
+          <div class="count-cards" id="cageCount">${countCards}</div>
+          <div class="count-other ${otherPreset ? '' : 'hidden'}" id="cageOtherWrap">
+            <input id="cageMice" type="number" min="1" max="99" value="${otherPreset ? curMice : ''}" placeholder="ระบุจำนวน">
+            <button class="btn btn-primary" id="cageOtherSave">บันทึก</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        ${cage ? `<button class="btn btn-danger" id="cageDelete">ลบกรง</button>` : ''}
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="cageCancel">ยกเลิก</button>
+      </div>
+    `, { compact: true });
+
+    const commit = (mice) => {
+      if (selG == null) { this.toast('กรุณาเลือกกลุ่มก่อน'); return; }
+      const groupId = p.groups[selG].id;
+      if (cage) {
+        cage.groupId = groupId;
+        cage.mice.forEach(m => { if (m.alive) m.sex = selSex; });
+        let nextN = cage.mice.reduce((mx, m) => Math.max(mx, parseInt(m.code.split('-').pop()) || 0), 0);
+        while (cage.mice.length < mice) { nextN++; cage.mice.push(this.freshMouse(`${cage.code}-${nextN}`, selSex)); }
+        while (cage.mice.length > mice) cage.mice.pop();
+        this.log('แก้ไขกรง', `${cage.code} · ${p.groups[selG].name} · ${mice} ตัว (${selSex === 'M' ? '♂' : '♀'})`, p.name);
+      } else {
+        const newMice = Array.from({ length: mice }, (_, k) => this.freshMouse(`${code}-${k + 1}`, selSex));
+        p.cages.push({
+          id: `${p.id}-C${Date.now().toString(36)}`, code, groupId, shelf, position: pos, mice: newMice,
+          water: { remaining: 300, added: null, consumed: 0 },
+          food: { remaining: 100, added: null, consumed: 0 },
+          status: 'pending', lastRecordDate: todayISO(),
+        });
+        this.log('เพิ่มกรง', `${code} · ${p.groups[selG].name} · ${mice} ตัว (${selSex === 'M' ? '♂' : '♀'})`, p.name);
+      }
+      this.closeModal(); this.renderDashboard();
+    };
+
+    this.el('cageGrp').querySelectorAll('.cage-grp-choice').forEach(b => {
+      b.onclick = () => { selG = +b.dataset.g; this.el('cageGrp').querySelectorAll('.cage-grp-choice').forEach(x => x.classList.toggle('sel', x === b)); };
+    });
+    this.el('cageSex').querySelectorAll('.sex-btn').forEach(b => {
+      b.onclick = () => { selSex = b.dataset.sex; this.el('cageSex').querySelectorAll('.sex-btn').forEach(x => x.classList.toggle('sel', x === b)); };
+    });
+    this.el('cageCount').querySelectorAll('.count-card').forEach(b => {
+      b.onclick = () => {
+        if (b.dataset.count === 'other') {
+          this.el('cageCount').querySelectorAll('.count-card').forEach(x => x.classList.toggle('sel', x === b));
+          this.el('cageOtherWrap').classList.remove('hidden');
+          this.el('cageMice').focus();
+        } else commit(+b.dataset.count);
+      };
+    });
+    this.el('cageOtherSave').onclick = () => {
+      const mice = Math.max(1, Math.min(99, +this.el('cageMice').value || 0));
+      if (!mice) { this.el('cageMice').focus(); return; }
+      commit(mice);
+    };
+    this.el('cageMice').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this.el('cageOtherSave').click(); } });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('cageCancel').onclick = () => this.closeModal();
+    if (cage) this.el('cageDelete').onclick = () => {
+      if (!confirm(`ลบกรง ${cage.code} และหนูทั้งหมดในกรง?`)) return;
+      const i = p.cages.indexOf(cage);
+      if (i >= 0) p.cages.splice(i, 1);
+      this.log('ลบกรง', `${cage.code}`, p.name);
+      this.closeModal(); this.renderDashboard();
+    };
   },
 
   // ---------------------------------------------------------
@@ -1005,13 +1142,14 @@ const App = {
   //           water-added → food-added → review → save
   // ---------------------------------------------------------
   startWizard(p, cage) {
+    const mice = cage.mice.filter(m => m.alive);   // dead mice are not weighed
     this.wizard = {
-      p, cage,
+      p, cage, mice,
       mouseIndex: 0,
       data: {
         waterRemaining: null,
         foodRemaining: null,
-        mouseWeights: cage.mice.map(() => null),
+        mouseWeights: mice.map(() => null),
         waterAdded: null,
         foodAdded: null,
       },
@@ -1021,10 +1159,10 @@ const App = {
     this.renderWizardStep();
   },
 
-  // total steps = 2 (water/food remaining) + N mice + 2 (water/food added) + 1 review
+  // total steps = 2 (water/food remaining) + N alive mice + 2 (water/food added) + 1 review
   wizardStepMeta() {
     const w = this.wizard;
-    const n = w.cage.mice.length;
+    const n = w.mice.length;
     return { water0: 0, food0: 1, mouse0: 2, mouseN: 2 + n - 1, waterAdd: 2 + n, foodAdd: 3 + n, review: 4 + n, total: 5 + n };
   },
 
@@ -1051,11 +1189,11 @@ const App = {
     } else if (s >= meta.mouse0 && s <= meta.mouseN) {
       const idx = s - meta.mouse0;
       w.mouseIndex = idx;
-      const m = w.cage.mice[idx];
+      const m = w.mice[idx];
       const last = Data.latestWeight(m);
       icon = '🐭'; title = `ชั่งหนู ${m.code}`;
       hint = `เพศ ${m.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'} · กรอกน้ำหนักปัจจุบัน`;
-      progress = `<div class="mouse-progress">หนูตัวที่ ${idx + 1} จาก ${w.cage.mice.length}</div>`;
+      progress = `<div class="mouse-progress">หนูตัวที่ ${idx + 1} จาก ${w.mice.length}</div>`;
       bodyExtra = `<div class="wizard-prev">น้ำหนักครั้งก่อน: <b>${this.g(last)} g</b></div>`;
       value = w.data.mouseWeights[idx] ?? '';
     } else if (s === meta.waterAdd) {
@@ -1158,7 +1296,7 @@ const App = {
     const segs = Array.from({ length: meta.total }, (_, i) =>
       `<div class="wstep ${i < meta.review ? 'done' : 'active'}"></div>`).join('');
 
-    const mouseRows = w.cage.mice.map((m, i) => {
+    const mouseRows = w.mice.map((m, i) => {
       const prev = Data.latestWeight(m);
       const nw = w.data.mouseWeights[i];
       const d = (prev != null && nw != null) ? Math.round((nw - prev) * 10) / 10 : null;
@@ -1194,8 +1332,8 @@ const App = {
   wizardSave() {
     const w = this.wizard, cage = w.cage;
     const today = todayISO();
-    // commit new weights
-    w.cage.mice.forEach((m, i) => {
+    // commit new weights (alive mice only — dead mice were skipped)
+    w.mice.forEach((m, i) => {
       const nw = w.data.mouseWeights[i];
       if (nw != null) {
         // if last entry is today, overwrite; else append
