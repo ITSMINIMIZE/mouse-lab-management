@@ -517,6 +517,23 @@ svg.chart { width: 100%; height: auto; display: block; }
 .audit-act.amber { background: var(--amber-soft); color: var(--amber); }
 .audit-act.gray { background: #e2e8f0; color: #64748b; }
 
+/* role & permission */
+.perm-matrix th, .perm-matrix td { text-align: center; font-size: 13px; }
+.perm-matrix td:first-child, .perm-matrix th:first-child { text-align: left; }
+.perm-matrix .pm-yes { color: var(--green); font-weight: 800; }
+.perm-matrix .pm-no { color: #cbd5e1; }
+.perm-matrix tbody tr:hover, .data tbody tr:hover { background: var(--surface-2); }
+
+/* member manager */
+.role-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.role-chip {
+  padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+  border: 1.5px solid var(--border); background: var(--surface); color: var(--text-muted);
+}
+.role-chip.on { border-color: var(--primary); background: var(--primary); color: #fff; }
+.add-member { display: flex; gap: 8px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
+.add-member select { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; }
+
 /* toast */
 .toast {
   position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);

@@ -3,13 +3,38 @@
  * Mock data layer (in-memory only, no real database)
  * ============================================================ */
 
+// Project-level roles. A user can hold several of these per project; their
+// capabilities are the UNION of all roles held. Keys stay EC/PI/STOCK/VET/SCI
+// (STOCK is shown as "AHS"). System-level role (admin/user) is on the user.
 const ROLES = {
-  EC:    { key: 'EC',    label: 'EC (คณะกรรมการจริยธรรม)', canWeigh: false, canTreat: false },
-  PI:    { key: 'PI',    label: 'PI (หัวหน้าโครงการ)',      canWeigh: false, canTreat: false },
-  STOCK: { key: 'STOCK', label: 'Animal Handling / Stock',   canWeigh: false, canTreat: false },
-  VET:   { key: 'VET',   label: 'Vet (สัตวแพทย์)',          canWeigh: false, canTreat: true  },
-  SCI:   { key: 'SCI',   label: 'นักวิทย์',                  canWeigh: true,  canTreat: false },
+  EC:    { key: 'EC',    label: 'EC (กรรมการจริยธรรม)',      caps: ['view'] },
+  PI:    { key: 'PI',    label: 'PI (หัวหน้าโครงการ)',        caps: ['view', 'editProject', 'deathStop', 'manageMembers'] },
+  STOCK: { key: 'STOCK', label: 'AHS (ดูแลสัตว์/สต็อก)',      caps: ['view', 'weigh', 'deathStop'] },
+  SCI:   { key: 'SCI',   label: 'นักวิทย์',                    caps: ['view', 'weigh', 'deathStop'] },
+  VET:   { key: 'VET',   label: 'Vet (สัตวแพทย์)',            caps: ['view', 'treat', 'deathStop'] },
 };
+const ROLE_ORDER = ['EC', 'PI', 'STOCK', 'SCI', 'VET'];
+
+// capability catalogue (for the permission matrix / gating)
+const CAPABILITIES = [
+  { key: 'view',          label: 'ดูข้อมูลโครงการ / กรง / หนู' },
+  { key: 'editProject',   label: 'จัดการกรง / แก้ไขผังโครงการ' },
+  { key: 'weigh',         label: 'ชั่งน้ำหนัก (บันทึกประจำวัน)' },
+  { key: 'treat',         label: 'ตรวจรักษา / ปิดเคส / Humane endpoint' },
+  { key: 'deathStop',     label: 'บันทึกการตาย / Stop' },
+  { key: 'manageMembers', label: 'จัดการสมาชิก & สิทธิในโครงการ' },
+];
+
+// mock user accounts (system role: admin = superuser, user = per-project roles)
+const USERS = [
+  { id: 'u_admin', name: 'แอดมิน (ผู้ดูแลระบบ)', systemRole: 'admin' },
+  { id: 'u_pi',    name: 'ดร. สมชาย',            systemRole: 'user' },
+  { id: 'u_napa',  name: 'ดร. นภา',              systemRole: 'user' },
+  { id: 'u_vet',   name: 'สพ.ญ. กมล',           systemRole: 'user' },
+  { id: 'u_sci',   name: 'ปิยะ',                 systemRole: 'user' },
+  { id: 'u_ahs',   name: 'ก้อง',                 systemRole: 'user' },
+  { id: 'u_ec',    name: 'อ. วิไล (กรรมการ EC)', systemRole: 'user' },
+];
 
 // ---- helpers for generating believable weight histories -----
 function todayISO() {
@@ -194,7 +219,8 @@ const cagesP2 = [
 // Root DB object
 // ------------------------------------------------------------
 const DB = {
-  currentUser: { name: 'ผู้ใช้ทดสอบ', role: 'SCI' },
+  users: USERS,
+  currentUserId: 'u_pi',      // active identity (switchable for testing)
   projects: [
     {
       id: 'P1',
@@ -206,6 +232,15 @@ const DB = {
       cagesPerShelf: 6,
       groups: groupsP1,
       cages: cagesP1,
+      // ดร. นภา ถือ 2 บทบาท (PI+VET) ในโครงการนี้ เพื่อสาธิต union สิทธิ์
+      members: [
+        { userId: 'u_pi', roles: ['PI'] },
+        { userId: 'u_napa', roles: ['PI', 'VET'] },
+        { userId: 'u_vet', roles: ['VET'] },
+        { userId: 'u_sci', roles: ['SCI'] },
+        { userId: 'u_ahs', roles: ['STOCK'] },
+        { userId: 'u_ec', roles: ['EC'] },
+      ],
     },
     {
       id: 'P2',
@@ -217,6 +252,12 @@ const DB = {
       cagesPerShelf: 4,
       groups: groupsP2,
       cages: cagesP2,
+      // ดร. สมชาย เป็น EC ในโครงการนี้ (ต่างจากโครงการ P1 ที่เป็น PI)
+      members: [
+        { userId: 'u_pi', roles: ['EC'] },
+        { userId: 'u_sci', roles: ['SCI'] },
+        { userId: 'u_vet', roles: ['VET'] },
+      ],
     },
     {
       id: 'P3',
@@ -228,6 +269,7 @@ const DB = {
       cagesPerShelf: 4,
       groups: [{ id: 'G6', name: 'Pilot', isControl: true, color: '#64748b' }],
       cages: [],
+      members: [{ userId: 'u_napa', roles: ['PI'] }],
     },
   ],
   // append-only activity log (visible to everyone for transparency)

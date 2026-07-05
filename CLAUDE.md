@@ -32,7 +32,7 @@ UI language is **Thai**. Keep it Thai unless told otherwise.
 Cage: `{ id, code, groupId, shelf, position, mice[], water/food:{remaining,added,consumed}, status(legacy), lastRecordDate }`.
 
 ## Key domain rules (keep consistent)
-- **Roles** (`ROLES` in data.js): EC, PI, STOCK, VET, SCI. Only **SCI** has `canWeigh`; only **VET** has `canTreat`. Role is switchable live from the header dropdown (for user testing).
+- **Auth model** (per-project roles): system role is `admin | user` (`DB.users[].systemRole`; admin = superuser). Project roles (`ROLES`: EC, PI, STOCK(=AHS), SCI, VET) are assigned per user per project in `project.members[] = { userId, roles[] }`; a user may hold several roles and their capabilities are the **union** (`ROLES[key].caps`). Gate everything through `App.can(cap, project)` / `App.hasAccess(project)` — never check a role key directly. Capabilities: `view, editProject, weigh, treat, deathStop, manageMembers` (see `CAPABILITIES`). Identity is switchable live from the header ("เข้าใช้เป็น") for testing. Creating a project makes the creator PI; project list & audit log are filtered to accessible projects.
 - **Weights are always displayed to 1 decimal place, unit grams.** Use `App.g(v)` (plain) and `App.gs(v)` (signed). Never format grams inline.
 - **Cage status colour**: gray = normal, yellow = "care" (any living mouse with `careOpen` or `humaneOrder`). Computed by `App.cageStatus(cage)`.
 - **Mouse status colour** (by daily weight change, `App.mouseStatus`): green = gain ≥ `App.GAIN_THRESHOLD` (0.2 g), yellow = 0–0.2 g, red = ≤ 0 (loss/no gain). Dead or stopped mice = no status colour.
@@ -40,7 +40,8 @@ Cage: `{ id, code, groupId, shelf, position, mice[], water/food:{remaining,added
 - **Weighing mode** (SCI only): entering it starts `App.weighSession` — all cages go gray and values are cleared ("not weighed yet"); each saved cage turns green. Exit restores real values/colours. The wizard weighs **alive mice only** (`w.mice = cage.mice.filter(m => m.alive)`); dead mice are skipped.
 - **Edit mode** (dashboard "✏️ จัดการกรง", `App.editing`): empty slots become "＋ เพิ่มกรง", cages become editable; both open `openCageEditor(p, shelf, pos, cage)` (group + sex + count, or delete). Shelves/cages-per-shelf are editable inline (clamped so no cage is orphaned). All edits are logged via `App.log`.
 - **Vet actions**: treatment/close-case/humane-endpoint are only reachable by clicking into an individual **mouse** (not from the cage popup). Death & Stop are per-mouse actions in the cage popup table, hidden under a "⋯" kebab menu.
-- **Audit log**: `DB.auditLog` is append-only and **visible to everyone** (header "📋 Audit Log"). Record every meaningful action with `App.log(action, detail, projectName)` — keep new state-changing actions logged for transparency.
+- **Audit log**: `DB.auditLog` is append-only (header "📋 Audit Log"), filtered to projects the user can access (admin sees all). Record every meaningful action with `App.log(action, detail, projectName)`.
+- **Role & Permission page** (`renderRoles`, header "🔑 สิทธิ์") is a read-only reference: capability matrix + the current user's role per project. Member/role assignment is done in-project via `openMembers(p)` (PI/admin only).
 - **Create Project** (`renderCreateProject`): centered form; cages/mice are configured in-page via a per-cage wizard (`openCageConfig`) that sets group + sex (♂ blue / ♀ pink) + count. Mouse codes auto-generate as `<cageCode>-<n>` (e.g. A-01-1); `App.freshMouse(code, sex)` builds a mouse with a single starting weight.
 
 ## Conventions

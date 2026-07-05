@@ -43,8 +43,29 @@ const App = {
     });
   },
 
-  get user() { return DB.currentUser; },
-  get roleDef() { return ROLES[this.user.role]; },
+  get user() { return DB.users.find(u => u.id === DB.currentUserId) || DB.users[0]; },
+  get isAdmin() { return this.user.systemRole === 'admin'; },
+
+  // roles the current user holds in a project (array of role keys)
+  myRoles(project) {
+    if (!project) return [];
+    const m = (project.members || []).find(x => x.userId === this.user.id);
+    return m ? m.roles : [];
+  },
+  // capability check — admin can do anything; otherwise union of held roles
+  can(cap, project) {
+    if (this.isAdmin) return true;
+    return this.myRoles(project).some(r => ROLES[r] && ROLES[r].caps.includes(cap));
+  },
+  // can the current user see/open this project at all?
+  hasAccess(project) {
+    return this.isAdmin || this.myRoles(project).length > 0;
+  },
+  myRoleLabel(project) {
+    if (this.isAdmin) return 'ADMIN';
+    const roles = this.myRoles(project);
+    return roles.length ? roles.join(' + ') : '—';
+  },
 
   // ---------------------------------------------------------
   // Navigation
@@ -56,6 +77,7 @@ const App = {
       case 'reports':  this.go('reports', this.route.projectId); break;
       case 'create':   this.go('create'); break;
       case 'audit':    this.go('audit', this.route.projectId); break;
+      case 'roles':    this.go('roles', this.route.projectId); break;
       case 'logout':   this.go('login'); break;
     }
   },
@@ -71,11 +93,14 @@ const App = {
     if (name === 'dashboard') return this.renderDashboard();
     if (name === 'reports') return this.renderReports();
     if (name === 'audit') return this.renderAudit();
+    if (name === 'roles') return this.renderRoles();
   },
 
   // ---- audit log (append-only, visible to everyone) ----
   log(action, detail, projectName = '') {
-    DB.auditLog.push({ ts: Date.now(), user: this.user.name, role: this.roleDef.key, action, detail, project: projectName });
+    const proj = DB.projects.find(p => p.name === projectName);
+    const role = this.isAdmin ? 'ADMIN' : (proj && this.myRoles(proj).join('/')) || 'USER';
+    DB.auditLog.push({ ts: Date.now(), user: this.user.name, role, action, detail, project: projectName });
   },
   formatTs(ts) {
     const d = new Date(ts);
@@ -87,10 +112,12 @@ const App = {
   // Shell + header
   // ---------------------------------------------------------
   shell(crumbsHTML, bodyHTML) {
-    const r = this.roleDef;
-    const roleOptions = Object.values(ROLES)
-      .map(o => `<option value="${o.key}" ${o.key === this.user.role ? 'selected' : ''}>${o.label}</option>`)
+    const userOptions = DB.users
+      .map(u => `<option value="${u.id}" ${u.id === this.user.id ? 'selected' : ''}>${u.name} · ${u.systemRole === 'admin' ? 'admin' : 'user'}</option>`)
       .join('');
+    // show the current user's role in the project being viewed (if any)
+    const proj = Data.getProject(this.route.projectId);
+    const projRole = proj && !this.isAdmin ? this.myRoleLabel(proj) : (this.isAdmin ? 'ADMIN' : '');
     this.el('root').innerHTML = `
       <div id="app-shell">
         <header class="appbar">
@@ -98,18 +125,22 @@ const App = {
           <nav class="crumbs">${crumbsHTML}</nav>
           <div class="spacer"></div>
           <button class="btn btn-ghost" data-nav="audit">📋 Audit Log</button>
+          <button class="btn btn-ghost" data-nav="roles">🔑 สิทธิ์</button>
           <div class="role-switch">
-            <span class="role-badge">${r.canWeigh ? '⚖️ ' : ''}${r.canTreat ? '💊 ' : ''}สวมบทบาท</span>
-            <select id="roleSelect" title="สลับบทบาทเพื่อทดสอบสิทธิ์">${roleOptions}</select>
+            ${projRole ? `<span class="role-badge" title="บทบาทในโครงการนี้">${projRole}</span>` : ''}
+            <span style="font-size:12px;color:var(--text-muted)">เข้าใช้เป็น</span>
+            <select id="userSelect" title="สลับผู้ใช้เพื่อทดสอบสิทธิ์">${userOptions}</select>
           </div>
           <button class="btn btn-ghost" data-nav="logout">ออกจากระบบ</button>
         </header>
         <main>${bodyHTML}</main>
       </div>`;
-    this.el('roleSelect').addEventListener('change', (e) => {
-      this.user.role = e.target.value;
-      // re-render current view so permission-gated UI updates
-      this.go(this.route.name, this.route.projectId);
+    this.el('userSelect').addEventListener('change', (e) => {
+      DB.currentUserId = e.target.value;
+      // re-render; if the new identity can't see the current project, bounce to project list
+      const cur = Data.getProject(this.route.projectId);
+      if (this.route.projectId && cur && !this.hasAccess(cur)) this.go('projects');
+      else this.go(this.route.name, this.route.projectId);
     });
   },
 
@@ -117,8 +148,8 @@ const App = {
   // 1. LOGIN
   // ---------------------------------------------------------
   renderLogin() {
-    const roleOptions = Object.values(ROLES)
-      .map(o => `<option value="${o.key}" ${o.key === this.user.role ? 'selected' : ''}>${o.label}</option>`)
+    const userOptions = DB.users
+      .map(u => `<option value="${u.id}" ${u.id === DB.currentUserId ? 'selected' : ''}>${u.name} · ${u.systemRole === 'admin' ? 'admin' : 'user'}</option>`)
       .join('');
     this.el('root').innerHTML = `
       <div id="view-login">
@@ -127,25 +158,20 @@ const App = {
           <h1>Mouse Lab Management</h1>
           <p class="sub">ระบบบริหารจัดการสัตว์ทดลอง · Prototype v0.1</p>
           <div class="field">
-            <label>ชื่อผู้ใช้</label>
-            <input id="loginUser" value="researcher01" autocomplete="off">
+            <label>เข้าใช้เป็น (สำหรับทดสอบสิทธิ์)</label>
+            <select id="loginUser">${userOptions}</select>
           </div>
           <div class="field">
             <label>รหัสผ่าน</label>
             <input type="password" value="demo1234">
           </div>
-          <div class="field">
-            <label>เข้าสู่ระบบในบทบาท (สำหรับทดสอบ)</label>
-            <select id="loginRole">${roleOptions}</select>
-          </div>
           <button class="btn btn-primary btn-block btn-lg" type="submit">เข้าสู่ระบบ</button>
-          <p class="login-hint">โหมดสาธิต — ไม่เชื่อมต่อฐานข้อมูลจริง<br>สามารถสลับบทบาทได้ทุกเมื่อจากมุมขวาบน</p>
+          <p class="login-hint">โหมดสาธิต — ไม่เชื่อมต่อฐานข้อมูลจริง<br>สิทธิ์เป็นรายโครงการ · สลับผู้ใช้ได้ทุกเมื่อจากมุมขวาบน</p>
         </form>
       </div>`;
     this.el('loginForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      this.user.role = this.el('loginRole').value;
-      this.user.name = this.el('loginUser').value || 'ผู้ใช้ทดสอบ';
+      DB.currentUserId = this.el('loginUser').value;
       this.go('projects');
     });
   },
@@ -154,9 +180,12 @@ const App = {
   // 2. PROJECT LIST
   // ---------------------------------------------------------
   renderProjects() {
-    const cards = DB.projects.map(p => {
+    // only projects the current user has a role in (admin sees all)
+    const visible = DB.projects.filter(p => this.hasAccess(p));
+    const cards = visible.map(p => {
       const closed = p.status === 'closed';
       const mice = p.cages.reduce((s, c) => s + c.mice.length, 0);
+      const roleLabel = this.myRoleLabel(p);
       return `
         <div class="project-card ${closed ? 'closed' : ''}" ${closed ? '' : `data-nav="project" data-project-id="${p.id}"`}>
           <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
@@ -168,16 +197,16 @@ const App = {
             <span>📅 เริ่ม ${p.startDate}</span>
             <span>📦 ${p.cages.length} กรง</span>
             <span>🐭 ${mice} ตัว</span>
-            <span>🧪 ${p.groups.length} กลุ่ม</span>
+            <span class="role-tag">${roleLabel}</span>
           </div>
         </div>`;
-    }).join('');
+    }).join('') || `<p class="empty-note">คุณยังไม่มีโครงการที่เข้าถึงได้ — สร้างโครงการใหม่เพื่อเริ่มต้น (คุณจะเป็น PI ของโครงการนั้น)</p>`;
 
     this.shell(
       `<a data-nav="projects">โครงการ</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>โครงการทั้งหมด</h2><div class="desc">เลือกโครงการเพื่อเข้าสู่หน้าจัดการกรงและหนู</div></div>
+          <div><h2>โครงการของฉัน</h2><div class="desc">แสดงเฉพาะโครงการที่คุณมีบทบาท · เข้าใช้เป็น <b>${this.user.name}</b></div></div>
           <button class="btn btn-primary" data-nav="create">➕ สร้างโครงการ</button>
         </div>
         <div class="project-grid">${cards}</div>
@@ -509,6 +538,8 @@ const App = {
       shelves: this.draft.layout.shelves,
       cagesPerShelf: this.draft.layout.cols,
       groups, cages,
+      // creator becomes PI of the new project (admins are superusers regardless)
+      members: [{ userId: this.user.id, roles: ['PI'] }],
     });
     this.log('สร้างโครงการ', `${name} · ${this.draft.layout.shelves}×${this.draft.layout.cols} · ${cages.length} กรง`, name);
     this.draft = null;
@@ -522,6 +553,13 @@ const App = {
   renderDashboard() {
     const p = Data.getProject(this.route.projectId);
     if (!p) return this.go('projects');
+    if (!this.hasAccess(p)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงโครงการนี้'); return this.go('projects'); }
+
+    const canWeigh = this.can('weigh', p);
+    const canEdit = this.can('editProject', p);
+    const canMembers = this.can('manageMembers', p);
+    if (this.editing && !canEdit) this.editing = false;
+    if (this.weighing && !canWeigh) this.weighing = false;
 
     // tallest cage drives a uniform box height across the whole project
     const maxMice = p.cages.reduce((m, c) => Math.max(m, c.mice.length), 1);
@@ -540,7 +578,6 @@ const App = {
         </div>`);
     }
 
-    const canWeigh = this.roleDef.canWeigh;
     const modeBar = this.weighing
       ? `<div class="weighing-banner">
            <span>⚖️ <b>โหมดชั่งน้ำหนัก</b> — แตะกรงที่ต้องการเริ่มบันทึก (กรงสีเขียว = บันทึกแล้ว)</span>
@@ -567,7 +604,8 @@ const App = {
              <span><i class="dot bad"></i> ลด/ไม่เพิ่ม</span>
            </div>
            <span style="flex:1"></span>
-           <button class="btn" id="startEditing">✏️ จัดการกรง</button>
+           ${canMembers ? `<button class="btn" id="manageMembers">👥 สมาชิก</button>` : ''}
+           ${canEdit ? `<button class="btn" id="startEditing">✏️ จัดการกรง</button>` : ''}
            <button class="btn" data-nav="reports">📈 รายงาน</button>
            ${canWeigh ? `<button class="btn btn-primary" id="startWeighing">⚖️ ชั่งน้ำหนัก</button>` : ''}
          </div>`;
@@ -597,8 +635,11 @@ const App = {
         this.renderDashboard();
       });
     }
-    if (!this.weighing && !this.editing) {
+    if (canEdit && !this.weighing && !this.editing) {
       this.el('startEditing').addEventListener('click', () => { this.editing = true; this.renderDashboard(); });
+    }
+    if (canMembers && !this.weighing && !this.editing) {
+      this.el('manageMembers').addEventListener('click', () => this.openMembers(p));
     }
     if (this.editing) {
       this.el('exitEditing').addEventListener('click', () => { this.editing = false; this.renderDashboard(); });
@@ -794,7 +835,8 @@ const App = {
   openCagePopup(p, cage) {
     const group = Data.getGroup(p, cage.groupId);
     const controlChange = Data.controlAvgChange(p);
-    const canTreat = this.roleDef.canTreat;
+    const canTreat = this.can('treat', p);
+    const canDeathStop = this.can('deathStop', p);
 
     const rows = cage.mice.map(m => {
       const cur = Data.latestWeight(m);
@@ -814,13 +856,15 @@ const App = {
         (m.excluded && !dead ? `<span class="m-badge stop">ไม่คิดเฉลี่ย</span>` : '');
       const actions = dead
         ? `<span class="empty-note" style="font-size:12px">${m.death ? this.deathLabel(m.death) : 'ตาย'}</span>`
-        : `<div class="kebab-wrap">
+        : canDeathStop
+        ? `<div class="kebab-wrap">
              <button class="mini-btn kebab" data-act="menu" data-mid="${m.id}">⋯</button>
              <div class="kebab-menu" id="menu-${m.id}">
                <button class="menu-item stop" data-act="stop" data-mid="${m.id}">${m.excluded ? 'รวมกลับเข้าค่าเฉลี่ย' : 'Stop (ไม่คิดเฉลี่ย)'}</button>
                <button class="menu-item death" data-act="death" data-mid="${m.id}">Death (บันทึกการตาย)</button>
              </div>
-           </div>`;
+           </div>`
+        : `<span style="color:var(--text-muted)">—</span>`;
       return `
         <tr class="${dead ? 'row-dead' : m.excluded ? 'row-stop' : ''}">
           <td data-mouse="${m.id}"><b>${m.code}</b> ${this.treatMark(m)}<span class="mono" style="color:var(--text-muted)"> (${m.sex === 'M' ? '♂' : '♀'})</span> ${badges}</td>
@@ -979,7 +1023,7 @@ const App = {
   // Mouse detail (chart + history + treatment)
   // ---------------------------------------------------------
   openMouseDetail(p, cage, mouse) {
-    const canTreat = this.roleDef.canTreat;
+    const canTreat = this.can('treat', p);
     const cur = Data.latestWeight(mouse);
     const chg = Data.weightChange(mouse);
     const chgClass = chg == null ? '' : chg >= 0 ? 'up' : 'down';
@@ -1374,7 +1418,8 @@ const App = {
   // 4. REPORTS
   // ---------------------------------------------------------
   renderReports() {
-    const p = Data.getProject(this.route.projectId) || DB.projects[0];
+    const p = Data.getProject(this.route.projectId) || DB.projects.find(x => this.hasAccess(x));
+    if (!p || !this.hasAccess(p)) { this.toast('ไม่มีสิทธิ์เข้าถึง'); return this.go('projects'); }
     this.reportState = this.reportState || { mode: 'group', groupId: 'ALL', metric: 'weight', range: 14 };
 
     const groupOpts = ['<option value="ALL">ทุกกลุ่ม</option>']
@@ -1525,7 +1570,10 @@ const App = {
     const filterOpts = ['<option value="ALL">ทุกกิจกรรม</option>']
       .concat(actions.map(a => `<option value="${a}">${a}</option>`)).join('');
 
+    // only show log entries for projects the user can access (admin sees all; system entries shown to all)
+    const visibleNames = new Set(DB.projects.filter(p => this.hasAccess(p)).map(p => p.name));
     const entries = [...DB.auditLog].reverse()
+      .filter(e => !e.project || this.isAdmin || visibleNames.has(e.project))
       .filter(e => this.auditFilter === 'ALL' || e.action === this.auditFilter);
 
     const rows = entries.length ? entries.map(e => `
@@ -1558,6 +1606,112 @@ const App = {
     const sel = this.el('auditFilter');
     sel.value = this.auditFilter;
     sel.addEventListener('change', () => { this.auditFilter = sel.value; this.renderAudit(); });
+  },
+
+  // ---------------------------------------------------------
+  // 6. ROLE & PERMISSION  (reference matrix + my memberships)
+  // ---------------------------------------------------------
+  renderRoles() {
+    const roleList = ROLE_ORDER.map(k => ROLES[k]);
+    const head = roleList.map(r => `<th>${r.label.split(' ')[0]}</th>`).join('');
+    const matrix = CAPABILITIES.map(c => `
+      <tr>
+        <td>${c.label}</td>
+        ${roleList.map(r => `<td class="pm-cell">${r.caps.includes(c.key) ? '<span class="pm-yes">✓</span>' : '<span class="pm-no">–</span>'}</td>`).join('')}
+      </tr>`).join('');
+
+    // my memberships across projects
+    const mine = DB.projects.filter(p => this.hasAccess(p)).map(p => `
+      <tr>
+        <td><b>${p.name}</b></td>
+        <td>${this.isAdmin ? '<span class="role-tag">ADMIN</span>' : this.myRoles(p).map(r => `<span class="role-tag">${r}</span>`).join(' ') || '—'}</td>
+      </tr>`).join('') || `<tr><td colspan="2" class="empty-note">ยังไม่มีโครงการที่เข้าถึงได้</td></tr>`;
+
+    this.shell(
+      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="roles">บทบาท & สิทธิ์</a>`,
+      `<div class="page">
+        <div class="page-head">
+          <div><h2>🔑 บทบาท & สิทธิ์</h2><div class="desc">สิทธิ์เป็นรายโครงการ · ระดับระบบมี admin (ทำได้ทุกอย่าง) และ user · 1 คนถือได้หลายบทบาทต่อโครงการ (สิทธิ์รวมกัน)</div></div>
+        </div>
+
+        <div class="section-title">บทบาทของฉันในแต่ละโครงการ · เข้าใช้เป็น <b>${this.user.name}</b> (${this.isAdmin ? 'admin' : 'user'})</div>
+        <div class="report-canvas" style="padding:0;overflow:auto;margin-bottom:22px">
+          <table class="data"><thead><tr><th>โครงการ</th><th>บทบาท</th></tr></thead><tbody>${mine}</tbody></table>
+        </div>
+
+        <div class="section-title">ตารางสิทธิ์รายบทบาท (Permission Matrix)</div>
+        <div class="report-canvas" style="padding:0;overflow:auto">
+          <table class="data perm-matrix"><thead><tr><th>สิทธิ์ / การกระทำ</th>${head}</tr></thead><tbody>${matrix}</tbody></table>
+        </div>
+        <p class="empty-note" style="margin-top:10px">การจัดสมาชิก/มอบสิทธิทำได้จากปุ่ม “👥 สมาชิก” ในหน้าโครงการ (เฉพาะ PI และ admin)</p>
+      </div>`
+    );
+  },
+
+  // ---------------------------------------------------------
+  // Member & role management for a project (PI / admin)
+  // ---------------------------------------------------------
+  openMembers(p) {
+    if (!this.can('manageMembers', p)) { this.toast('ไม่มีสิทธิ์จัดการสมาชิก'); return; }
+    p.members = p.members || [];
+
+    const rows = p.members.map(m => {
+      const u = DB.users.find(x => x.id === m.userId);
+      const chips = ROLE_ORDER.map(rk =>
+        `<button type="button" class="role-chip ${m.roles.includes(rk) ? 'on' : ''}" data-uid="${m.userId}" data-role="${rk}">${rk === 'STOCK' ? 'AHS' : rk}</button>`).join('');
+      return `<tr>
+        <td><b>${u ? u.name : m.userId}</b> <span style="color:var(--text-muted);font-size:12px">${u ? u.systemRole : ''}</span></td>
+        <td><div class="role-chips">${chips}</div></td>
+        <td><button class="icon-btn" data-remove="${m.userId}" title="เอาออกจากโครงการ">🗑️</button></td>
+      </tr>`;
+    }).join('');
+
+    const nonMembers = DB.users.filter(u => !p.members.some(m => m.userId === u.id));
+    const addOpts = nonMembers.length
+      ? `<select id="addUser">${nonMembers.map(u => `<option value="${u.id}">${u.name} · ${u.systemRole}</option>`).join('')}</select>
+         <button class="btn btn-primary btn-sm" id="addMemberBtn">+ เพิ่มเป็นสมาชิก</button>`
+      : `<span class="empty-note">เพิ่มผู้ใช้ครบทุกคนแล้ว</span>`;
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>👥 สมาชิก & สิทธิ์ — ${p.name}</h3><div class="sub">คลิกบทบาทเพื่อเปิด/ปิด (1 คนถือได้หลายบทบาท)</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <table class="data"><thead><tr><th>ผู้ใช้</th><th>บทบาทในโครงการ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
+        <div class="add-member">${addOpts}</div>
+        <p class="empty-note">EC=ดูอย่างเดียว · PI=จัดการกรง/สมาชิก · AHS/นักวิทย์=ชั่งน้ำหนัก · Vet=รักษา · (ทุกบทบาทยกเว้น EC บันทึกตาย/Stop ได้)</p>
+      </div>
+      <div class="modal-foot"><button class="btn" id="closeMembers">เสร็จสิ้น</button></div>
+    `, { wide: true });
+
+    const refresh = () => { this.closeModal(); this.openMembers(p); };
+    this.el('closeModal').onclick = () => { this.closeModal(); this.renderDashboard(); };
+    this.el('closeMembers').onclick = () => { this.closeModal(); this.renderDashboard(); };
+    document.querySelectorAll('[data-role]').forEach(b => {
+      b.onclick = () => {
+        const m = p.members.find(x => x.userId === b.dataset.uid);
+        const rk = b.dataset.role;
+        if (m.roles.includes(rk)) m.roles = m.roles.filter(r => r !== rk);
+        else m.roles.push(rk);
+        this.log('จัดการสมาชิก', `${DB.users.find(u => u.id === m.userId)?.name}: ${m.roles.join('/') || 'ไม่มีบทบาท'}`, p.name);
+        refresh();
+      };
+    });
+    document.querySelectorAll('[data-remove]').forEach(b => {
+      b.onclick = () => {
+        const uid = b.dataset.remove;
+        p.members = p.members.filter(m => m.userId !== uid);
+        this.log('จัดการสมาชิก', `เอา ${DB.users.find(u => u.id === uid)?.name} ออกจากโครงการ`, p.name);
+        refresh();
+      };
+    });
+    if (nonMembers.length) this.el('addMemberBtn').onclick = () => {
+      const uid = this.el('addUser').value;
+      p.members.push({ userId: uid, roles: ['EC'] });   // start as view-only
+      this.log('จัดการสมาชิก', `เพิ่ม ${DB.users.find(u => u.id === uid)?.name} (EC)`, p.name);
+      refresh();
+    };
   },
 
   // ---------------------------------------------------------
