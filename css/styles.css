@@ -390,9 +390,10 @@ input, select { font-family: inherit; }
   display: grid; grid-template-columns: 11px minmax(0, 1fr) 33px; align-items: baseline; gap: 4px;
   font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap;
 }
-/* fixed number column; the treatment badge overflows into the gap so it never shifts the weight */
-.cage-mice .mid { font-size: 11px; color: var(--text-muted); font-weight: 700; overflow: visible; }
-.cage-mice .mid .treat-mark { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); }
+/* the id cell holds the number + (optional) treatment badge, side by side */
+.cage-mice .mid { display: flex; align-items: center; gap: 2px; align-self: center; font-size: 11px; color: var(--text-muted); font-weight: 700; }
+/* cages with a treatment mark widen the id cell just enough to fit the badge — no overlap, no extra gap */
+.cage-mice.has-marks .mrow { grid-template-columns: 24px minmax(0, 1fr) 33px; }
 .cage-mice .mw { font-size: 12.5px; font-weight: 800; color: var(--text); text-align: right; white-space: nowrap; overflow: hidden; }
 .cage-mice .mw .unit { font-size: 9px; font-weight: 600; color: var(--text-muted); margin-left: 1px; }
 .cage-mice .chg { font-size: 11px; font-weight: 700; text-align: right; white-space: nowrap; }
@@ -637,9 +638,9 @@ svg.chart { width: 100%; height: auto; display: block; }
   .role-switch select { max-width: 190px; }
   .mode-bar, .weighing-banner, .edit-banner { gap: 8px; }
 }
-/* tight cards (smaller iPad landscape / portrait): weight is primary — drop the
+/* tight cards (iPad landscape / portrait): weight is primary — drop the
    on-card water/food column so weights stay readable & aligned (still in the cage popup) */
-@media (max-width: 1120px) {
+@media (max-width: 1200px) {
   .cage-supply { display: none; }
   .cage-main { gap: 0; }
   .cage-mice .mw { font-size: 13px; }

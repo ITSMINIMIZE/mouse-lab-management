@@ -744,6 +744,10 @@ const App = {
     // In weighing mode, a cage's values stay cleared (gray) until it has been weighed this round
     const weighed = !this.weighing || (this.weighSession && this.weighSession.done.has(cage.id));
 
+    // reserve a dedicated badge lane only when this cage has a treatment mark,
+    // so the weight column keeps full width in every other cage
+    const hasMarks = cage.mice.some(m => m.treatments && m.treatments.length);
+
     // per-mouse weight list — status shown by the coloured change value only
     const mouseList = cage.mice.map(m => {
       const cur = Data.latestWeight(m);
@@ -774,7 +778,7 @@ const App = {
           <span class="cage-grp">${group ? group.name : ''}</span>
         </div>
         <div class="cage-main">
-          <div class="cage-mice">${mouseList || '<span class="empty-note">ไม่มีหนู</span>'}</div>
+          <div class="cage-mice${hasMarks ? ' has-marks' : ''}">${mouseList || '<span class="empty-note">ไม่มีหนู</span>'}</div>
           <div class="cage-supply">
             ${supply('💧', cage.water.consumed, cage.water.consumed / n)}
             ${supply('🍚', cage.food.consumed, cage.food.consumed / n)}
