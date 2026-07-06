@@ -565,6 +565,15 @@ table.data td.actions-cell:hover { background: transparent; }
 .chart-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 14px; }
 .chart-wrap h4 { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
 svg.chart { width: 100%; height: auto; display: block; }
+svg.chart .pt { cursor: pointer; transition: r .08s; }
+svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
+.chart-tip {
+  display: none; position: fixed; z-index: 80; pointer-events: none;
+  background: #0f172a; color: #fff; padding: 7px 10px; border-radius: 8px;
+  font-size: 12px; line-height: 1.5; box-shadow: 0 6px 18px rgba(2,6,23,.28); max-width: 260px;
+}
+.chart-tip span { display: block; color: #cbd5e1; font-variant-numeric: tabular-nums; }
+.chart-tip b { color: #fff; }
 
 .section-title { font-size: 14px; font-weight: 800; margin: 6px 0 10px; }
 .treat-item { border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--radius-sm); padding: 12px 14px; margin-bottom: 10px; background: var(--surface-2); }

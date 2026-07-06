@@ -1687,9 +1687,10 @@ const App = {
           series.push({ label: g.name + suffix(metric), color: colorOf(g.id), dash, points: pts });
         });
       } else if (st.mode === 'individual') {
-        // water/food are measured per CAGE (mice share supply) → finest granularity is per cage,
-        // tone-graded within the group
-        const val = c => metric === 'water' ? c.water.remaining : c.food.remaining;
+        // water/food = amount CONSUMED that day (backend derives it by working backward from the
+        // recorded "remaining" across days: consumed = prev_remaining + added − current_remaining).
+        // Measured per CAGE (mice share the supply) → finest granularity is per cage.
+        const val = c => metric === 'water' ? c.water.consumed : c.food.consumed;
         groups.forEach(g => {
           const base = colorOf(g.id);
           const gc = p.cages.filter(c => c.groupId === g.id);
@@ -1699,22 +1700,47 @@ const App = {
           });
         });
       } else {
-        // group average per group
+        // group average of daily consumption per group
         groups.forEach(g => {
           const gc = p.cages.filter(c => c.groupId === g.id);
           if (!gc.length) return;
-          const base = gc.reduce((a, c) => a + (metric === 'water' ? c.water.remaining : c.food.remaining), 0) / gc.length;
+          const base = gc.reduce((a, c) => a + (metric === 'water' ? c.water.consumed : c.food.consumed), 0) / gc.length;
           series.push({ label: g.name + suffix(metric), color: colorOf(g.id), dash, points: simSeries(base) });
         });
       }
     });
 
     const unit = st.metrics.length === 1 ? `g (${metricLabel[st.metrics[0]]})` : 'g';
-    const legend = series.map(s =>
-      `<span><i style="${s.dash ? `background:repeating-linear-gradient(90deg, ${s.color} 0 5px, transparent 5px 8px)` : `background:${s.color}`}"></i> ${s.label}</span>`).join('');
-    this.el('reportCanvas').innerHTML =
+    const swatch = (color, dash) => dash ? `background:repeating-linear-gradient(90deg, ${color} 0 5px, transparent 5px 8px)` : `background:${color}`;
+    let legend;
+    if (st.mode === 'individual') {
+      // compact legend: colour = group (each mouse/cage is a line — hover a point to identify it)
+      const gLeg = groups.map(g => `<span><i style="${swatch(colorOf(g.id))}"></i> ${g.name}</span>`).join('');
+      const mLeg = st.metrics.length > 1 ? '  ·  ' + st.metrics.map(m => metricLabel[m]).join(' / ') : '';
+      legend = `<span class="leg-note">รายตัว — ชี้ที่จุดบนเส้นเพื่อดูรายละเอียด</span> ${gLeg}${mLeg}`;
+    } else {
+      legend = series.map(s => `<span><i style="${swatch(s.color, s.dash)}"></i> ${s.label}</span>`).join('');
+    }
+    const canvas = this.el('reportCanvas');
+    canvas.innerHTML =
       this.lineChart(series, labels, { height: 340, showAxis: true, unit }) +
       `<div class="chart-legend">${legend}</div>`;
+    this.wireChartTooltip(canvas);
+  },
+
+  // hover tooltip on chart points: shows "<series> · <date>: <value> g"
+  wireChartTooltip(canvas) {
+    const svg = canvas.querySelector('svg.chart');
+    if (!svg) return;
+    let tip = document.getElementById('chartTip');
+    if (!tip) { tip = document.createElement('div'); tip.id = 'chartTip'; tip.className = 'chart-tip'; document.body.appendChild(tip); }
+    const show = (c) => {
+      tip.innerHTML = `<b>${c.dataset.l}</b><span>${c.dataset.d} · <b>${c.dataset.v} g</b></span>`;
+      tip.style.display = 'block';
+    };
+    svg.addEventListener('mouseover', e => { const c = e.target.closest('.pt'); if (c) show(c); });
+    svg.addEventListener('mouseout', e => { if (e.target.closest('.pt')) tip.style.display = 'none'; });
+    svg.addEventListener('mousemove', e => { tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; });
   },
 
   tail(arr, n) { return arr.slice(Math.max(0, arr.length - n)); },
@@ -2088,6 +2114,7 @@ const App = {
       }
     });
 
+    const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     const paths = series.map(s => {
       let d = '', started = false;
       s.points.forEach((v, i) => {
@@ -2095,8 +2122,9 @@ const App = {
         d += (started ? ' L' : 'M') + ` ${x(i).toFixed(1)} ${y(v).toFixed(1)}`;
         started = true;
       });
+      // each point is a hover target → tooltip shows series label · date · value
       const dots = s.points.map((v, i) => v == null ? '' :
-        `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.5" fill="${s.color}"/>`).join('');
+        `<circle class="pt" cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="${s.color}" data-l="${esc(s.label)}" data-d="${esc(labels[i])}" data-v="${v}"/>`).join('');
       return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''}/>${dots}`;
     }).join('');
 
