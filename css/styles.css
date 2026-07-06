@@ -314,26 +314,30 @@ input, select { font-family: inherit; }
 .chg.warn { color: var(--amber); }
 .chg.none { color: var(--text-muted); }
 /* main body: mouse list on the left, water/food stacked on the right */
-.cage-main { display: flex; gap: 10px; align-items: stretch; }
+.cage-main { display: flex; gap: 7px; align-items: stretch; }
 .cage-supply {
-  display: flex; flex-direction: column; justify-content: center; gap: 8px;
-  padding-left: 10px; border-left: 1px dashed var(--border); font-size: 11px; flex: none;
+  display: flex; flex-direction: column; justify-content: center; gap: 7px;
+  padding-left: 7px; border-left: 1px dashed var(--border); font-size: 10.5px; flex: none;
 }
 .cage-supply .s { display: flex; flex-direction: column; gap: 1px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.cage-supply .s-main { display: flex; align-items: center; gap: 4px; font-weight: 700; }
-.cage-supply .s-ic { display: inline-block; width: 16px; text-align: center; flex: none; }
-.cage-supply .s-avg { color: #94a3b8; font-weight: 500; font-size: 10px; padding-left: 20px; }
+.cage-supply .s-main { display: flex; align-items: center; gap: 3px; font-weight: 700; white-space: nowrap; }
+.cage-supply .s-ic { display: inline-block; width: 13px; text-align: center; flex: none; }
+.cage-supply .s-avg { color: #94a3b8; font-weight: 500; font-size: 9px; padding-left: 16px; white-space: nowrap; }
 
-/* per-mouse weight list on cage card — reserve height for the tallest cage */
+/* per-mouse weight list on cage card — reserve height for the tallest cage.
+   Fixed-width numeric columns (weight, delta) so every row aligns and never wraps. */
 .cage-mice { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; min-height: calc(var(--maxmice, 1) * 23px); }
 .cage-mice .mrow {
-  display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 6px;
-  font-variant-numeric: tabular-nums; line-height: 1.5;
+  position: relative;
+  display: grid; grid-template-columns: 11px minmax(0, 1fr) 33px; align-items: baseline; gap: 4px;
+  font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap;
 }
-.cage-mice .mid { display: flex; align-items: center; gap: 3px; font-size: 11px; color: var(--text-muted); font-weight: 700; }
-.cage-mice .mw { font-size: 15px; font-weight: 800; color: var(--text); }
-.cage-mice .mw .unit { font-size: 10px; font-weight: 600; color: var(--text-muted); margin-left: 1px; }
-.cage-mice .chg { font-size: 11px; font-weight: 700; min-width: 44px; text-align: right; }
+/* fixed number column; the treatment badge overflows into the gap so it never shifts the weight */
+.cage-mice .mid { font-size: 11px; color: var(--text-muted); font-weight: 700; overflow: visible; }
+.cage-mice .mid .treat-mark { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); }
+.cage-mice .mw { font-size: 12.5px; font-weight: 800; color: var(--text); text-align: right; white-space: nowrap; overflow: hidden; }
+.cage-mice .mw .unit { font-size: 9px; font-weight: 600; color: var(--text-muted); margin-left: 1px; }
+.cage-mice .chg { font-size: 11px; font-weight: 700; text-align: right; white-space: nowrap; }
 .cage-mice .mrow.dead {
   color: var(--text-muted);
   background: linear-gradient(to bottom, transparent calc(50% - 1px), var(--red) calc(50% - 1px), var(--red) calc(50% + 1px), transparent calc(50% + 1px));
@@ -573,6 +577,14 @@ svg.chart { width: 100%; height: auto; display: block; }
   .role-switch select { max-width: 190px; }
   .mode-bar, .weighing-banner, .edit-banner { gap: 8px; }
 }
+/* tight cards (smaller iPad landscape / portrait): weight is primary — drop the
+   on-card water/food column so weights stay readable & aligned (still in the cage popup) */
+@media (max-width: 1120px) {
+  .cage-supply { display: none; }
+  .cage-main { gap: 0; }
+  .cage-mice .mw { font-size: 13px; }
+}
+
 /* comfortable tap targets on touch devices */
 @media (hover: none) and (pointer: coarse) {
   .btn { padding: 11px 16px; }
