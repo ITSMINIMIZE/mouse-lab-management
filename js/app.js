@@ -160,21 +160,32 @@ const App = {
       .join('');
     this.el('root').innerHTML = `
       <div id="view-login">
-        <form class="login-card" id="loginForm">
+        <div class="login-hero">
           <div class="login-logo">🐭</div>
           <h1>Mouse Lab Management</h1>
-          <p class="sub">ระบบบริหารจัดการสัตว์ทดลอง · Prototype v0.1</p>
-          <div class="field">
-            <label>เข้าใช้เป็น (สำหรับทดสอบสิทธิ์)</label>
-            <select id="loginUser">${userOptions}</select>
-          </div>
-          <div class="field">
-            <label>รหัสผ่าน</label>
-            <input type="password" value="demo1234">
-          </div>
-          <button class="btn btn-primary btn-block btn-lg" type="submit">เข้าสู่ระบบ</button>
-          <p class="login-hint">โหมดสาธิต — ไม่เชื่อมต่อฐานข้อมูลจริง<br>สิทธิ์เป็นรายโครงการ · สลับผู้ใช้ได้ทุกเมื่อจากมุมขวาบน</p>
-        </form>
+          <p class="hero-sub">ระบบบริหารจัดการสัตว์ทดลอง<br>Interactive Prototype v0.1</p>
+          <ul class="login-points">
+            <li>จำลองผังกรงจริง · ชั่งน้ำหนักได้รวดเร็ว</li>
+            <li>สิทธิ์รายโครงการ · งานสัตวแพทย์ · รายงานและกราฟ</li>
+            <li>Audit Log โปร่งใส ตรวจสอบย้อนหลังได้</li>
+          </ul>
+        </div>
+        <div class="login-panel">
+          <form class="login-card" id="loginForm">
+            <h2>เข้าสู่ระบบ</h2>
+            <p class="sub">โหมดสาธิต — เลือกผู้ใช้เพื่อทดสอบสิทธิ์</p>
+            <div class="field">
+              <label>เข้าใช้เป็น</label>
+              <select id="loginUser">${userOptions}</select>
+            </div>
+            <div class="field">
+              <label>รหัสผ่าน</label>
+              <input type="password" value="demo1234">
+            </div>
+            <button class="btn btn-primary btn-block btn-lg" type="submit">เข้าสู่ระบบ</button>
+            <p class="login-hint">ไม่เชื่อมต่อฐานข้อมูลจริง · สลับผู้ใช้ได้ทุกเมื่อจากมุมขวาบน</p>
+          </form>
+        </div>
       </div>`;
     this.el('loginForm').addEventListener('submit', (e) => {
       e.preventDefault();
