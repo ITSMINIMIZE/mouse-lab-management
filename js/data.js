@@ -179,7 +179,6 @@ for (let si = 0; si < 4; si++) {
   // demo: a vet has ordered humane endpoint (awaiting the experimenter to act)
   const b01 = cagesP1.find(c => c.code === 'B-01');
   b01.mice[2].remark = 'น้ำหนักลดต่อเนื่อง เข้าเกณฑ์ endpoint';
-  b01.mice[2].careOpen = true;
   b01.mice[2].humaneOrder = {
     reason: 'น้ำหนักลด >20% จากค่าเริ่มต้น และไม่ตอบสนองต่อการรักษา',
     vet: 'สพ.ญ. กมล',

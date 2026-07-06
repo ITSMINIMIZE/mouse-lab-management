@@ -16,7 +16,12 @@ const App = {
   // signed 1-decimal ( '+2.3' / '-1.0' )
   gs(v) { return (v == null || isNaN(v)) ? '–' : (v >= 0 ? '+' : '') + Number(v).toFixed(1); },
   // mouse-level treatment marker (nurse/medical symbol) if the mouse has any record
-  treatMark(m) { return m.treatments && m.treatments.length ? '<span class="treat-mark" title="มีประวัติการรักษา">+</span>' : ''; },
+  treatMark(m) {
+    if (!m.treatments || !m.treatments.length) return '';
+    // red = case still open (being treated) · light green = past treatment, case closed/healed
+    const healed = !m.careOpen;
+    return `<span class="treat-mark${healed ? ' healed' : ''}" title="${healed ? 'เคยรักษา (เคสปิดแล้ว)' : 'กำลังรักษา'}">+</span>`;
+  },
 
   // minimum acceptable daily weight gain (g). Below this = warning; loss/no-gain = bad.
   GAIN_THRESHOLD: 0.2,
@@ -29,10 +34,14 @@ const App = {
     if (chg < this.GAIN_THRESHOLD) return 'warn';  // ขึ้นน้อยกว่าค่าที่กำหนด
     return 'good';                                 // ขึ้นปกติ
   },
-  // cage-level status → 'care' (open vet case / endpoint order) | 'normal'
+  // cage-level status → 'danger' (living mouse ordered for humane endpoint)
+  //                    | 'care' (open treatment/care case) | 'normal'
+  // once the euthanasia is carried out the mouse is no longer alive (and its
+  // humaneOrder is cleared), so the cage falls back to normal automatically.
   cageStatus(cage) {
-    const care = cage.mice.some(m => m.alive && (m.careOpen || m.humaneOrder));
-    return care ? 'care' : 'normal';
+    if (cage.mice.some(m => m.alive && m.humaneOrder)) return 'danger';
+    if (cage.mice.some(m => m.alive && m.careOpen)) return 'care';
+    return 'normal';
   },
 
   init() {
@@ -648,16 +657,6 @@ const App = {
            <button class="btn" id="exitEditing">เสร็จสิ้น</button>
          </div>`
       : `<div class="mode-bar">
-           <div class="legend">
-             <b style="color:var(--text)">กรง:</b>
-             <span><i class="dot normal"></i> ปกติ</span>
-             <span><i class="dot care"></i> กำลังรักษา/ดูแล</span>
-             <span style="width:1px;height:16px;background:var(--border)"></span>
-             <b style="color:var(--text)">หนู:</b>
-             <span><i class="dot good"></i> น้ำหนักขึ้นปกติ</span>
-             <span><i class="dot warn"></i> ขึ้นน้อยกว่ากำหนด</span>
-             <span><i class="dot bad"></i> ลด/ไม่เพิ่ม</span>
-           </div>
            <span style="flex:1"></span>
            ${canMembers ? `<button class="btn" id="manageMembers">👥 สมาชิก</button>` : ''}
            ${canEdit ? `<button class="btn" id="startEditing">✏️ จัดการกรง</button>` : ''}
@@ -673,6 +672,17 @@ const App = {
         </div>
         ${modeBar}
         ${shelves.join('')}
+        <div class="legend legend-footer">
+          <b style="color:var(--text)">กรง:</b>
+          <span><i class="dot normal"></i> ปกติ</span>
+          <span><i class="dot care"></i> กำลังรักษา/ดูแล</span>
+          <span><i class="dot danger"></i> สั่งการุณยฆาต</span>
+          <span class="legend-sep"></span>
+          <b style="color:var(--text)">หนู:</b>
+          <span><i class="dot good"></i> น้ำหนักขึ้นปกติ</span>
+          <span><i class="dot warn"></i> ขึ้นน้อยกว่ากำหนด</span>
+          <span><i class="dot bad"></i> ลด/ไม่เพิ่ม</span>
+        </div>
       </div>`
     );
 
@@ -1325,7 +1335,7 @@ const App = {
         <div class="weigh-icon">${icon}</div>
         <div class="wizard-title">${title}</div>
         <div class="wizard-hint">${hint}</div>
-        <input class="big-input" id="wizInput" type="text" inputmode="decimal" value="${value}" placeholder="0.0">
+        <input class="big-input" id="wizInput" type="text" inputmode="none" value="${value}" placeholder="0.0">
         <div class="input-unit">${unit}</div>
         ${bodyExtra}
         <div class="numpad" id="numpad">

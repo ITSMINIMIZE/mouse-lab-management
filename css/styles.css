@@ -299,11 +299,18 @@ input, select { font-family: inherit; }
   background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 12px 16px; margin-bottom: 18px; box-shadow: var(--shadow);
 }
-.mode-bar .legend { display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--text-muted); flex-wrap: wrap; }
-.mode-bar .legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend { display: flex; align-items: center; gap: 16px; font-size: 13px; color: var(--text-muted); flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend .legend-sep { width: 1px; height: 16px; background: var(--border); }
+.legend-footer {
+  justify-content: center; margin-top: 20px; padding: 12px 16px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
 .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
 .dot.normal { background: #cbd5e1; }
 .dot.care { background: var(--amber); }
+.dot.danger { background: var(--red); }
 .dot.good { background: var(--green); }
 .dot.warn { background: var(--amber); }
 .dot.bad { background: var(--red); }
@@ -346,6 +353,7 @@ input, select { font-family: inherit; }
 .cage:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
 .cage.normal { border-left-color: #cbd5e1; }
 .cage.care { border-left-color: var(--amber); background: #fffdf5; }
+.cage.danger { border-left-color: var(--red); background: #fef6f6; }
 .cage.done { border-left-color: var(--green); background: #f5fef9; }
 .cage.empty { opacity: .4; cursor: default; border-style: dashed; border-left-color: #cbd5e1; align-items: center; justify-content: center; }
 .cage.empty:hover { transform: none; box-shadow: var(--shadow); }
@@ -403,6 +411,8 @@ input, select { font-family: inherit; }
   background: var(--red); color: #fff; border-radius: 3px;
   font-size: 12px; font-weight: 900; line-height: 1;
 }
+/* past treatment, case closed/healed — same shape, light green */
+.treat-mark.healed { background: var(--green-soft); color: var(--green); }
 
 /* ============================================================
  * MODAL / POPUP
