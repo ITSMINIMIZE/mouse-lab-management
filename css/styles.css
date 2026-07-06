@@ -576,16 +576,65 @@ svg.chart { width: 100%; height: auto; display: block; }
 /* ============================================================
  * REPORTS
  * ============================================================ */
+/* --- report page: fit everything in one screen, chart scales to fill --- */
+.report-page {
+  height: calc(100dvh - 60px);           /* viewport minus the sticky appbar */
+  padding: 12px 24px 16px; gap: 10px;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.report-page .page-head { margin: 0; flex: none; align-items: center; }
+.report-page .page-head h2 { font-size: 20px; margin: 0; }
+.ph-actions { display: flex; gap: 8px; }
+
+/* chart style editor (colour per group · line style per data type) */
+.ls-sec-title { font-size: 13px; font-weight: 800; color: var(--text); margin: 4px 0 6px; }
+.ls-sec-title ~ .ls-sec-title { margin-top: 20px; }
+.ls-hint { font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5; }
+.ls-list { display: flex; flex-direction: column; gap: 10px; }
+.ls-row { display: flex; align-items: center; gap: 12px; }
+.ls-name { flex: 1; display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.ls-name .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.ls-prev { width: 64px; height: 14px; flex: none; }
+.ls-color { width: 44px; height: 30px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: none; cursor: pointer; flex: none; }
+.ls-dash { padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; background: var(--surface); flex: none; }
+
 .report-controls {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 16px; box-shadow: var(--shadow); margin-bottom: 18px;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; align-items: end;
+  padding: 12px 14px; box-shadow: var(--shadow); flex: none;
+  display: grid; grid-template-columns: auto 1fr auto; gap: 10px 18px; align-items: start;
 }
-.report-controls .field { margin: 0; }
+.ctrl-group { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ctrl-group + .ctrl-group { border-left: 1px solid var(--border); padding-left: 18px; }
+.ctrl-label { font-size: 12px; font-weight: 700; color: var(--text-muted); white-space: nowrap; }
+.check-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.check {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer; user-select: none;
+  padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px;
+  font-size: 12.5px; font-weight: 600; color: var(--text); background: var(--surface);
+}
+.check:hover { border-color: var(--primary); }
+.check input { margin: 0; width: 13px; height: 13px; cursor: pointer; accent-color: var(--primary); flex: none; }
+.check.on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.check .ic { font-size: 14px; line-height: 1; }
+.check .sw { width: 11px; height: 11px; border-radius: 3px; display: inline-block; flex: none; }
+/* many groups → shrink group pills (hide input, lean on colour + short label) */
+.report-controls.dense .ctrl-group:nth-child(2) .check { padding: 4px 8px; font-size: 11.5px; gap: 4px; }
+.report-controls.dense .ctrl-group:nth-child(2) .check input { display: none; }
 .report-canvas { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
 .chart-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 12px; font-size: 13px; }
 .chart-legend span { display: inline-flex; align-items: center; gap: 6px; }
 .chart-legend i { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* report page: canvas fills leftover height, chart + legend scale inside it */
+.report-page .report-canvas {
+  flex: 1 1 auto; min-height: 0; padding: 12px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.report-page .report-canvas svg.chart { flex: 1 1 auto; min-height: 0; width: 100%; height: 100%; }
+.report-page .chart-legend {
+  flex: none; margin-top: 0; gap: 10px 14px; font-size: 12px;
+  max-height: 25%; overflow: auto;
+}
 
 /* audit log */
 .audit-table th, .audit-table td { font-size: 13px; }
