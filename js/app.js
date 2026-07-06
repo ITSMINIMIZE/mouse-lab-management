@@ -1486,121 +1486,261 @@ const App = {
   // ---------------------------------------------------------
   // 4. REPORTS
   // ---------------------------------------------------------
+  // chart encoding: COLOUR = group · LINE STYLE = data type (metric) · TONE = individual mouse within a group
+  PALETTE: ['#2563eb', '#16a34a', '#7c3aed', '#dc2626', '#d97706', '#0891b2', '#db2777'],
+  DASH_OPTS: [{ v: '', label: 'เส้นทึบ' }, { v: '7 4', label: 'เส้นประ' }, { v: '2 4', label: 'จุดประ' }, { v: '10 4 2 4', label: 'ประ-จุด' }],
+  DEFAULT_METRIC_DASH: { weight: '', water: '7 4', food: '2 4' },   // line style per data type
+
+  // lighten a hex colour toward white by amt (0..1) → used for per-mouse tone
+  lighten(hex, amt) {
+    if (!amt || !hex) return hex;
+    let h = String(hex).trim().replace('#', '');
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    if (h.length !== 6) return hex;
+    const n = parseInt(h, 16), mix = c => Math.round(c + (255 - c) * amt);
+    return `rgb(${mix((n >> 16) & 255)}, ${mix((n >> 8) & 255)}, ${mix(n & 255)})`;
+  },
+
   renderReports() {
     const p = Data.getProject(this.route.projectId) || DB.projects.find(x => this.hasAccess(x));
     if (!p || !this.hasAccess(p)) { this.toast('ไม่มีสิทธิ์เข้าถึง'); return this.go('projects'); }
-    this.reportState = this.reportState || { mode: 'group', groupId: 'ALL', metric: 'weight', range: 14 };
+    // state: mode · groupIds · metrics · groupColor (colour=group) · metricDash (line style=data type)
+    if (!this.reportState || this.reportState.projectId !== p.id) {
+      this.reportState = {
+        projectId: p.id, mode: 'group', groupIds: p.groups.map(g => g.id), metrics: ['weight'],
+        groupColor: Object.fromEntries(p.groups.map((g, i) => [g.id, g.color || this.PALETTE[i % this.PALETTE.length]])),
+        metricDash: { ...this.DEFAULT_METRIC_DASH },
+      };
+    }
+    // make sure every current group has a colour
+    p.groups.forEach((g, i) => { this.reportState.groupColor[g.id] = this.reportState.groupColor[g.id] || g.color || this.PALETTE[i % this.PALETTE.length]; });
+    const st = this.reportState;
 
-    const groupOpts = ['<option value="ALL">ทุกกลุ่ม</option>']
-      .concat(p.groups.map(g => `<option value="${g.id}">${g.name}</option>`)).join('');
+    // icon-forward pills so users scan instead of read
+    const pill = (role, v, on, icon, label, extra = '') =>
+      `<label class="check ${on ? 'on' : ''}" title="${label}"><input type="checkbox" data-role="${role}" value="${v}" ${on ? 'checked' : ''}><span class="ic">${icon}</span>${extra}<span class="txt">${label}</span></label>`;
+
+    const modeChecks = [['group', '👥', 'รายกลุ่ม'], ['individual', '🐭', 'รายตัว']]
+      .map(([v, ic, label]) => pill('mode', v, st.mode === v, ic, label)).join('');
+
+    const groupChecks = p.groups.map(g =>
+      pill('group', g.id, st.groupIds.includes(g.id), '', g.name, `<span class="sw" style="background:${g.color || '#94a3b8'}"></span>`)).join('');
+
+    const metricChecks = [['weight', '⚖️', 'น้ำหนัก'], ['water', '💧', 'น้ำ'], ['food', '🍚', 'อาหาร']]
+      .map(([v, ic, label]) => pill('metric', v, st.metrics.includes(v), ic, label)).join('');
+
+    // shrink the group pills when there are many groups
+    const dense = p.groups.length > 5 ? ' dense' : '';
 
     this.shell(
       `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="project" data-project-id="${p.id}">${p.name}</a><span class="sep">/</span><a data-nav="reports">รายงาน</a>`,
-      `<div class="page">
+      `<div class="page report-page">
         <div class="page-head">
-          <div><h2>รายงาน & กราฟ</h2><div class="desc">แสดงแนวโน้มน้ำหนัก อาหาร และน้ำ เปรียบเทียบระหว่างกลุ่ม</div></div>
-          <button class="btn btn-green" id="exportBtn">⬇️ Export Excel</button>
+          <h2>รายงาน & กราฟ</h2>
+          <div class="ph-actions">
+            <button class="btn" id="styleBtn">🎨 รูปแบบเส้น</button>
+            <button class="btn btn-green" id="exportBtn">⬇️ Export Excel</button>
+          </div>
         </div>
-        <div class="report-controls">
-          <div class="field"><label>มุมมอง</label>
-            <select id="rMode">
-              <option value="group">เฉลี่ยรายกลุ่ม</option>
-              <option value="individual">รายตัว</option>
-              <option value="all">ทั้งหมด</option>
-            </select>
+        <div class="report-controls${dense}" id="reportControls">
+          <div class="ctrl-group">
+            <div class="ctrl-label">👁️ มุมมอง</div>
+            <div class="check-row">${modeChecks}</div>
           </div>
-          <div class="field"><label>กลุ่ม</label><select id="rGroup">${groupOpts}</select></div>
-          <div class="field"><label>ข้อมูล</label>
-            <select id="rMetric">
-              <option value="weight">น้ำหนัก (Weight)</option>
-              <option value="water">น้ำ (Water)</option>
-              <option value="food">อาหาร (Food)</option>
-            </select>
+          <div class="ctrl-group">
+            <div class="ctrl-label">🎨 กลุ่ม</div>
+            <div class="check-row">${groupChecks}</div>
           </div>
-          <div class="field"><label>ช่วงเวลา</label>
-            <select id="rRange">
-              <option value="7">7 วันล่าสุด</option>
-              <option value="14" selected>14 วันล่าสุด</option>
-            </select>
+          <div class="ctrl-group">
+            <div class="ctrl-label">📊 ข้อมูล</div>
+            <div class="check-row">${metricChecks}</div>
           </div>
         </div>
         <div class="report-canvas" id="reportCanvas"></div>
       </div>`
     );
 
-    ['rMode', 'rGroup', 'rMetric', 'rRange'].forEach(id => {
-      const elm = this.el(id);
-      if (id === 'rMode') elm.value = this.reportState.mode;
-      if (id === 'rGroup') elm.value = this.reportState.groupId;
-      if (id === 'rMetric') elm.value = this.reportState.metric;
-      if (id === 'rRange') elm.value = this.reportState.range;
-      elm.addEventListener('change', () => {
-        this.reportState = {
-          mode: this.el('rMode').value,
-          groupId: this.el('rGroup').value,
-          metric: this.el('rMetric').value,
-          range: parseInt(this.el('rRange').value, 10),
-        };
-        this.drawReport(p);
-      });
+    this.el('reportControls').addEventListener('change', (e) => {
+      const inp = e.target.closest('input[type=checkbox]');
+      if (!inp) return;
+      const role = inp.dataset.role, val = inp.value, s = this.reportState;
+      if (role === 'mode') s.mode = val;                                   // single-select
+      else if (role === 'group') s.groupIds = inp.checked ? [...new Set([...s.groupIds, val])] : s.groupIds.filter(x => x !== val);
+      else if (role === 'metric') s.metrics = inp.checked ? [...new Set([...s.metrics, val])] : s.metrics.filter(x => x !== val);
+      this.syncReportChecks();
+      this.drawReport(p);
     });
     this.el('exportBtn').onclick = () => this.exportCSV(p);
+    this.el('styleBtn').onclick = () => this.openLineStyles(p);
     this.drawReport(p);
   },
 
-  // Build series for the report based on state, only weight has per-mouse history;
-  // water/food are simulated as a gentle series from current remaining values.
+  // chart style editor: colour per group + line style per data type (applies live)
+  openLineStyles(p) {
+    const st = this.reportState;
+    const metricLabel = { weight: 'น้ำหนัก', water: 'น้ำ', food: 'อาหาร' };
+
+    const groupRows = p.groups.map(g => {
+      const c = st.groupColor[g.id];
+      const hex = /^#[0-9a-fA-F]{6}$/.test(c) ? c : '#64748b';
+      return `<div class="ls-row" data-role="color" data-g="${g.id}">
+        <span class="ls-name"><span class="sw" style="background:${c}"></span>${g.name}</span>
+        <input type="color" class="ls-color" value="${hex}" title="เลือกสีกลุ่ม">
+      </div>`;
+    }).join('');
+
+    const metricRows = ['weight', 'water', 'food'].map(m => {
+      const dash = st.metricDash[m] || '';
+      return `<div class="ls-row" data-role="dash" data-m="${m}">
+        <span class="ls-name">${metricLabel[m]}</span>
+        <svg class="ls-prev" viewBox="0 0 64 14"><line x1="3" y1="7" x2="61" y2="7" stroke="var(--text)" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="${dash}"/></svg>
+        <select class="ls-dash" title="ลักษณะเส้น">
+          ${this.DASH_OPTS.map(o => `<option value="${o.v}" ${o.v === dash ? 'selected' : ''}>${o.label}</option>`).join('')}
+        </select>
+      </div>`;
+    }).join('');
+
+    this.openModal(`
+      <div class="modal-head"><h3>🎨 รูปแบบกราฟ</h3><button class="icon-btn" id="lsClose">✕</button></div>
+      <div class="modal-body">
+        <div class="ls-sec-title">สีของแต่ละกลุ่ม</div>
+        <div class="ls-hint">รายตัวในกลุ่มเดียวกันจะใช้สีนี้ แต่ไล่โทนอ่อน-เข้มแยกแต่ละตัว</div>
+        <div class="ls-list">${groupRows}</div>
+        <div class="ls-sec-title">ลักษณะเส้นตามชนิดข้อมูล</div>
+        <div class="ls-list">${metricRows}</div>
+      </div>`);
+    this.el('lsClose').onclick = () => this.closeModal();
+    document.querySelector('.modal-body').addEventListener('input', (e) => {
+      const row = e.target.closest('.ls-row'); if (!row) return;
+      if (row.dataset.role === 'color') {
+        st.groupColor[row.dataset.g] = e.target.value;
+        row.querySelector('.ls-name .sw').style.background = e.target.value;
+      } else {
+        st.metricDash[row.dataset.m] = e.target.value;
+        row.querySelector('.ls-prev line').setAttribute('stroke-dasharray', e.target.value);
+      }
+      this.drawReport(p);
+    });
+  },
+
+  // reflect reportState back onto the checkboxes (also enforces single-select for mode)
+  syncReportChecks() {
+    const st = this.reportState;
+    this.el('reportControls').querySelectorAll('input[type=checkbox]').forEach(inp => {
+      const role = inp.dataset.role, val = inp.value;
+      const on = role === 'mode' ? st.mode === val : role === 'group' ? st.groupIds.includes(val) : st.metrics.includes(val);
+      inp.checked = on;
+      inp.closest('.check').classList.toggle('on', on);
+    });
+  },
+
+  // Build series for the report: any combination of metrics (weight/water/food)
+  // over the selected groups. Only weight has per-mouse history; water/food are
+  // simulated as a gentle series from current remaining values.
+  // No time-range picker — the x-axis is every recorded weigh-day (data is already
+  // averaged to one value per day at each weighing).
   drawReport(p) {
     const st = this.reportState;
-    const range = st.range;
+    const metricLabel = { weight: 'น้ำหนัก', water: 'น้ำ', food: 'อาหาร' };
+    // colour = group · dash = data type (metric) · tone = individual mouse within a group
+    const colorOf = gid => st.groupColor[gid] || '#64748b';
+    const dashOf = m => st.metricDash[m] || '';
+
+    const groups = p.groups.filter(g => st.groupIds.includes(g.id));
+    const cages = p.cages.filter(c => st.groupIds.includes(c.groupId));
+
+    // x-axis length = longest weight history among the selected mice
+    const range = Math.max(1, ...cages.flatMap(c => c.mice).map(m => m.weights.length)) - 1;
     const labels = Array.from({ length: range + 1 }, (_, i) => isoDaysAgo(range - i).slice(5));
-    const palette = ['#2563eb', '#16a34a', '#7c3aed', '#dc2626', '#d97706', '#0891b2', '#db2777'];
+
+    const multi = st.metrics.length > 1;
+    const suffix = m => multi ? ` · ${metricLabel[m]}` : '';
+    // water/food have no real history → simulate a gentle declining-then-refilled series from a base value
+    const simSeries = base => {
+      const pts = [];
+      for (let d = 0; d <= range; d++) { const cycle = d % 3; pts.push(Math.round((base + (2 - cycle) * base * 0.18 + rand(-5, 5)) * 10) / 10); }
+      return pts;
+    };
     let series = [];
 
-    const cages = st.groupId === 'ALL' ? p.cages : p.cages.filter(c => c.groupId === st.groupId);
-
-    if (st.metric === 'weight') {
-      if (st.mode === 'individual' || st.mode === 'all') {
-        const mice = cages.flatMap(c => c.mice);
-        series = mice.slice(0, 12).map((m, i) => ({
-          label: m.code,
-          color: palette[i % palette.length],
-          points: this.tail(m.weights.map(w => w.weight), range + 1),
-        }));
-      } else {
-        // average by group
-        const groups = st.groupId === 'ALL' ? p.groups : p.groups.filter(g => g.id === st.groupId);
-        series = groups.map((g, i) => {
+    st.metrics.forEach(metric => {
+      const dash = dashOf(metric);
+      if (metric === 'weight' && st.mode === 'individual') {
+        // per-mouse lines (every mouse in every selected group): group colour, tone spread within the group
+        groups.forEach(g => {
+          const base = colorOf(g.id);
+          const show = p.cages.filter(c => c.groupId === g.id).flatMap(c => c.mice);
+          show.forEach((m, j) => {
+            const tone = show.length > 1 ? (j / (show.length - 1)) * 0.55 : 0;
+            series.push({ label: m.code + suffix(metric), color: this.lighten(base, tone), dash,
+              points: this.tail(m.weights.map(w => w.weight), range + 1) });
+          });
+        });
+      } else if (metric === 'weight') {
+        groups.forEach(g => {
           const gm = p.cages.filter(c => c.groupId === g.id).flatMap(c => c.mice).filter(m => Data.inStats(m));
           const pts = [];
           for (let d = 0; d <= range; d++) {
             const vals = gm.map(m => this.tail(m.weights.map(w => w.weight), range + 1)[d]).filter(v => v != null);
             pts.push(vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 10) / 10 : null);
           }
-          return { label: g.name, color: g.color || palette[i % palette.length], points: pts };
+          series.push({ label: g.name + suffix(metric), color: colorOf(g.id), dash, points: pts });
+        });
+      } else if (st.mode === 'individual') {
+        // water/food = amount CONSUMED that day (backend derives it by working backward from the
+        // recorded "remaining" across days: consumed = prev_remaining + added − current_remaining).
+        // Measured per CAGE (mice share the supply) → finest granularity is per cage.
+        const val = c => metric === 'water' ? c.water.consumed : c.food.consumed;
+        groups.forEach(g => {
+          const base = colorOf(g.id);
+          const gc = p.cages.filter(c => c.groupId === g.id);
+          gc.forEach((c, j) => {
+            const tone = gc.length > 1 ? (j / (gc.length - 1)) * 0.55 : 0;
+            series.push({ label: c.code + suffix(metric), color: this.lighten(base, tone), dash, points: simSeries(val(c)) });
+          });
+        });
+      } else {
+        // group average of daily consumption per group
+        groups.forEach(g => {
+          const gc = p.cages.filter(c => c.groupId === g.id);
+          if (!gc.length) return;
+          const base = gc.reduce((a, c) => a + (metric === 'water' ? c.water.consumed : c.food.consumed), 0) / gc.length;
+          series.push({ label: g.name + suffix(metric), color: colorOf(g.id), dash, points: simSeries(base) });
         });
       }
-    } else {
-      // water / food — simulate a declining-then-refilled series per group from current remaining
-      const groups = st.groupId === 'ALL' ? p.groups : p.groups.filter(g => g.id === st.groupId);
-      series = groups.map((g, i) => {
-        const gc = p.cages.filter(c => c.groupId === g.id);
-        if (!gc.length) return { label: g.name, color: g.color, points: [] };
-        const base = gc.reduce((s, c) => s + (st.metric === 'water' ? c.water.remaining : c.food.remaining), 0) / gc.length;
-        const pts = [];
-        for (let d = 0; d <= range; d++) {
-          const cycle = (d % 3);
-          pts.push(Math.round((base + (2 - cycle) * base * 0.18 + rand(-5, 5)) * 10) / 10);
-        }
-        return { label: g.name, color: g.color || palette[i % palette.length], points: pts };
-      });
-    }
+    });
 
-    const unit = st.metric === 'weight' ? 'g (น้ำหนัก)' : st.metric === 'water' ? 'g (น้ำ)' : 'g (อาหาร)';
-    const legend = series.map(s => `<span><i style="background:${s.color}"></i> ${s.label}</span>`).join('');
-    this.el('reportCanvas').innerHTML =
+    const unit = st.metrics.length === 1 ? `g (${metricLabel[st.metrics[0]]})` : 'g';
+    const swatch = (color, dash) => dash ? `background:repeating-linear-gradient(90deg, ${color} 0 5px, transparent 5px 8px)` : `background:${color}`;
+    let legend;
+    if (st.mode === 'individual') {
+      // compact legend: colour = group (each mouse/cage is a line — hover a point to identify it)
+      const gLeg = groups.map(g => `<span><i style="${swatch(colorOf(g.id))}"></i> ${g.name}</span>`).join('');
+      const mLeg = st.metrics.length > 1 ? '  ·  ' + st.metrics.map(m => metricLabel[m]).join(' / ') : '';
+      legend = `<span class="leg-note">รายตัว — ชี้ที่จุดบนเส้นเพื่อดูรายละเอียด</span> ${gLeg}${mLeg}`;
+    } else {
+      legend = series.map(s => `<span><i style="${swatch(s.color, s.dash)}"></i> ${s.label}</span>`).join('');
+    }
+    const canvas = this.el('reportCanvas');
+    canvas.innerHTML =
       this.lineChart(series, labels, { height: 340, showAxis: true, unit }) +
       `<div class="chart-legend">${legend}</div>`;
+    this.wireChartTooltip(canvas);
+  },
+
+  // hover tooltip on chart points: shows "<series> · <date>: <value> g"
+  wireChartTooltip(canvas) {
+    const svg = canvas.querySelector('svg.chart');
+    if (!svg) return;
+    let tip = document.getElementById('chartTip');
+    if (!tip) { tip = document.createElement('div'); tip.id = 'chartTip'; tip.className = 'chart-tip'; document.body.appendChild(tip); }
+    const show = (c) => {
+      tip.innerHTML = `<b>${c.dataset.l}</b><span>${c.dataset.d} · <b>${c.dataset.v} g</b></span>`;
+      tip.style.display = 'block';
+    };
+    svg.addEventListener('mouseover', e => { const c = e.target.closest('.pt'); if (c) show(c); });
+    svg.addEventListener('mouseout', e => { if (e.target.closest('.pt')) tip.style.display = 'none'; });
+    svg.addEventListener('mousemove', e => { tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 14) + 'px'; });
   },
 
   tail(arr, n) { return arr.slice(Math.max(0, arr.length - n)); },
@@ -1608,7 +1748,7 @@ const App = {
   exportCSV(p) {
     const st = this.reportState;
     const rows = [['Mouse', 'Group', 'Date', 'Weight(g)']];
-    const cages = st.groupId === 'ALL' ? p.cages : p.cages.filter(c => c.groupId === st.groupId);
+    const cages = p.cages.filter(c => st.groupIds.includes(c.groupId));
     cages.forEach(c => {
       const g = Data.getGroup(p, c.groupId);
       c.mice.forEach(m => m.weights.forEach(w => rows.push([m.code, g.name, w.date, w.weight])));
@@ -1974,6 +2114,7 @@ const App = {
       }
     });
 
+    const esc = t => String(t).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
     const paths = series.map(s => {
       let d = '', started = false;
       s.points.forEach((v, i) => {
@@ -1981,9 +2122,10 @@ const App = {
         d += (started ? ' L' : 'M') + ` ${x(i).toFixed(1)} ${y(v).toFixed(1)}`;
         started = true;
       });
+      // each point is a hover target → tooltip shows series label · date · value
       const dots = s.points.map((v, i) => v == null ? '' :
-        `<circle cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="2.5" fill="${s.color}"/>`).join('');
-      return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linejoin="round"/>${dots}`;
+        `<circle class="pt" cx="${x(i).toFixed(1)}" cy="${y(v).toFixed(1)}" r="3" fill="${s.color}" data-l="${esc(s.label)}" data-d="${esc(labels[i])}" data-v="${v}"/>`).join('');
+      return `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linejoin="round"${s.dash ? ` stroke-dasharray="${s.dash}"` : ''}/>${dots}`;
     }).join('');
 
     return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">

@@ -219,6 +219,42 @@ const cagesP2 = [
 ];
 
 // ------------------------------------------------------------
+// Project 4 : Dose-Response (จำลอง) — 4 shelves × 6 cages, 2 mice/cage, 4 groups
+// ------------------------------------------------------------
+const groupsP4 = [
+  { id: 'G7',  name: 'Control',   isControl: true,  color: '#64748b' },
+  { id: 'G8',  name: 'Dose Low',  isControl: false, color: '#2563eb' },
+  { id: 'G9',  name: 'Dose Mid',  isControl: false, color: '#7c3aed' },
+  { id: 'G10', name: 'Dose High', isControl: false, color: '#dc2626' },
+];
+const groupProfileP4 = {
+  G7:  { baseline: 27.5, trend: 0.30 },   // control — normal gain
+  G8:  { baseline: 28.0, trend: 0.22 },   // low dose
+  G9:  { baseline: 28.5, trend: 0.14 },   // mid dose
+  G10: { baseline: 29.0, trend: 0.06 },   // high dose — poorest gain
+};
+
+// Layout: 4 shelves × 6 cages, 2 mice per cage. One group per shelf.
+const cagesP4 = [];
+for (let si = 0; si < 4; si++) {
+  const groupId = groupsP4[si % groupsP4.length].id;
+  const prof = groupProfileP4[groupId];
+  const letter = shelfLetters[si];
+  for (let pos = 1; pos <= 6; pos++) {
+    const code = `${letter}-${String(pos).padStart(2, '0')}`;
+    const mice = [];
+    for (let k = 1; k <= 2; k++) {
+      mice.push(makeMouse(`${code}-${k}`, k === 1 ? 'M' : 'F',
+        prof.baseline + rand(-1.2, 1.2),
+        prof.trend + rand(-0.05, 0.05)));
+    }
+    cagesP4.push(makeCage(nextCageId(), code, groupId, si + 1, pos, mice, {
+      lastRecordDate: isoDaysAgo(1),
+    }));
+  }
+}
+
+// ------------------------------------------------------------
 // Root DB object
 // ------------------------------------------------------------
 const DB = {
@@ -260,6 +296,23 @@ const DB = {
         { userId: 'u_pi', roles: ['EC'] },
         { userId: 'u_sci', roles: ['SCI'] },
         { userId: 'u_vet', roles: ['VET'] },
+      ],
+    },
+    {
+      id: 'P4',
+      name: 'Dose-Response Study (จำลอง)',
+      description: 'ทดสอบ 3 ระดับขนาดยาเทียบกลุ่มควบคุม · 4 ชั้น × 6 กรง กรงละ 2 ตัว',
+      startDate: '2026-06-28',
+      status: 'active',
+      shelves: 4,
+      cagesPerShelf: 6,
+      groups: groupsP4,
+      cages: cagesP4,
+      members: [
+        { userId: 'u_pi', roles: ['PI'] },
+        { userId: 'u_sci', roles: ['SCI'] },
+        { userId: 'u_vet', roles: ['VET'] },
+        { userId: 'u_ahs', roles: ['STOCK'] },
       ],
     },
     {
