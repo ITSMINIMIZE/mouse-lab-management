@@ -118,12 +118,15 @@ const App = {
   // Shell + header
   // ---------------------------------------------------------
   shell(crumbsHTML, bodyHTML) {
-    const userOptions = DB.users
-      .map(u => `<option value="${u.id}" ${u.id === this.user.id ? 'selected' : ''}>${u.name} · ${u.systemRole === 'admin' ? 'admin' : 'user'}</option>`)
-      .join('');
-    // show the current user's role in the project being viewed (if any)
+    const u = this.user;
+    const initial = (u.firstName || u.name || '?').trim().charAt(0);
     const proj = Data.getProject(this.route.projectId);
-    const projRole = proj && !this.isAdmin ? this.myRoleLabel(proj) : (this.isAdmin ? 'ADMIN' : '');
+    const projRole = proj && !this.isAdmin ? this.myRoleLabel(proj) : '';
+    const sysLabel = this.isAdmin ? 'ผู้ดูแลระบบ (admin)' : 'ผู้ใช้ (user)';
+    const userOptions = DB.users
+      .map(x => `<option value="${x.id}" ${x.id === u.id ? 'selected' : ''}>${x.name} · ${x.systemRole === 'admin' ? 'admin' : 'user'}</option>`)
+      .join('');
+
     this.el('root').innerHTML = `
       <div id="app-shell">
         <header class="appbar">
@@ -131,20 +134,53 @@ const App = {
           <nav class="crumbs">${crumbsHTML}</nav>
           <div class="spacer"></div>
           <button class="btn btn-ghost" data-nav="audit">📋 Audit Log</button>
-          <button class="btn btn-ghost" data-nav="roles">🔑 สิทธิ์</button>
-          ${this.isAdmin ? `<button class="btn btn-ghost" data-nav="users">👤 ผู้ใช้</button>` : ''}
-          <div class="role-switch">
-            ${projRole ? `<span class="role-badge" title="บทบาทในโครงการนี้">${projRole}</span>` : ''}
-            <span style="font-size:12px;color:var(--text-muted)">เข้าใช้เป็น</span>
-            <select id="userSelect" title="สลับผู้ใช้เพื่อทดสอบสิทธิ์">${userOptions}</select>
+          ${this.isAdmin ? `<button class="btn btn-ghost" data-nav="users">👤 จัดการผู้ใช้</button>` : ''}
+          <div class="user-menu">
+            <button class="user-btn" id="userMenuBtn">
+              <span class="avatar">${initial}</span>
+              <span class="user-meta"><span class="u-name">${u.name}</span><span class="u-sys">${this.isAdmin ? 'admin' : (projRole || 'user')}</span></span>
+              <span class="caret">▾</span>
+            </button>
+            <div class="user-dropdown" id="userDropdown">
+              <div class="ud-head">
+                <span class="avatar lg">${initial}</span>
+                <div><div class="u-name">${u.name}</div><div class="u-sys">${sysLabel}</div>${projRole ? `<div class="u-proj">บทบาทในโครงการนี้: <b>${projRole}</b></div>` : ''}</div>
+              </div>
+              <button class="ud-item" data-nav="roles">👤 ดูข้อมูลผู้ใช้ & สิทธิ์</button>
+              <button class="ud-item danger" data-nav="logout">🚪 ออกจากระบบ</button>
+            </div>
           </div>
-          <button class="btn btn-ghost" data-nav="logout">ออกจากระบบ</button>
         </header>
         <main>${bodyHTML}</main>
+      </div>
+      <div class="demo-fab ${this.demoOpen ? 'open' : ''}" id="demoFab">
+        <div class="demo-body">
+          <div class="demo-label">🧪 โหมดสาธิต — เข้าใช้เป็น</div>
+          <select id="demoUser">${userOptions}</select>
+          <div class="demo-hint">สลับผู้ใช้เพื่อทดสอบสิทธิ์รายบทบาท/โครงการ</div>
+        </div>
+        <button class="demo-toggle" id="demoToggle" title="สลับผู้ใช้ (โหมดสาธิต)">🧪 <span class="demo-toggle-txt">สาธิต</span></button>
       </div>`;
-    this.el('userSelect').addEventListener('change', (e) => {
+
+    // user menu dropdown (close on outside click, wired only while open)
+    const menuBtn = this.el('userMenuBtn'), dropdown = this.el('userDropdown');
+    menuBtn.onclick = (e) => {
+      e.stopPropagation();
+      const willOpen = !dropdown.classList.contains('open');
+      dropdown.classList.toggle('open', willOpen);
+      if (willOpen) setTimeout(() => document.addEventListener('click', function h() {
+        dropdown.classList.remove('open'); document.removeEventListener('click', h);
+      }, { once: true }), 0);
+    };
+
+    // floating demo identity switcher
+    this.el('demoToggle').onclick = () => {
+      this.demoOpen = !this.demoOpen;
+      this.el('demoFab').classList.toggle('open', this.demoOpen);
+    };
+    this.el('demoUser').addEventListener('change', (e) => {
       DB.currentUserId = e.target.value;
-      // re-render; if the new identity can't see the current project, bounce to project list
+      this.demoOpen = true;   // keep the panel open after switching
       const cur = Data.getProject(this.route.projectId);
       if (this.route.projectId && cur && !this.hasAccess(cur)) this.go('projects');
       else this.go(this.route.name, this.route.projectId);
@@ -1647,10 +1683,10 @@ const App = {
       </tr>`).join('') || `<tr><td colspan="2" class="empty-note">ยังไม่มีโครงการที่เข้าถึงได้</td></tr>`;
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="roles">บทบาท & สิทธิ์</a>`,
+      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="roles">ข้อมูลผู้ใช้</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>🔑 บทบาท & สิทธิ์</h2><div class="desc">สิทธิ์เป็นรายโครงการ · ระดับระบบมี admin (ทำได้ทุกอย่าง) และ user · 1 คนถือได้หลายบทบาทต่อโครงการ (สิทธิ์รวมกัน)</div></div>
+          <div><h2>👤 ข้อมูลผู้ใช้ & สิทธิ์</h2><div class="desc">สิทธิ์เป็นรายโครงการ · ระดับระบบมี admin (ทำได้ทุกอย่าง) และ user · 1 คนถือได้หลายบทบาทต่อโครงการ (สิทธิ์รวมกัน)</div></div>
           <button class="btn" id="myPwBtn">🔒 เปลี่ยนรหัสผ่านของฉัน</button>
         </div>
 
