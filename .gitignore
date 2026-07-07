@@ -3,3 +3,6 @@
 
 # Local Claude Code settings
 .claude/
+
+# presentation deliverables
+*.pptx
