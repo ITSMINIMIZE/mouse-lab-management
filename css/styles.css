@@ -583,6 +583,82 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 .empty-note { color: var(--text-muted); font-size: 13px; font-style: italic; padding: 8px 0; }
 
 /* ============================================================
+ * LAB FORMS — Sick Case Report + Necropsy Record
+ * ============================================================ */
+.form-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+
+/* checkbox grids (clinical signs · supportive action) */
+.sign-groups { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 18px; margin-bottom: 12px; }
+.chk-group { }
+.chk-g-label { font-size: 12px; font-weight: 700; color: var(--text-muted); margin-bottom: 5px; }
+.chk-list { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; user-select: none; }
+.chk input { width: 15px; height: 15px; accent-color: var(--primary); cursor: pointer; }
+
+/* chips shown in the mouse-detail treatment history */
+.chip-row { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.chip { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+.chip.sign { background: var(--red-soft); color: var(--red); }
+.chip.support { background: var(--primary-soft); color: var(--primary-dark); }
+.treat-item .t-reco { font-size: 12px; font-weight: 700; color: var(--primary-dark); margin-top: 6px; }
+
+.death-banner { background: var(--surface-2); border: 1px solid var(--border); border-left: 4px solid var(--text-muted);
+  border-radius: var(--radius-sm); padding: 10px 12px; font-size: 13px; }
+.death-banner .order-meta { color: var(--text-muted); font-size: 12px; margin-top: 3px; }
+
+/* necropsy form */
+.nec-legend { font-size: 12px; color: var(--text-muted); margin: 2px 0 10px; }
+.nec-sys { margin-bottom: 12px; }
+.nec-sys-label { font-size: 13px; font-weight: 800; color: var(--text); margin: 8px 0 6px; }
+.nec-row { display: grid; grid-template-columns: minmax(120px, 1.4fr) auto 2fr; gap: 8px; align-items: center; margin-bottom: 6px; }
+.nec-organ { font-size: 13px; }
+.nseg-row { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.nseg { border: none; background: var(--surface); padding: 5px 10px; font-size: 12px; cursor: pointer; border-left: 1px solid var(--border); }
+.nseg:first-child { border-left: none; }
+.nseg.sel { background: var(--primary); color: #fff; }
+.nec-note { font-size: 13px; padding: 6px 8px; }
+
+/* necropsy read-only render */
+.nec-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+.nec-table td { vertical-align: top; }
+.nec-v { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.nec-v.n { color: var(--green); }
+.nec-v.a { color: var(--text-muted); }
+.nec-v.x { color: var(--red); }
+.nec-abnormal, .nec-av { font-size: 13px; margin-top: 8px; line-height: 1.5; }
+
+@media (max-width: 640px) {
+  .form-row3 { grid-template-columns: 1fr; }
+  .sign-groups { grid-template-columns: 1fr; }
+  .nec-row { grid-template-columns: 1fr; gap: 4px; }
+}
+
+/* summary reports (death report · sick follow-up) */
+.rep-table th { white-space: nowrap; }
+.dr-row { cursor: pointer; }
+.dr-row:hover { background: var(--primary-soft); }
+
+.st-badge { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 999px; margin-left: 6px; }
+.st-badge.care { background: #fef9c3; color: #a16207; }
+.st-badge.well { background: var(--green-soft); color: var(--green); }
+.st-badge.dead { background: var(--red-soft); color: var(--red); }
+
+.fu-card { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 12px; overflow: hidden; }
+.fu-head { display: flex; align-items: center; gap: 6px; padding: 10px 14px; background: var(--surface-2);
+  border-bottom: 1px solid var(--border); font-size: 14px; cursor: pointer; }
+.fu-head:hover { background: var(--primary-soft); }
+.fu-count { margin-left: auto; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.fu-log { padding: 6px 14px 10px; }
+.fu-entry { padding: 10px 0; border-bottom: 1px dashed var(--border); }
+.fu-entry:last-child { border-bottom: none; }
+.fu-date { font-size: 12px; color: var(--text-muted); }
+.fu-vet { float: right; }
+.fu-dx { font-weight: 700; font-size: 14px; margin-top: 3px; }
+.fu-rx { font-size: 13px; margin-top: 4px; }
+.fu-reco { font-size: 12px; font-weight: 700; color: var(--primary-dark); margin-top: 5px; }
+.fu-note { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* ============================================================
  * REPORTS
  * ============================================================ */
 /* --- report page: fit everything in one screen, chart scales to fill --- */

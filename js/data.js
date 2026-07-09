@@ -44,6 +44,10 @@ const USERS = [
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
 }
+function nowHM() {
+  const d = new Date();
+  return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+}
 function isoDaysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
@@ -77,12 +81,14 @@ function makeMouse(code, sex, baseline, trend) {
     sex,                       // 'M' | 'F'
     weights: buildWeightSeries(baseline, trend),
     remark: '',
-    treatments: [],
+    treatments: [],            // Sick Case Report entries: { date, time, vet, signs[], support[], diagnosis, treatment, recommend, note }
     excluded: false,           // "stopped": kept out of group-average stats (still eats/drinks)
     alive: true,
-    death: null,               // { type:'natural'|'humane', disposition:'dispose'|'necropsy', note, date }
+    death: null,               // { type:'natural'|'humane', disposition:'dispose'|'necropsy', note, date, time, reporter }
     careOpen: false,           // vet case currently open (drives the cage "care" colour)
     humaneOrder: null,         // vet order to euthanise: { reason, vet, date }
+    necropsy: null,            // Necropsy Record (only when death.disposition==='necropsy'):
+                               //   { date, time, examiner, results:{ [organ]:{v:'N'|'A'|'X', note} }, abnormal, avComment }
   };
 }
 
@@ -161,20 +167,39 @@ for (let si = 0; si < 4; si++) {
   w[w.length - 1].weight = Math.round((w[w.length - 2].weight - 1.8) * 10) / 10;
   sick.treatments.push({
     date: isoDaysAgo(1),
+    time: '09:30',
     vet: 'สพ.ญ. กมล',
+    signs: ['Lethargic', 'Rough hair', 'Diarrhea'],
+    support: ['Hydration gel', 'Soft food'],
     diagnosis: 'สงสัยติดเชื้อทางเดินอาหาร',
     treatment: 'ให้สารน้ำใต้ผิวหนัง + ติดตามอาการ 48 ชม.',
+    recommend: 'Continue monitoring',
+    note: '',
   });
   sick.careOpen = true;   // case still open → cage shows "care"
 
-  // a healed mouse elsewhere still carries a treatment record (mouse-level marker)
+  // a healed mouse elsewhere carries a multi-day treatment timeline (case closed)
   const c02 = cagesP1.find(c => c.code === 'C-02');
-  c02.mice[2].treatments.push({
-    date: isoDaysAgo(4),
-    vet: 'สพ. อนันต์',
-    diagnosis: 'บาดแผลถลอกที่หาง',
-    treatment: 'ทำความสะอาดแผล + ยาปฏิชีวนะเฉพาะที่ 3 วัน',
-  });
+  c02.mice[2].treatments.push(
+    {
+      date: isoDaysAgo(6), time: '10:15', vet: 'สพ. อนันต์',
+      signs: ['Wound/Ulcer'], support: ['Topical wound care', 'Separate'],
+      diagnosis: 'บาดแผลถลอกที่หาง', treatment: 'ทำความสะอาดแผล + ยาปฏิชีวนะเฉพาะที่',
+      recommend: 'Continue Tx.', note: '',
+    },
+    {
+      date: isoDaysAgo(4), time: '09:40', vet: 'สพ. อนันต์',
+      signs: ['Wound/Ulcer'], support: ['Topical wound care'],
+      diagnosis: 'แผลเริ่มแห้ง ไม่มีการติดเชื้อ', treatment: 'ทำแผลต่อ + ติดตามอาการ',
+      recommend: 'Continue monitoring', note: '',
+    },
+    {
+      date: isoDaysAgo(2), time: '11:00', vet: 'สพ. อนันต์',
+      signs: [], support: [],
+      diagnosis: 'แผลหายดี ขนขึ้นปกติ', treatment: 'ปิดเคส',
+      recommend: '', note: 'หายเป็นปกติ',
+    },
+  );
 
   // demo: a vet has ordered humane endpoint (awaiting the experimenter to act)
   const b01 = cagesP1.find(c => c.code === 'B-01');
@@ -193,7 +218,31 @@ for (let si = 0; si < 4; si++) {
   d01.mice[4].death = {
     type: 'humane', disposition: 'necropsy',
     note: 'น้ำหนักลดต่อเนื่องเกินเกณฑ์ · เก็บตับและไตส่งตรวจ',
+    date: isoDaysAgo(2), time: '13:30', reporter: 'สพ.ญ. กมล',
+  };
+  d01.mice[4].necropsy = {
     date: isoDaysAgo(2),
+    time: '14:00',
+    examiner: 'สพ.ญ. กมล',
+    results: {
+      'Liver + Gall bladder':        { v: 'X', note: 'ตับซีด มีจุดขาวกระจาย สงสัยไขมันพอกตับ' },
+      'Kidney and Urinary apparatus':{ v: 'X', note: 'ไตบวมโต ผิวขรุขระเล็กน้อย' },
+      'Spleen':                      { v: 'N', note: '' },
+      'Heart and blood vessels':     { v: 'N', note: '' },
+      'Lung and Respiratory organ':  { v: 'A', note: '' },
+    },
+    abnormal: 'พบความผิดปกติที่ตับและไต สอดคล้องกับภาวะ NAFLD · เก็บชิ้นเนื้อตับ+ไตส่งพยาธิวิทยา',
+    avComment: '',
+  };
+
+  // a second death — found dead, disposed (no necropsy)
+  const c04 = cagesP1.find(c => c.code === 'C-04');
+  c04.mice[3].alive = false;
+  c04.mice[3].excluded = true;
+  c04.mice[3].death = {
+    type: 'natural', disposition: 'dispose',
+    note: 'พบตายในกรงตอนเช้า ไม่มีอาการนำมาก่อน',
+    date: isoDaysAgo(5), time: '08:15', reporter: 'นายสมชาย (AHS)',
   };
 })();
 

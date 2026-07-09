@@ -9,6 +9,26 @@ const App = {
   weighing: false,            // whole-system weighing mode toggle
   wizard: null,               // active weighing wizard state
 
+  // --- Official lab forms (ศูนย์สัตว์ทดลอง มช.) -----------------------------
+  // Sick Case Report (LA Guide-AF 11.1-02): clinical signs grouped by system.
+  // Option terms are technical English — kept verbatim from the form (not translated).
+  SICK_SIGNS: [
+    { g: 'General appearance', items: ['Rough hair', 'Dehydrate', 'Lethargic', 'Isolated', 'Moribund'] },
+    { g: 'Skin', items: ['Scratching', 'Fighting wound', 'Alopecia', 'Wound/Ulcer'] },
+    { g: 'Eye / Nose / Mouth / Ear', items: ['Discharge', 'Ulcer'] },
+    { g: 'Digestive tract', items: ['Malocclusion', 'Diarrhea', 'Enlarge abdomen'] },
+  ],
+  SICK_SUPPORT: ['Food on floor', 'Soft food', 'Hydration gel', 'Heat', 'Trim nails/teeth', 'Topical wound care', 'Separate'],
+  SICK_RECO: ['Tx.', 'Continue Tx.', 'Continue monitoring', 'Euthanasia by humane endpoint'],
+  // Necropsy Record (LA Guide-AF 11.3-01): examination by system / organ.
+  // Organ names are verbatim from the paper form. `en` = the paper's system heading.
+  NECROPSY_SYS: [
+    { en: '01 General condition', g: '01 สภาพทั่วไป (General condition)', items: ['Body condition score', 'Skin and cutaneous adnexa', 'Natural orifices'] },
+    { en: '02. Abdominal cavity', g: '02 ช่องท้อง (Abdominal cavity)', items: ['Spleen', 'Digestive tracts and Pancreas', 'Liver + Gall bladder', 'Genital organ', 'Kidney and Urinary apparatus'] },
+    { en: '03. Thoracic cavity', g: '03 ช่องอก (Thoracic cavity)', items: ['Heart and blood vessels', 'Lung and Respiratory organ'] },
+    { en: '04. Cranial cavity', g: '04 ช่องกะโหลก (Cranial cavity)', items: ['Brain and Nerves'] },
+  ],
+
   el(id) { return document.getElementById(id); },
 
   // format grams to exactly 1 decimal place ( '–' when empty )
@@ -660,7 +680,9 @@ const App = {
            <span style="flex:1"></span>
            ${canMembers ? `<button class="btn" id="manageMembers">👥 สมาชิก</button>` : ''}
            ${canEdit ? `<button class="btn" id="startEditing">✏️ จัดการกรง</button>` : ''}
-           <button class="btn" data-nav="reports">📈 รายงาน</button>
+           <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
+           <button class="btn" id="deathReport">✝ รายงานการตาย</button>
+           <button class="btn" data-nav="reports">📈 กราฟ</button>
            ${canWeigh ? `<button class="btn btn-primary" id="startWeighing">⚖️ ชั่งน้ำหนัก</button>` : ''}
          </div>`;
 
@@ -705,6 +727,10 @@ const App = {
     }
     if (canMembers && !this.weighing && !this.editing) {
       this.el('manageMembers').addEventListener('click', () => this.openMembers(p));
+    }
+    if (!this.weighing && !this.editing) {
+      this.el('sickReport').addEventListener('click', () => this.openSickReport(p));
+      this.el('deathReport').addEventListener('click', () => this.openDeathReport(p));
     }
     if (this.editing) {
       this.el('exitEditing').addEventListener('click', () => { this.editing = false; this.renderDashboard(); });
@@ -1030,6 +1056,11 @@ const App = {
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
       </div>
       <div class="modal-body">
+        <div class="form-row3">
+          <div class="field"><label>วันที่ (Date)</label><input id="deathDate" value="${d.date || todayISO()}"></div>
+          <div class="field"><label>เวลา (Time)</label><input id="deathTime" value="${d.time || nowHM()}"></div>
+          <div class="field"><label>ผู้รายงาน (Reporter)</label><input id="deathReporter" value="${d.reporter || this.user.name}"></div>
+        </div>
         <div class="field">
           <label>ลักษณะการตาย</label>
           <div class="choice-row" id="deathType">
@@ -1045,7 +1076,7 @@ const App = {
           </div>
         </div>
         <div class="field">
-          <label>รายละเอียด / หมายเหตุ</label>
+          <label>รายละเอียด / หมายเหตุ (Clinical Sign ก่อนตาย)</label>
           <textarea id="deathNote" rows="3" placeholder="เช่น พบตายในกรงตอนเช้า, อาการก่อนตาย, ตัวอย่างที่เก็บ ฯลฯ">${d.note || ''}</textarea>
         </div>
       </div>
@@ -1080,9 +1111,17 @@ const App = {
         type: sel.type,
         disposition: sel.disposition,
         note: this.el('deathNote').value.trim(),
-        date: todayISO(),
+        date: this.el('deathDate').value || todayISO(),
+        time: this.el('deathTime').value.trim(),
+        reporter: this.el('deathReporter').value.trim(),
       };
       this.log('บันทึกการตาย', `${mouse.code} · ${this.deathLabel(mouse.death)}`, p.name);
+      // if a necropsy was chosen, go straight to the necropsy form so it actually gets recorded
+      if (sel.disposition === 'necropsy') {
+        this.toast(`บันทึกการตายแล้ว — กรอกผลการผ่าชันสูตรต่อได้เลย`);
+        this.openNecropsyForm(p, cage, mouse);
+        return;
+      }
       this.toast(`บันทึกการตายของ ${mouse.code} แล้ว`);
       this.openCagePopup(p, cage);
     };
@@ -1093,6 +1132,7 @@ const App = {
   // ---------------------------------------------------------
   openMouseDetail(p, cage, mouse) {
     const canTreat = this.can('treat', p);
+    const canNecropsy = this.can('deathStop', p);   // necropsy (gross exam) follows the death record
     const cur = Data.latestWeight(mouse);
     const chg = Data.weightChange(mouse);
     const chgClass = chg == null ? '' : chg >= 0 ? 'up' : 'down';
@@ -1111,12 +1151,17 @@ const App = {
       return `<tr><td>${w.date}</td><td class="num">${this.g(w.weight)} g</td><td class="num"><span class="chg ${cls}">${this.gs(d)}</span></td></tr>`;
     }).join('');
 
+    const chips = (arr, cls) => (arr && arr.length)
+      ? `<div class="chip-row">${arr.map(s => `<span class="chip ${cls}">${s}</span>`).join('')}</div>` : '';
     const treatments = mouse.treatments.length
       ? mouse.treatments.map(t => `
           <div class="treat-item">
-            <div class="t-top"><span>📅 ${t.date}</span><span>${t.vet}</span></div>
+            <div class="t-top"><span>📅 ${t.date}${t.time ? ' · ' + t.time : ''}</span><span>${t.vet}</span></div>
             <div class="t-dx">${t.diagnosis}</div>
-            <div class="t-rx">${t.treatment}</div>
+            ${chips(t.signs, 'sign')}
+            ${t.treatment && t.treatment !== '—' ? `<div class="t-rx">💊 ${t.treatment}</div>` : ''}
+            ${chips(t.support, 'support')}
+            ${t.recommend ? `<div class="t-reco">📌 ${t.recommend}</div>` : ''}
           </div>`).join('')
       : `<p class="empty-note">ยังไม่มีบันทึกการรักษา</p>`;
 
@@ -1138,6 +1183,11 @@ const App = {
               <div class="order-meta">โดย ${mouse.humaneOrder.vet} · ${mouse.humaneOrder.date}</div>
             </div>` : ''}
           ${mouse.careOpen && !mouse.humaneOrder ? `<div class="care-banner">🟡 เคสเปิดอยู่ — กำลังรักษา/ดูแล</div>` : ''}
+          ${!mouse.alive && mouse.death ? `
+            <div class="death-banner">
+              <b>✝ บันทึกการตาย</b> — ${this.deathLabel(mouse.death)}
+              <div class="order-meta">${mouse.death.date}${mouse.death.note ? ' · ' + mouse.death.note : ''}</div>
+            </div>` : ''}
           <div class="stat-row">
             <div class="stat"><div class="l">น้ำหนักล่าสุด</div><div class="v">${this.g(cur)} g</div></div>
             <div class="stat"><div class="l">เปลี่ยนจากวันก่อน</div><div class="v"><span class="chg ${chgClass}">${this.gs(chg)}</span></div></div>
@@ -1152,22 +1202,48 @@ const App = {
             <table class="data"><thead><tr><th>วันที่</th><th>น้ำหนัก</th><th>เปลี่ยนแปลง</th></tr></thead><tbody>${history}</tbody></table>
           </div>
           <div>
-            <div class="section-title">การรักษา</div>
+            <div class="section-title">รายงานอาการป่วย & การรักษา</div>
             ${treatments}
           </div>
+          ${!mouse.alive && mouse.death && mouse.death.disposition === 'necropsy' ? `
+          <div>
+            <div class="section-title">🔬 ผลการชันสูตร (Necropsy Record)</div>
+            ${mouse.necropsy ? this.renderNecropsy(mouse.necropsy) : `<p class="empty-note">ยังไม่ได้บันทึกผลการชันสูตร</p>`}
+          </div>` : ''}
         </div>
       </div>
       <div class="modal-foot">
         <button class="btn" id="backCage">← กลับ</button>
+        ${mouse.treatments.length ? `<button class="btn" id="exportSick">🖨️ ฟอร์มป่วย</button>` : ''}
+        ${mouse.treatments.length ? `<button class="btn" id="exportMonitor">🖨️ ฟอร์มติดตาม</button>` : ''}
+        ${mouse.necropsy ? `<button class="btn" id="exportNec">🖨️ ฟอร์มชันสูตร</button>` : ''}
         <span class="spacer" style="flex:1"></span>
-        ${canTreat && mouse.alive ? `<button class="btn btn-primary" id="addTreat">💊 เพิ่มการรักษา</button>` : ''}
+        ${canTreat && mouse.alive ? `<button class="btn btn-primary" id="addTreat">🩺 รายงานอาการป่วย</button>` : ''}
         ${canTreat && mouse.alive && mouse.careOpen ? `<button class="btn btn-green" id="closeCase">✓ ปิดเคส</button>` : ''}
         ${canTreat && mouse.alive && !mouse.humaneOrder ? `<button class="btn btn-danger" id="humaneBtn">Humane endpoint</button>` : ''}
+        ${canNecropsy && !mouse.alive && mouse.death && mouse.death.disposition === 'necropsy'
+          ? `<button class="btn btn-primary" id="necropsyBtn">🔬 ${mouse.necropsy ? 'แก้ไขผลชันสูตร' : 'บันทึกผลชันสูตร'}</button>` : ''}
       </div>
     `);
 
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('backCage').onclick = () => this.openCagePopup(p, cage);
+    if (mouse.treatments.length) {
+      this.el('exportSick').onclick = () => {
+        this.printDocument(`SickCaseReport_${mouse.code}`, this.buildSickCaseDoc(p, cage, mouse));
+        this.log('Export PDF', `Sick Case Report · ${mouse.code}`, p.name);
+      };
+      this.el('exportMonitor').onclick = () => {
+        this.printDocument(`MonitoringRecord_${mouse.code}`, this.buildMonitoringForm(p, cage, mouse));
+        this.log('Export PDF', `Monitoring Record · ${mouse.code}`, p.name);
+      };
+    }
+    if (mouse.necropsy) {
+      this.el('exportNec').onclick = () => {
+        this.printDocument(`Necropsy_${mouse.code}`, this.buildNecropsyDoc(p, cage, mouse));
+        this.log('Export PDF', `Necropsy Record · ${mouse.code}`, p.name);
+      };
+    }
     if (canTreat && mouse.alive) this.el('addTreat').onclick = () => this.openTreatForm(p, cage, mouse);
     if (canTreat && mouse.alive && mouse.careOpen) {
       this.el('closeCase').onclick = () => {
@@ -1181,6 +1257,102 @@ const App = {
     if (canTreat && mouse.alive && !mouse.humaneOrder) {
       this.el('humaneBtn').onclick = () => this.openHumaneForm(p, cage, mouse);
     }
+    if (canNecropsy && !mouse.alive && mouse.death && mouse.death.disposition === 'necropsy') {
+      this.el('necropsyBtn').onclick = () => this.openNecropsyForm(p, cage, mouse);
+    }
+  },
+
+  // read-only render of a saved Necropsy Record
+  renderNecropsy(n) {
+    const V = { N: '<span class="nec-v n">Normal (N)</span>', A: '<span class="nec-v a">Autolysis (A)</span>', X: '<span class="nec-v x">Abnormal</span>' };
+    const rows = Object.entries(n.results || {})
+      .filter(([, r]) => r && r.v)
+      .map(([organ, r]) => `<tr><td>${organ}</td><td>${V[r.v] || ''}</td><td>${r.note || ''}</td></tr>`).join('');
+    return `
+      <div class="nec-meta">ผู้ชันสูตร: ${n.examiner || '—'} · ${n.date || ''}${n.time ? ' ' + n.time : ''}</div>
+      ${rows ? `<table class="data nec-table"><thead><tr><th>ระบบ / อวัยวะ</th><th>ผล</th><th>รายละเอียด</th></tr></thead><tbody>${rows}</tbody></table>` : ''}
+      ${n.abnormal ? `<div class="nec-abnormal"><b>สรุปความผิดปกติ:</b> ${n.abnormal}</div>` : ''}
+      ${n.avComment ? `<div class="nec-av"><b>AV Comment:</b> ${n.avComment}</div>` : ''}`;
+  },
+
+  // Necropsy Record (บันทึกการผ่าชันสูตรซาก — LA Guide-AF 11.3-01)
+  openNecropsyForm(p, cage, mouse) {
+    const n = mouse.necropsy || { results: {}, abnormal: '', avComment: '', examiner: this.user.name, date: todayISO(), time: nowHM() };
+    const seg = (organ) => {
+      const cur = (n.results[organ] && n.results[organ].v) || '';
+      const note = (n.results[organ] && n.results[organ].note) || '';
+      const btn = (v, label) => `<button type="button" class="nseg ${cur === v ? 'sel' : ''}" data-v="${v}">${label}</button>`;
+      return `
+        <div class="nec-row" data-organ="${organ}">
+          <div class="nec-organ">${organ}</div>
+          <div class="nseg-row">${btn('N', 'N')}${btn('A', 'A')}${btn('X', 'Abnormal')}</div>
+          <input class="nec-note" placeholder="รายละเอียด (ถ้าผิดปกติ)" value="${note}">
+        </div>`;
+    };
+    const systems = this.NECROPSY_SYS.map(sys => `
+      <div class="nec-sys">
+        <div class="nec-sys-label">${sys.g}</div>
+        ${sys.items.map(seg).join('')}
+      </div>`).join('');
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>🔬 บันทึกการผ่าชันสูตรซาก — ${mouse.code}</h3><div class="sub">กรง ${cage.code} · Necropsy Record</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row3">
+          <div class="field"><label>ผู้ชันสูตร</label><input id="nExaminer" value="${n.examiner || this.user.name}"></div>
+          <div class="field"><label>วันที่</label><input id="nDate" value="${n.date || todayISO()}"></div>
+          <div class="field"><label>เวลา</label><input id="nTime" value="${n.time || nowHM()}"></div>
+        </div>
+        <p class="nec-legend">N = Normal · A = Autolysis · Abnormal = ระบุรายละเอียด</p>
+        <div class="section-title">การตรวจตามระบบ / อวัยวะ</div>
+        ${systems}
+        <div class="field"><label>สรุปความผิดปกติที่พบ (Abnormal finding)</label>
+          <textarea id="nAbnormal" rows="3" placeholder="สรุปสิ่งที่พบผิดปกติ · ตัวอย่างที่เก็บส่งตรวจ">${n.abnormal || ''}</textarea>
+        </div>
+        <div class="field"><label>AV Comment</label><input id="nAv" value="${n.avComment || ''}"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="cancelNec">ยกเลิก</button>
+        <button class="btn btn-primary" id="saveNec">💾 บันทึกผลชันสูตร</button>
+      </div>
+    `);
+
+    // segmented select behaviour (per organ row)
+    document.querySelectorAll('.nec-row').forEach(row => {
+      row.querySelectorAll('.nseg').forEach(b => {
+        b.onclick = () => {
+          const on = !b.classList.contains('sel');
+          row.querySelectorAll('.nseg').forEach(x => x.classList.remove('sel'));
+          if (on) b.classList.add('sel');   // click again to clear
+        };
+      });
+    });
+
+    this.el('closeModal').onclick = () => this.openMouseDetail(p, cage, mouse);
+    this.el('cancelNec').onclick = () => this.openMouseDetail(p, cage, mouse);
+    this.el('saveNec').onclick = () => {
+      const results = {};
+      document.querySelectorAll('.nec-row').forEach(row => {
+        const organ = row.dataset.organ;
+        const selBtn = row.querySelector('.nseg.sel');
+        const note = row.querySelector('.nec-note').value.trim();
+        if (selBtn || note) results[organ] = { v: selBtn ? selBtn.dataset.v : '', note };
+      });
+      mouse.necropsy = {
+        examiner: this.el('nExaminer').value.trim(),
+        date: this.el('nDate').value,
+        time: this.el('nTime').value,
+        results,
+        abnormal: this.el('nAbnormal').value.trim(),
+        avComment: this.el('nAv').value.trim(),
+      };
+      this.log('บันทึกผลชันสูตร', `${mouse.code}${mouse.necropsy.abnormal ? ' · ' + mouse.necropsy.abnormal : ''}`, p.name);
+      this.toast(`บันทึกผลการชันสูตรของ ${mouse.code} แล้ว`);
+      this.openMouseDetail(p, cage, mouse);
+    };
   },
 
   // Vet orders a humane endpoint (experimenter will carry it out) — reason required
@@ -1216,41 +1388,490 @@ const App = {
     };
   },
 
+  // reusable checkbox grid (returns HTML); read back with .querySelectorAll(`.${cls}:checked`)
+  checkGrid(cls, items, selected = []) {
+    return items.map(it =>
+      `<label class="chk"><input type="checkbox" class="${cls}" value="${it}" ${selected.includes(it) ? 'checked' : ''}><span>${it}</span></label>`
+    ).join('');
+  },
+
+  // Sick Case Report (แบบรายงานอาการผิดปกติหรืออาการป่วย — LA Guide-AF 11.1-02)
   openTreatForm(p, cage, mouse) {
+    const signGroups = this.SICK_SIGNS.map(grp => `
+      <div class="chk-group">
+        <div class="chk-g-label">${grp.g}</div>
+        <div class="chk-list">${this.checkGrid('signChk', grp.items)}</div>
+      </div>`).join('');
+
     this.openModal(`
       <div class="modal-head">
-        <div><h3>เพิ่มการรักษา — ${mouse.code}</h3><div class="sub">กรง ${cage.code}</div></div>
+        <div><h3>🩺 รายงานอาการป่วย — ${mouse.code}</h3><div class="sub">กรง ${cage.code} · Sick Case Report</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
       </div>
       <div class="modal-body">
-        <div class="field"><label>วันที่</label><input id="tDate" value="${todayISO()}"></div>
-        <div class="field"><label>ผู้บันทึก (Vet)</label><input id="tVet" value="${this.user.name} (Vet)"></div>
-        <div class="field"><label>การวินิจฉัย</label><input id="tDx" placeholder="เช่น สงสัยติดเชื้อทางเดินหายใจ"></div>
-        <div class="field"><label>การรักษา / คำสั่ง</label><input id="tRx" placeholder="เช่น ให้ยาปฏิชีวนะ + ติดตามอาการ"></div>
+        <div class="form-row3">
+          <div class="field"><label>วันที่</label><input id="tDate" value="${todayISO()}"></div>
+          <div class="field"><label>เวลา</label><input id="tTime" value="${nowHM()}"></div>
+          <div class="field"><label>ผู้บันทึก (Vet)</label><input id="tVet" value="${this.user.name}"></div>
+        </div>
+
+        <div class="section-title">อาการที่พบ (Clinical Signs)</div>
+        <div class="sign-groups">${signGroups}</div>
+        <div class="field"><label>อื่น ๆ (Others)</label><input id="tSignOther" placeholder="อาการอื่นที่พบ"></div>
+
+        <div class="section-title">การดูแลเบื้องต้น (Supportive Action)</div>
+        <div class="chk-list">${this.checkGrid('supportChk', this.SICK_SUPPORT)}</div>
+
+        <div class="section-title">การประเมิน & แผนการรักษา</div>
+        <div class="field"><label>การวินิจฉัย <span style="color:var(--red)">*</span></label><input id="tDx" placeholder="เช่น สงสัยติดเชื้อทางเดินอาหาร"></div>
+        <div class="field"><label>การรักษา / คำสั่ง (Tx.)</label><input id="tRx" placeholder="เช่น ให้สารน้ำใต้ผิวหนัง + ติดตามอาการ 48 ชม."></div>
+        <div class="field"><label>คำแนะนำ (Recommendation)</label>
+          <select id="tReco">
+            <option value="">— ไม่ระบุ —</option>
+            ${this.SICK_RECO.map(r => `<option value="${r}">${r}</option>`).join('')}
+          </select>
+        </div>
         <div class="field"><label>อัปเดตหมายเหตุของหนู (จะแสดงในตารางกรง)</label><input id="tRemark" value="${mouse.remark}"></div>
       </div>
       <div class="modal-foot">
         <button class="btn" id="cancelTreat">ยกเลิก</button>
-        <button class="btn btn-primary" id="saveTreat">บันทึกการรักษา</button>
+        <button class="btn btn-primary" id="saveTreat">💾 บันทึกรายงาน</button>
       </div>
     `);
     this.el('closeModal').onclick = () => this.openMouseDetail(p, cage, mouse);
     this.el('cancelTreat').onclick = () => this.openMouseDetail(p, cage, mouse);
     this.el('saveTreat').onclick = () => {
       const dx = this.el('tDx').value.trim();
-      if (!dx) { this.el('tDx').focus(); return; }
+      if (!dx) { this.el('tDx').focus(); this.toast('กรุณาระบุการวินิจฉัย'); return; }
+      const signs = [...document.querySelectorAll('.signChk:checked')].map(x => x.value);
+      const other = this.el('tSignOther').value.trim();
+      if (other) signs.push(other);
+      const support = [...document.querySelectorAll('.supportChk:checked')].map(x => x.value);
       mouse.treatments.unshift({
         date: this.el('tDate').value,
+        time: this.el('tTime').value,
         vet: this.el('tVet').value,
+        signs,
+        support,
         diagnosis: dx,
         treatment: this.el('tRx').value.trim() || '—',
+        recommend: this.el('tReco').value,
+        note: '',
       });
       mouse.remark = this.el('tRemark').value.trim();
       mouse.careOpen = true;   // adding a treatment opens/keeps the case open
-      this.log('บันทึกการรักษา', `${mouse.code} · ${dx}`, p.name);
-      this.toast('บันทึกการรักษาแล้ว');
+      this.log('รายงานอาการป่วย', `${mouse.code} · ${dx}`, p.name);
+      this.toast('บันทึกรายงานอาการป่วยแล้ว');
       this.openMouseDetail(p, cage, mouse);
     };
+  },
+
+  // ---------------------------------------------------------
+  // SUMMARY REPORTS (project-level)
+  // ---------------------------------------------------------
+  // "รายงานการตายของสัตว์ทดลอง" — which mice died, when, and how
+  openDeathReport(p) {
+    const dead = [];
+    p.cages.forEach(cage => cage.mice.forEach(m => {
+      if (!m.alive && m.death) dead.push({ m, cage });
+    }));
+    dead.sort((a, b) => (a.m.death.date < b.m.death.date ? 1 : -1));
+
+    const rows = dead.map(({ m, cage }) => {
+      const g = Data.getGroup(p, cage.groupId);
+      const type = m.death.type === 'humane' ? 'Humane endpoint' : 'ตายเอง';
+      const disp = m.death.disposition === 'necropsy' ? 'ชันสูตร' : 'ทำลายซาก';
+      const nec = m.death.disposition !== 'necropsy' ? '—'
+        : (m.necropsy ? '<span class="chg up">✓ บันทึกแล้ว</span>' : '<span class="chg down">รอบันทึก</span>');
+      return `<tr class="dr-row" data-mid="${m.id}">
+        <td>${m.death.date}</td><td>${m.death.time || '—'}</td><td>${cage.code}</td>
+        <td><b>${m.code}</b></td><td>${g ? g.name : '—'}</td><td>${m.death.reporter || '—'}</td>
+        <td>${type}</td><td>${disp}</td><td>${nec}</td></tr>`;
+    }).join('');
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>✝ รายงานการตายของสัตว์ทดลอง</h3><div class="sub">${p.name} · ตายรวม ${dead.length} ตัว</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        ${dead.length ? `<table class="data rep-table">
+          <thead><tr><th>วันที่ตาย</th><th>เวลา</th><th>กรง</th><th>ID</th><th>กลุ่ม</th><th>ผู้รายงาน</th><th>ลักษณะ</th><th>การจัดการซาก</th><th>ชันสูตร</th></tr></thead>
+          <tbody>${rows}</tbody></table>
+          <p class="empty-note">แตะแถวเพื่อดูรายละเอียดหนู</p>` : `<p class="empty-note">ยังไม่มีการตายในโครงการนี้</p>`}
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="repClose">ปิด</button>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn btn-primary" id="repExport">🖨️ Export PDF</button>
+      </div>
+    `);
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('repClose').onclick = () => this.closeModal();
+    this.el('repExport').onclick = () => {
+      this.printDocument(`DeathReport_${p.name}`, this.buildDeathReportDoc(p));
+      this.log('Export PDF', `รายงานการตาย · ${p.name}`, p.name);
+    };
+    document.querySelectorAll('.dr-row').forEach(row => {
+      row.onclick = () => {
+        const found = dead.find(d => d.m.id === row.dataset.mid);
+        if (found) this.openMouseDetail(p, found.cage, found.m);
+      };
+    });
+  },
+
+  // "บันทึกติดตามอาการสัตว์ป่วย" — per animal, the day-by-day treatment log until healed
+  openSickReport(p) {
+    const sick = [];
+    p.cages.forEach(cage => cage.mice.forEach(m => {
+      if (m.treatments && m.treatments.length) sick.push({ m, cage });
+    }));
+    // ongoing cases first, then healed, then dead
+    const rank = m => (!m.alive ? 2 : m.careOpen ? 0 : 1);
+    sick.sort((a, b) => rank(a.m) - rank(b.m));
+
+    const chips = (arr, cls) => (arr && arr.length)
+      ? `<div class="chip-row">${arr.map(s => `<span class="chip ${cls}">${s}</span>`).join('')}</div>` : '';
+
+    const cards = sick.map(({ m, cage }) => {
+      const g = Data.getGroup(p, cage.groupId);
+      const status = !m.alive
+        ? '<span class="st-badge dead">ตายแล้ว</span>'
+        : m.careOpen ? '<span class="st-badge care">กำลังรักษา</span>'
+        : '<span class="st-badge well">หายดี</span>';
+      // timeline oldest → newest (reads as progression)
+      const log = [...m.treatments].sort((a, b) => (a.date < b.date ? -1 : 1)).map(t => `
+        <div class="fu-entry">
+          <div class="fu-date">📅 ${t.date}${t.time ? ' · ' + t.time : ''} <span class="fu-vet">${t.vet || ''}</span></div>
+          <div class="fu-dx">${t.diagnosis}</div>
+          ${chips(t.signs, 'sign')}
+          ${t.treatment && t.treatment !== '—' ? `<div class="fu-rx">💊 ${t.treatment}</div>` : ''}
+          ${chips(t.support, 'support')}
+          ${t.recommend ? `<div class="fu-reco">📌 ${t.recommend}</div>` : ''}
+          ${t.note ? `<div class="fu-note">📝 ${t.note}</div>` : ''}
+        </div>`).join('');
+      return `<div class="fu-card" data-mid="${m.id}">
+        <div class="fu-head"><b>${m.code}</b> · กรง ${cage.code} · ${g ? g.name : '—'} ${status}
+          <span class="fu-count">${m.treatments.length} ครั้ง</span></div>
+        <div class="fu-log">${log}</div>
+      </div>`;
+    }).join('');
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>🩺 บันทึกติดตามอาการสัตว์ป่วย</h3><div class="sub">${p.name} · เคสป่วยรวม ${sick.length} ตัว</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        ${sick.length ? cards : `<p class="empty-note">ยังไม่มีเคสป่วยในโครงการนี้</p>`}
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="repClose">ปิด</button>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn btn-primary" id="repExport">🖨️ Export PDF</button>
+      </div>
+    `);
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('repClose').onclick = () => this.closeModal();
+    this.el('repExport').onclick = () => {
+      this.printDocument(`SickFollowup_${p.name}`, this.buildSickReportDoc(p));
+      this.log('Export PDF', `ติดตามอาการป่วย · ${p.name}`, p.name);
+    };
+    document.querySelectorAll('.fu-card').forEach(card => {
+      card.querySelector('.fu-head').onclick = () => {
+        const found = sick.find(d => d.m.id === card.dataset.mid);
+        if (found) this.openMouseDetail(p, found.cage, found.m);
+      };
+    });
+  },
+
+  // ---------------------------------------------------------
+  // EXPORT TO PDF  (browser print → "Save as PDF"; A4, no dependency)
+  // ---------------------------------------------------------
+  PRINT_CSS: `
+    * { box-sizing: border-box; }
+    body { font-family: 'Sarabun', sans-serif; color: #111; margin: 0; padding: 14px; font-size: 12px; line-height: 1.35; }
+    .doc { max-width: 760px; margin: 0 auto; }
+    table { width: 100%; border-collapse: collapse; }
+    .hd td { border: 1px solid #333; padding: 5px 7px; vertical-align: middle; }
+    .hd .logo { width: 74px; text-align: center; font-size: 10px; font-weight: 700; color: #6a5a97; line-height: 1.2; }
+    .hd .org { background: #6a5a97; color: #fff; }
+    .hd .org .en { font-size: 9.5px; opacity: .92; }
+    .hd .meta { width: 165px; font-size: 10.5px; }
+    .hd .fcode { text-align: center; font-size: 12px; }
+    .doc-title { text-align: center; font-weight: 700; font-size: 15px; margin: 12px 0; }
+    table.form { table-layout: fixed; }
+    table.form td, table.form th { border: 1px solid #333; padding: 5px 7px; vertical-align: top; text-align: left; word-wrap: break-word; }
+    .band { background: #efeaf5; font-weight: 700; text-align: center; }
+    .lbl { font-weight: 700; }
+    .chk { display: inline-block; margin: 1px 14px 1px 0; white-space: nowrap; }
+    .sign-cell { color: #333; font-size: 11px; }
+    .sign-cell u { color: #333; }
+    .muted { color: #666; }
+    .rep-title { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #6a5a97; padding-bottom: 6px; margin-bottom: 10px; }
+    .rep-title h1 { font-size: 17px; margin: 0; color: #3a2e63; }
+    .rep-title .sub { font-size: 11px; color: #555; }
+    table.grid { table-layout: fixed; }
+    table.grid td, table.grid th { border: 1px solid #444; padding: 5px 7px; word-wrap: break-word; }
+    table.grid th { background: #f1eef7; }
+    table.grid .grp { background: #f6f4fa; font-weight: 700; }
+    .fu-block { border: 1px solid #999; border-radius: 4px; margin-bottom: 12px; page-break-inside: avoid; }
+    .fu-h { background: #f1eef7; padding: 6px 10px; font-weight: 700; border-bottom: 1px solid #999; }
+    .fu-e { padding: 7px 10px; border-bottom: 1px dashed #bbb; }
+    .fu-e:last-child { border-bottom: none; }
+    .tag { font-size: 10.5px; color: #444; }
+    @media print { body { padding: 0; } .doc { max-width: none; } @page { size: A4; margin: 12mm; } }
+  `,
+
+  printDocument(filename, bodyHtml) {
+    const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"><title>${filename}</title>`
+      + `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`
+      + `<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">`
+      + `<style>${this.PRINT_CSS}</style></head><body><div class="doc">${bodyHtml}</div></body></html>`;
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+    document.body.appendChild(frame);
+    const doc = frame.contentWindow.document;
+    doc.open(); doc.write(html); doc.close();
+    const cw = frame.contentWindow;
+    cw.addEventListener('afterprint', () => setTimeout(() => frame.remove(), 200));
+    setTimeout(() => { cw.focus(); cw.print(); }, 450);   // small delay for the font to load
+    setTimeout(() => { if (document.body.contains(frame)) frame.remove(); }, 120000);
+  },
+
+  // CMU laboratory-animal-center form header band (2-row layout as on the paper form)
+  cmuHeader(formCode, pageInfo) {
+    return `<table class="hd">
+      <tr>
+        <td class="logo" rowspan="2">ศูนย์<br>สัตว์ทดลอง<br>มช.</td>
+        <td class="org" colspan="2">ศูนย์สัตว์ทดลอง (สำนักงานบริหารงานวิจัย มหาวิทยาลัยเชียงใหม่)
+          <div class="en">Laboratory Animal Center (Office of Research Administration, CMU)</div></td>
+      </tr>
+      <tr>
+        <td class="fcode">${formCode}</td>
+        <td class="meta">จำนวนทั้งหมด ${pageInfo}<br>ฉบับที่ 4 Version 2023</td>
+      </tr>
+    </table>`;
+  },
+
+  tick(label, on) { return `<span class="chk">${on ? '☑' : '☐'} ${label}</span>`; },
+
+  // colgroups so table-layout:fixed wraps long checkbox rows within the page width
+  COLS4: '<colgroup><col style="width:23%"><col style="width:30%"><col style="width:17%"><col style="width:30%"></colgroup>',
+  COLS2: '<colgroup><col style="width:24%"><col style="width:76%"></colgroup>',
+
+  // ---- 1) Sick Case Report (LA Guide-AF 11.1-02) --------------------------
+  buildSickCaseDoc(p, cage, mouse) {
+    const ts = [...mouse.treatments].sort((a, b) => (a.date < b.date ? 1 : -1)); // newest first
+    const latest = ts[0] || {};
+    const allSigns = new Set(ts.flatMap(t => t.signs || []));
+    const allSupport = new Set(ts.flatMap(t => t.support || []));
+    const otherSigns = [...allSigns].filter(s => !this.SICK_SIGNS.some(g => g.items.includes(s)));
+    const g = Data.getGroup(p, cage.groupId);
+    const blank = '<span class="chk">☐ …</span>';
+
+    // clinical-sign rows keyed to the paper's groups (with the "- " prefix + trailing write-in box)
+    const sg = (label) => this.SICK_SIGNS.find(x => x.g === label) || { items: [] };
+    const line = (grpKey, prefix = '') => prefix + sg(grpKey).items.map(it => this.tick(it, allSigns.has(it))).join('') + ' ' + blank;
+
+    // recommendations: paper wording, tick the one matching the latest record
+    const reco = latest.recommend || '';
+    const recoLine = (key, text, fill) =>
+      `<div>${this.tick(text, reco === key)} <u>&nbsp;${fill || ''}&nbsp;</u></div>`;
+
+    // progression from case status (paper's four options)
+    const prog = !mouse.alive && mouse.death
+      ? `${this.tick('Continue Tx. until', false)} &nbsp; ${this.tick('Continue monitoring until', false)}<br>${this.tick('Close case on', false)} &nbsp; ${this.tick('Euthanasia on ' + mouse.death.date, true)}`
+      : mouse.careOpen
+        ? `${this.tick('Continue Tx. until', false)} &nbsp; ${this.tick('Continue monitoring until …', true)}<br>${this.tick('Close case on', false)} &nbsp; ${this.tick('Euthanasia on', false)}`
+        : `${this.tick('Continue Tx. until', false)} &nbsp; ${this.tick('Continue monitoring until', false)}<br>${this.tick('Close case on ' + (latest.date || ''), true)} &nbsp; ${this.tick('Euthanasia on', false)}`;
+
+    return `
+      ${this.cmuHeader('LA Guide–AF 11.1-02 Sick Case Report', '1 หน้า')}
+      <div class="doc-title">รายงานอาการผิดปกติหรืออาการป่วยของสัตว์ทดลอง</div>
+      <table class="form">${this.COLS4}
+        <tr><td class="band" colspan="4">PROTOCOL INFORMATION</td></tr>
+        <tr><td class="lbl">AR</td><td>Protocol No. &nbsp; ${p.name}</td><td class="lbl">Lot.</td><td>—</td></tr>
+        <tr><td class="lbl">Case Number</td><td>${mouse.code}</td><td class="lbl">Date / Time</td><td>${latest.date || todayISO()} &nbsp; ${latest.time || ''}</td></tr>
+        <tr><td class="lbl">Cage &amp; ID</td><td colspan="3">${cage.code} · ${mouse.code} · ${g ? g.name : ''} · ${mouse.sex === 'M' ? 'Male ♂' : 'Female ♀'}</td></tr>
+        <tr><td class="band" colspan="4">SICK CASE REPORT</td></tr>
+        <tr><td class="lbl" colspan="4">Abnormal / Clinical Sign(s)</td></tr>
+        <tr><td class="lbl">- General appearance</td><td class="sign-cell" colspan="3">${line('General appearance')}</td></tr>
+        <tr><td class="lbl">- Skin</td><td class="sign-cell" colspan="3">${line('Skin')}</td></tr>
+        <tr><td class="lbl">- Eye / Nose / Mouth / Ear</td><td class="sign-cell" colspan="3"><span class="muted">Lt. – Rt.</span> &nbsp; ${line('Eye / Nose / Mouth / Ear')}</td></tr>
+        <tr><td class="lbl">- Digestive tract</td><td class="sign-cell" colspan="3">${line('Digestive tract')}</td></tr>
+        <tr><td class="lbl">- Others</td><td class="sign-cell" colspan="3">${otherSigns.length ? otherSigns.join(', ') : blank}</td></tr>
+        <tr><td class="lbl">Supportive Action</td><td class="sign-cell" colspan="3">${this.SICK_SUPPORT.map(it => this.tick(it, allSupport.has(it))).join('')} ${blank}</td></tr>
+        <tr><td class="lbl">Diagnosis</td><td colspan="3">${ts.map(t => `${t.date}: ${t.diagnosis}`).join(' · ') || '—'}</td></tr>
+        <tr><td class="lbl">Technician Sign/Date/Time</td><td colspan="3">${latest.vet || '__________'} &nbsp;/&nbsp; ${latest.date || ''} &nbsp;/&nbsp; ${latest.time || ''}</td></tr>
+        <tr><td class="band" colspan="4">Responsible Vet. [Action Plan]</td></tr>
+        <tr><td class="lbl">Recommendations</td><td class="sign-cell" colspan="3">
+          ${recoLine('Tx.', 'Tx. By', latest.treatment || '')}
+          ${recoLine('Continue Tx.', 'Continue Tx. at least', '')}
+          ${recoLine('Continue monitoring', 'Continue monitoring at least', '')}
+          ${recoLine('Euthanasia by humane endpoint', 'Euthanasia by humane endpoint should be done on', '')}
+        </td></tr>
+        <tr><td class="lbl">PI Communication</td><td class="sign-cell" colspan="3">${this.tick('PI', false)} &nbsp; ${this.tick('Lab member', false)} Name: __________ &nbsp; ${this.tick('Technician', false)} Name: __________</td></tr>
+        <tr><td class="lbl">Vet. Sign/Date/Time</td><td colspan="3">__________ &nbsp;/&nbsp; ${latest.date || ''} &nbsp;/&nbsp; ${latest.time || ''}</td></tr>
+        <tr><td class="lbl">Progression</td><td class="sign-cell" colspan="3">${prog}</td></tr>
+        <tr><td class="lbl">Vet. Sign/Date/Time</td><td colspan="3">__________ &nbsp;/&nbsp; ${!mouse.alive && mouse.death ? mouse.death.date : (mouse.careOpen ? '' : latest.date || '')} &nbsp;/&nbsp; </td></tr>
+      </table>
+      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ Mouse Lab Management · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+  },
+
+  // ---- 2) Necropsy Record (LA Guide-AF 11.3-01) ---------------------------
+  buildNecropsyDoc(p, cage, mouse) {
+    const n = mouse.necropsy || { results: {}, abnormal: '', avComment: '' };
+    const code = (organ) => {                    // paper puts only a letter in the ID column
+      const r = n.results[organ];
+      if (!r || !r.v) return '';
+      return r.v === 'N' ? 'N' : r.v === 'A' ? 'A' : 'Ab';
+    };
+    // 4 ID columns as on the paper form (only the first is filled)
+    const idCols = (organ) => `<td>${code(organ)}</td><td></td><td></td><td></td>`;
+    const sysRows = this.NECROPSY_SYS.map(sys => {
+      const head = `<tr><td class="grp" colspan="5">${sys.en}</td></tr>`;
+      const rows = sys.items.map(o => `<tr><td>- ${o}</td>${idCols(o)}</tr>`).join('');
+      return head + rows;
+    }).join('');
+
+    // details/notes go into the "Abnormal finding" box (paper keeps the grid to letters only)
+    const notes = Object.entries(n.results || {})
+      .filter(([, r]) => r && r.v === 'X' && r.note)
+      .map(([o, r]) => `${o}: ${r.note}`);
+    const abnormalText = [n.abnormal, ...notes].filter(Boolean).join(' · ') || '—';
+
+    const g = Data.getGroup(p, cage.groupId);
+    const d = mouse.death || {};
+
+    return `
+      ${this.cmuHeader('LA Guide-AF 11.3-01 Necropsy Record', '2 หน้า')}
+      <div class="doc-title">บันทึกการผ่าชันสูตรซากสัตว์ทดลอง</div>
+      <table class="form">${this.COLS4}
+        <tr><td class="band" colspan="4">PROTOCOL INFORMATION</td></tr>
+        <tr><td class="lbl">Protocol No.</td><td>${p.name}</td><td class="lbl">Approved / until</td><td>—</td></tr>
+        <tr><td class="band" colspan="4">ANIMAL INFORMATION</td></tr>
+        <tr><td class="lbl">Animal from Cage No.</td><td>${cage.code}</td><td class="lbl">ID</td><td>${mouse.code}</td></tr>
+        <tr><td class="lbl">Date / Time</td><td>${n.date || ''} ${n.time || ''}</td><td class="lbl">No. of Animals</td><td>1</td></tr>
+        <tr><td class="lbl">Species</td><td>Mouse (Mus musculus)</td><td class="lbl">Sex / Age</td><td>${mouse.sex === 'M' ? 'Male ♂' : 'Female ♀'} · —</td></tr>
+        <tr><td class="lbl" colspan="4">${this.tick('Found Death on', d.type === 'natural')} ${d.type === 'natural' ? (d.date || '') : '__________'} &nbsp;&nbsp; ${this.tick('Euthanasia using', d.type === 'humane')} ${d.type === 'humane' ? 'humane endpoint (' + (d.date || '') + ')' : '__________'}</td></tr>
+        <tr><td class="lbl">Clinical Sign</td><td colspan="3">${d.note || '—'}</td></tr>
+      </table>
+      <table class="grid" style="margin-top:10px">
+        <colgroup><col style="width:40%"><col style="width:15%"><col style="width:15%"><col style="width:15%"><col style="width:15%"></colgroup>
+        <tr><th style="text-align:left">Examination of System / Organ(s)</th><th>ID: ${mouse.code}</th><th>ID:</th><th>ID:</th><th>ID:</th></tr>
+        ${sysRows}
+      </table>
+      <table class="form" style="margin-top:10px">${this.COLS2}
+        <tr><td class="lbl">Abnormal finding</td><td>${abnormalText}</td></tr>
+        <tr><td class="lbl">Signature / Date/Time</td><td>${n.examiner || '__________'} &nbsp;/&nbsp; ${n.date || ''} ${n.time || ''}</td></tr>
+        <tr><td class="lbl">AV Comment / Sign/Date/Time</td><td>${n.avComment || '—'}</td></tr>
+      </table>
+      <p class="muted" style="margin-top:8px">A = Autolysis, N = Normal Finding, and Abnormal finding will be noted. &nbsp;·&nbsp; พิมพ์จากระบบ Mouse Lab Management · ${todayISO()}</p>`;
+  },
+
+  // ---- 3) Dead Report (LA Guide-AF 11.1-01) -------------------------------
+  buildDeathReportDoc(p) {
+    const dead = [];
+    p.cages.forEach(cage => cage.mice.forEach(m => { if (!m.alive && m.death) dead.push({ m, cage }); }));
+    dead.sort((a, b) => (a.m.death.date < b.m.death.date ? -1 : 1));   // chronological
+    const cages = new Set(dead.map(x => x.cage.code));
+
+    // fill actual rows; pad to 15 blank rows like the paper form
+    const filled = dead.map(({ m, cage }, i) =>
+      `<tr><td>${i + 1}.</td><td>${m.death.date || ''}</td><td>${m.death.time || ''}</td><td>${cage.code}</td><td>${m.code}</td><td>${m.death.reporter || ''}</td></tr>`);
+    for (let i = filled.length; i < 15; i++) filled.push(`<tr><td>${i + 1}.</td><td></td><td></td><td></td><td></td><td></td></tr>`);
+
+    return `
+      ${this.cmuHeader('LA Guide–AF 11.1-01 Dead Report', '1 หน้า')}
+      <div class="doc-title">รายงานการตายของสัตว์ทดลอง</div>
+      <table class="form">${this.COLS4}
+        <tr><td class="band" colspan="4">PROTOCOL INFORMATION</td></tr>
+        <tr><td class="lbl">Protocol No.</td><td>${p.name}</td><td class="lbl">Species</td><td>Mouse (Mus musculus)</td></tr>
+        <tr><td class="lbl">Approved until</td><td>—</td><td class="lbl">Strain</td><td>—</td></tr>
+        <tr><td class="lbl">Lot. / No. of Animals</td><td>— / ${dead.length}</td><td class="lbl">No. of Cage / Cage type</td><td>${cages.size} / —</td></tr>
+        <tr><td class="lbl">Responsible Technician</td><td>—</td><td class="lbl">Responsible Vet.</td><td>—</td></tr>
+        <tr><td class="band" colspan="4">ACTION PLAN</td></tr>
+        <tr><td class="lbl" colspan="4">Management of Dead Animal(s):</td></tr>
+        <tr><td colspan="4" style="height:34px"></td></tr>
+        <tr><td class="lbl" colspan="4">Monitoring / Surveillance Plan:</td></tr>
+        <tr><td colspan="4" style="height:34px"></td></tr>
+      </table>
+      <table class="grid" style="margin-top:10px">
+        <colgroup><col style="width:8%"><col style="width:20%"><col style="width:14%"><col style="width:16%"><col style="width:16%"><col style="width:26%"></colgroup>
+        <tr><th class="band" colspan="6" style="background:#efeaf5">DEAD REPORT</th></tr>
+        <tr><th>No.</th><th>Date</th><th>Time</th><th>Cage No.</th><th>ID</th><th>Reporter</th></tr>
+        ${filled.join('')}
+      </table>
+      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ Mouse Lab Management · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+  },
+
+  // ---- 4) Monitoring Record (LA Guide-AF 11.1-03) — one per sick animal ----
+  buildMonitoringForm(p, cage, mouse) {
+    const entries = [...mouse.treatments].sort((a, b) => (a.date < b.date ? -1 : 1)); // chronological
+    const first = entries[0] || {};
+    const latest = entries[entries.length - 1] || {};
+    const g = Data.getGroup(p, cage.groupId);
+    const allSigns = [...new Set(entries.flatMap(t => t.signs || []))].join(', ') || '—';
+
+    const dayCell = (n) => {
+      const e = entries[n - 1];
+      const dateHtml = e ? `<b>Day ${n}</b> · ${e.date}` : `<b>Day ${n}</b>`;
+      const sign = e ? [...(e.signs || []), e.diagnosis].filter(Boolean).join(', ') : '';
+      return { dateHtml, sign };
+    };
+    let dayRows = '';
+    for (let i = 1; i <= 7; i++) {
+      const L = dayCell(i), R = dayCell(i + 7);
+      dayRows += `<tr><td>${L.dateHtml}</td><td class="sign-cell">${L.sign}</td><td>${R.dateHtml}</td><td class="sign-cell">${R.sign}</td></tr>`;
+    }
+
+    const prog = !mouse.alive && mouse.death
+      ? `Euthanasia / เสียชีวิต ${mouse.death.date}`
+      : mouse.careOpen ? 'อยู่ระหว่างติดตามอาการ'
+      : `หายเป็นปกติ · ปิดเคส ${latest.date || ''}`;
+    const euthReco = latest.recommend === 'Euthanasia by humane endpoint';
+
+    return `
+      ${this.cmuHeader('LA Guide–AF 11.1-03 Monitoring Record', '1 หน้า')}
+      <div class="doc-title" style="margin-bottom:2px">Monitoring Record</div>
+      <div class="doc-title" style="margin-top:0;font-size:13px">บันทึกการเฝ้าติดตามอาการผิดปกติหรืออาการป่วยของสัตว์ทดลอง</div>
+      <table class="form">${this.COLS4}
+        <tr><td class="band" colspan="4">PROTOCOL INFORMATION</td></tr>
+        <tr><td class="lbl">AR</td><td>Protocol No. &nbsp; ${p.name}</td><td class="lbl">Lot.</td><td>—</td></tr>
+        <tr><td class="lbl">Case Number</td><td>${mouse.code}</td><td class="lbl">Date / Time</td><td>${first.date || todayISO()} &nbsp; ${first.time || ''}</td></tr>
+        <tr><td class="lbl">Cage &amp; ID</td><td colspan="3">${cage.code} · ${mouse.code} · ${g ? g.name : ''} · ${mouse.sex === 'M' ? 'Male ♂' : 'Female ♀'}</td></tr>
+        <tr><td class="lbl">Clinical Signs =</td><td colspan="3">${allSigns}</td></tr>
+      </table>
+      <table class="form" style="margin-top:10px">
+        <colgroup><col style="width:15%"><col style="width:35%"><col style="width:15%"><col style="width:35%"></colgroup>
+        <tr><td class="band" colspan="4">Monitoring Record (Daily)</td></tr>
+        <tr><th>Date</th><th>Clinical Signs / Sign</th><th>Date</th><th>Clinical Signs / Sign</th></tr>
+        ${dayRows}
+        <tr><td class="lbl" colspan="4">Progression / Conclusion: &nbsp; ${prog}</td></tr>
+        <tr><td class="lbl" colspan="4">Technician Sign/Date/Time: &nbsp; ${latest.vet || '__________'} / ${latest.date || ''} / ${latest.time || ''}</td></tr>
+      </table>
+      <table class="form" style="margin-top:10px">${this.COLS4}
+        <tr><td class="band" colspan="4">Responsible Vet. [Action Plan]</td></tr>
+        <tr><td class="lbl">Recommendations</td><td class="sign-cell" colspan="3">
+          <div>${this.tick('Tx. By', !euthReco)} <u>&nbsp;${!euthReco ? (latest.treatment || '') : ''}&nbsp;</u></div>
+          <div>${this.tick('Euthanasia by humane endpoint should be done on', euthReco)} <u>&nbsp;&nbsp;</u></div>
+        </td></tr>
+        <tr><td class="lbl">PI Communication</td><td class="sign-cell" colspan="3">${this.tick('PI', false)} &nbsp; ${this.tick('Lab member', false)} Name: __________ &nbsp; ${this.tick('Technician', false)} Name: __________</td></tr>
+        <tr><td class="lbl">Vet. Sign/Date/Time</td><td colspan="3">__________ / ${latest.date || ''} / </td></tr>
+      </table>
+      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ Mouse Lab Management · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+  },
+
+  // project export = one Monitoring Record per sick animal (page break between)
+  buildSickReportDoc(p) {
+    const sick = [];
+    p.cages.forEach(cage => cage.mice.forEach(m => { if (m.treatments && m.treatments.length) sick.push({ m, cage }); }));
+    const rank = m => (!m.alive ? 2 : m.careOpen ? 0 : 1);
+    sick.sort((a, b) => rank(a.m) - rank(b.m));
+    if (!sick.length) return '<p class="muted">ไม่มีข้อมูล</p>';
+    return sick.map(({ m, cage }, i) =>
+      `<div style="${i > 0 ? 'page-break-before:always' : ''}">${this.buildMonitoringForm(p, cage, m)}</div>`).join('');
   },
 
   // ---------------------------------------------------------

@@ -22,12 +22,15 @@ UI language is **Thai**. Keep it Thai unless told otherwise.
 
 ## Data model (per mouse)
 ```
-{ id, code, sex('M'|'F'), weights[{date,weight}], remark, treatments[],
+{ id, code, sex('M'|'F'), weights[{date,weight}], remark,
+  treatments[],    // Sick Case Report entries: { date, time, vet, signs[], support[], diagnosis, treatment, recommend, note }
   excluded,        // "stopped": kept out of group-average stats, still alive & eats/drinks
   alive,           // false once Death is recorded
   death,           // { type:'natural'|'humane', disposition:'dispose'|'necropsy', note, date }
   careOpen,        // vet case currently open → drives the cage "care" (yellow) colour
-  humaneOrder }    // vet order to euthanise: { reason, vet, date }
+  humaneOrder,     // vet order to euthanise: { reason, vet, date }
+  necropsy }       // Necropsy Record (only when death.disposition==='necropsy'):
+                   //   { date, time, examiner, results:{ [organ]:{v:'N'|'A'|'X', note} }, abnormal, avComment }
 ```
 Cage: `{ id, code, groupId, shelf, position, mice[], water/food:{remaining,added,consumed}, status(legacy), lastRecordDate }`.
 
@@ -40,6 +43,17 @@ Cage: `{ id, code, groupId, shelf, position, mice[], water/food:{remaining,added
 - **Weighing mode** (SCI only): entering it starts `App.weighSession` — all cages go gray and values are cleared ("not weighed yet"); each saved cage turns green. Exit restores real values/colours. The wizard weighs **alive mice only** (`w.mice = cage.mice.filter(m => m.alive)`); dead mice are skipped.
 - **Edit mode** (dashboard "✏️ จัดการกรง", `App.editing`): empty slots become "＋ เพิ่มกรง", cages become editable; both open `openCageEditor(p, shelf, pos, cage)` (group + sex + count, or delete). Shelves/cages-per-shelf are editable inline (clamped so no cage is orphaned). All edits are logged via `App.log`.
 - **Vet actions**: treatment/close-case/humane-endpoint are only reachable by clicking into an individual **mouse** (not from the cage popup). Death & Stop are per-mouse actions in the cage popup table, hidden under a "⋯" kebab menu.
+- **Official lab forms** (ศูนย์สัตว์ทดลอง มช.). PDF originals live in `แบบฟอร์ม/`. **Form option terms that are English on the paper form stay English verbatim — never translate them to Thai** (they are technical terms); Thai is only used for UI chrome (field labels, buttons). Data-entry forms are gated by the `treat` capability (VET):
+  - **Sick Case Report** (LA Guide-AF 11.1-02) — the "รายงานอาการป่วย" form (`openTreatForm`). Structured: grouped clinical-sign checkboxes (`App.SICK_SIGNS`), supportive-action checkboxes (`App.SICK_SUPPORT`), diagnosis, treatment, recommendation (`App.SICK_RECO`). Saving pushes a treatment entry and opens the case (`careOpen`). Rendered in mouse detail as sign/support chips + recommendation.
+  - **Necropsy Record** (LA Guide-AF 11.3-01) — `openNecropsyForm`, gated by `deathStop` (the gross exam follows whoever recorded the death; the vet later adds the AV Comment), shown only for dead mice whose `death.disposition==='necropsy'`. Per-organ exam by system (`App.NECROPSY_SYS`), each organ = N (Normal) / A (Autolysis) / X (Abnormal, note) + overall abnormal finding + AV comment → saved to `mouse.necropsy`. Read-only view via `App.renderNecropsy`.
+  - **Death recording** (`openDeathForm`, per-mouse, `deathStop` cap): captures Date/Time/Reporter + type (natural/humane) + disposition (dispose/necropsy) + note (clinical sign before death) → `mouse.death`. **If disposition is `necropsy`, saving opens `openNecropsyForm` immediately** (you can't choose necropsy without then recording it); cancelling leaves the case with a pending-necropsy button in the mouse detail.
+  - **Monitoring Record** (LA Guide-AF 11.1-03) — the day-by-day follow-up ("การรักษา/ติดตามอาการ") derived from `mouse.treatments`.
+- **Summary reports** (project-level modals, opened from the dashboard mode-bar, visible to all who can view):
+  - **รายงานการตายของสัตว์ทดลอง** (`openDeathReport`) — table of every dead mouse (date, time, cage, ID, group, reporter, type, disposition, necropsy status); rows link to the mouse detail.
+  - **บันทึกติดตามอาการสัตว์ป่วย** (`openSickReport`) — per treated animal, the day-by-day treatment timeline (oldest→newest) with a status badge (กำลังรักษา / หายดี / ตายแล้ว); card header links to the mouse detail.
+- **Export to PDF** — every form/report has a `🖨️ Export PDF` button. No library: `App.printDocument(filename, bodyHtml)` writes a self-contained A4 HTML doc into a hidden iframe (Sarabun font, `App.PRINT_CSS`) and calls `print()` → user picks "Save as PDF". Doc builders return body HTML (unit-testable in isolation) and **each replicates its CMU paper form** via `cmuHeader` (2-row header band) + bordered `table.form` (`table-layout:fixed` + `COLS4`/`COLS2` colgroups so long checkbox rows wrap within the page):
+  - `buildSickCaseDoc` (11.1-02), `buildMonitoringForm` (11.1-03, Day 1–14 daily grid), `buildNecropsyDoc` (11.3-01, 4 ID columns), `buildDeathReportDoc` (11.1-01, Protocol/Action-Plan + No./Date/Time/Cage/ID/Reporter table). `buildSickReportDoc` = one `buildMonitoringForm` per sick animal (page-break between).
+  - Per-mouse export buttons (`ฟอร์มป่วย` / `ฟอร์มติดตาม` / `ฟอร์มชันสูตร`) live in the mouse-detail footer; the two project-level exports live in the report modals.
 - **Audit log**: `DB.auditLog` is append-only (header "📋 Audit Log"), filtered to projects the user can access (admin sees all). Record every meaningful action with `App.log(action, detail, projectName)`.
 - **Top bar** is production-styled: brand + crumbs + Audit Log + (admin) จัดการผู้ใช้ + a **user menu** at top-right (avatar/name → dropdown with "ดูข้อมูลผู้ใช้ & สิทธิ์" and "ออกจากระบบ"). There is no standalone "สิทธิ์" tab.
 - **User info & permission page** (`renderRoles`, reached via the user menu → "ดูข้อมูลผู้ใช้") is a read-only reference: capability matrix + the current user's role per project. Member/role assignment is done in-project via `openMembers(p)` (PI/admin only); admins are excluded from the "add member" list (they're superusers). The roles page also has a self-service "🔒 เปลี่ยนรหัสผ่าน" (`openMyPassword`).
