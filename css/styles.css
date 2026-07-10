@@ -633,6 +633,18 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   .nec-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
+/* project documents (attach PDFs) */
+.doc-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }
+.doc-add select, .doc-add input[type="file"] { font-size: 13px; }
+.doc-add input[type="file"] { flex: 1; min-width: 160px; }
+.doc-list { display: flex; flex-direction: column; gap: 8px; }
+.doc-row { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 9px 12px; background: var(--surface-2); }
+.doc-ico { font-size: 20px; flex: none; }
+.doc-main { flex: 1; min-width: 0; }
+.doc-name { font-weight: 700; font-size: 14px; word-break: break-all; }
+.doc-sample { font-size: 10px; font-weight: 600; color: var(--text-muted); background: var(--border); border-radius: 999px; padding: 1px 7px; margin-left: 4px; }
+.doc-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
 /* summary reports (death report · sick follow-up) */
 .rep-table th { white-space: nowrap; }
 .dr-row { cursor: pointer; }

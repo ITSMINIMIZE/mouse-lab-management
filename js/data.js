@@ -396,6 +396,18 @@ const DB = {
   );
 })();
 
+// project documents (attached PDFs). In this prototype files live only in
+// memory (object URLs / metadata) — a real backend would use object storage.
+(function seedDocuments() {
+  DB.projects.forEach(p => { if (!p.documents) p.documents = []; });
+  const p1 = DB.projects.find(p => p.id === 'P1');
+  p1.documents.push(
+    { id: 'doc1', name: 'AR-Protocol_NAFLD_2026.pdf', size: 248000, category: 'โปรโตคอล (Protocol)', uploadedBy: 'ดร. นภา ศรีสุข', date: isoDaysAgo(40), url: null },
+    { id: 'doc2', name: 'EC-Approval_2026-051.pdf', size: 132000, category: 'ใบอนุมัติ EC', uploadedBy: 'ดร. นภา ศรีสุข', date: isoDaysAgo(38), url: null },
+    { id: 'doc3', name: 'SOP_Weighing-Procedure.pdf', size: 96000, category: 'SOP', uploadedBy: 'ปิยะ (นักวิทย์)', date: isoDaysAgo(20), url: null },
+  );
+})();
+
 // ---- derived helpers used across the app --------------------
 const Data = {
   getProject(id) {

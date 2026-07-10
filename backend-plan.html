@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mouse Lab — แผนพัฒนา Backend</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --surface: #f6f8fc;
+    --surface-2: #eef2f9;
+    --ink: #0f1b2d;
+    --muted: #55677f;
+    --faint: #8090a6;
+    --border: #e2e8f3;
+    --accent: #2563eb;
+    --accent-ink: #1d4ed8;
+    --accent-soft: #e9f1fe;
+    --purple: #6a5a97;
+    --purple-soft: #efeaf6;
+    --good: #15803d;
+    --good-soft: #e7f4ec;
+    --warn: #b45309;
+    --warn-soft: #fbf1e3;
+    --sans: 'Sarabun', 'Noto Sans Thai', 'Leelawadee UI', 'Thonburi', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+    --shadow: 0 1px 2px rgba(15,27,45,.04), 0 6px 20px rgba(15,27,45,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c1322;
+      --surface: #121b2c;
+      --surface-2: #17223a;
+      --ink: #e9f0fb;
+      --muted: #98a8c0;
+      --faint: #6c7e98;
+      --border: #26324b;
+      --accent: #5b8bf5;
+      --accent-ink: #85aaf9;
+      --accent-soft: rgba(91,139,245,.14);
+      --purple: #a99bd0;
+      --purple-soft: rgba(169,155,208,.15);
+      --good: #4ade80;
+      --good-soft: rgba(74,222,128,.14);
+      --warn: #fbbf24;
+      --warn-soft: rgba(251,191,36,.13);
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #ffffff; --surface: #f6f8fc; --surface-2: #eef2f9; --ink: #0f1b2d;
+    --muted: #55677f; --faint: #8090a6; --border: #e2e8f3;
+    --accent: #2563eb; --accent-ink: #1d4ed8; --accent-soft: #e9f1fe;
+    --purple: #6a5a97; --purple-soft: #efeaf6; --good: #15803d; --good-soft: #e7f4ec;
+    --warn: #b45309; --warn-soft: #fbf1e3;
+    --shadow: 0 1px 2px rgba(15,27,45,.04), 0 6px 20px rgba(15,27,45,.05);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c1322; --surface: #121b2c; --surface-2: #17223a; --ink: #e9f0fb;
+    --muted: #98a8c0; --faint: #6c7e98; --border: #26324b;
+    --accent: #5b8bf5; --accent-ink: #85aaf9; --accent-soft: rgba(91,139,245,.14);
+    --purple: #a99bd0; --purple-soft: rgba(169,155,208,.15); --good: #4ade80; --good-soft: rgba(74,222,128,.14);
+    --warn: #fbbf24; --warn-soft: rgba(251,191,36,.13);
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--ink);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { padding: clamp(20px, 5vw, 56px) 20px 64px; }
+  .page { max-width: 980px; margin: 0 auto; }
+
+  .eyebrow {
+    font-size: .74rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent-ink); margin-bottom: 14px;
+    display: inline-flex; align-items: center; gap: 9px;
+  }
+  .eyebrow::before { content: ""; width: 26px; height: 2px; background: var(--accent); border-radius: 2px; }
+
+  h1 {
+    font-size: clamp(1.85rem, 4.4vw, 2.75rem); line-height: 1.12; letter-spacing: -.01em;
+    font-weight: 800; margin: 0 0 14px; text-wrap: balance;
+  }
+  .lead { font-size: 1.06rem; color: var(--muted); max-width: 62ch; margin: 0; }
+
+  .rule { height: 1px; background: var(--border); border: 0; margin: clamp(34px,6vw,52px) 0; }
+
+  section { margin-top: clamp(34px, 6vw, 54px); }
+  h2 {
+    font-size: 1.4rem; font-weight: 800; letter-spacing: -.01em; margin: 0 0 6px;
+    display: flex; align-items: baseline; gap: 12px;
+  }
+  h2 .num {
+    font-family: var(--mono); font-size: .8rem; font-weight: 600; color: var(--accent);
+    background: var(--accent-soft); border-radius: 6px; padding: 3px 8px; letter-spacing: 0;
+    position: relative; top: -2px;
+  }
+  .sec-sub { color: var(--muted); margin: 0 0 22px; max-width: 66ch; }
+
+  .paths { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 720px) { .paths { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    padding: 22px 22px 8px; box-shadow: var(--shadow); position: relative;
+  }
+  .card.reco { border-color: color-mix(in srgb, var(--good) 45%, var(--border)); }
+  .card-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+  .card h3 { font-size: 1.16rem; margin: 0; font-weight: 800; }
+  .tag {
+    font-size: .68rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 999px;
+  }
+  .tag.good { background: var(--good-soft); color: var(--good); }
+  .tag.neutral { background: var(--surface-2); color: var(--muted); }
+  .card .who { color: var(--muted); font-size: .9rem; margin: 0 0 14px; }
+  .spec { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--border); }
+  .spec li { display: flex; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: .93rem; }
+  .spec .k { color: var(--faint); flex: 0 0 92px; font-weight: 600; }
+  .spec .v { color: var(--ink); }
+  .spec .v b { font-weight: 700; }
+
+  .callout {
+    margin-top: 20px; display: flex; gap: 14px; align-items: flex-start;
+    background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+    border-radius: 14px; padding: 16px 18px;
+  }
+  .callout .mark { color: var(--accent-ink); font-weight: 800; font-size: 1.1rem; line-height: 1.3; flex: none; }
+  .callout p { margin: 0; font-size: .95rem; }
+  .callout b { color: var(--accent-ink); }
+
+  .stack { display: flex; flex-direction: column; align-items: stretch; gap: 0; margin-top: 4px; }
+  .layer {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 16px 20px; box-shadow: var(--shadow);
+  }
+  .layer .lt { font-weight: 800; font-size: 1rem; margin: 0 0 3px; }
+  .layer .ld { color: var(--muted); font-size: .88rem; margin: 0; }
+  .layer .ld code { font-family: var(--mono); font-size: .82em; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; color: var(--ink); }
+  .connector { align-self: center; width: 2px; height: 22px; background: linear-gradient(var(--border), var(--accent)); opacity: .8; }
+  .layer.client { border-left: 4px solid var(--accent); }
+  .layer.api { border-left: 4px solid var(--purple); }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 620px) { .split { grid-template-columns: 1fr; } }
+  .layer.db { border-left: 4px solid var(--good); }
+  .layer.store { border-left: 4px solid var(--warn); }
+  .fanout { align-self: center; width: 60%; height: 22px; border: 2px solid var(--border); border-bottom: 0; border-radius: 8px 8px 0 0; opacity: .7; }
+
+  .schema {
+    font-family: var(--mono); font-size: .82rem; line-height: 1.7; color: var(--ink);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px 18px; overflow-x: auto; margin-top: 18px; white-space: pre;
+  }
+  .schema .kw { color: var(--accent-ink); font-weight: 600; }
+  .schema .cm { color: var(--faint); }
+
+  .twocol { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+  @media (max-width: 680px) { .twocol { grid-template-columns: 1fr; } }
+  .mini { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px 20px; box-shadow: var(--shadow); }
+  .mini h4 { margin: 0 0 8px; font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; }
+  .mini.now h4 { color: var(--good); }
+  .mini.real h4 { color: var(--accent-ink); }
+  .mini ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: .92rem; }
+  .mini ul li { margin: 5px 0; }
+  .mini ul li b { color: var(--ink); font-weight: 700; }
+
+  .road { display: flex; flex-direction: column; gap: 0; margin-top: 6px; }
+  .phase { display: grid; grid-template-columns: auto 1fr; gap: 20px; }
+  .rail { display: flex; flex-direction: column; align-items: center; }
+  .dot {
+    width: 34px; height: 34px; border-radius: 10px; flex: none;
+    display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: .82rem;
+    background: var(--accent-soft); color: var(--accent-ink); border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  }
+  .line { width: 2px; flex: 1; background: var(--border); margin: 4px 0; min-height: 14px; }
+  .phase:last-child .line { display: none; }
+  .pbody { padding-bottom: 22px; }
+  .phase:last-child .pbody { padding-bottom: 0; }
+  .pbody h4 { margin: 4px 0 4px; font-size: 1.05rem; font-weight: 800; }
+  .pbody p { margin: 0; color: var(--muted); font-size: .93rem; }
+  .pbody code { font-family: var(--mono); font-size: .85em; background: var(--surface-2); padding: 1px 6px; border-radius: 5px; }
+  .pbody .deliver { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: .74rem; font-weight: 600; padding: 3px 10px; border-radius: 999px;
+    background: var(--surface-2); color: var(--muted); border: 1px solid var(--border);
+  }
+  .phase.p1 .dot { background: var(--good-soft); color: var(--good); border-color: color-mix(in srgb, var(--good) 35%, var(--border)); }
+
+  footer { margin-top: 48px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--faint); font-size: .84rem; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  .kicker { color: var(--muted); }
+  .kicker b { color: var(--ink); }
+
+  /* theme toggle */
+  .theme-btn {
+    position: fixed; top: 16px; right: 16px; z-index: 20;
+    font-family: var(--sans); font-size: .82rem; font-weight: 600;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 999px; padding: 7px 14px; cursor: pointer; box-shadow: var(--shadow);
+  }
+  .theme-btn:hover { border-color: var(--accent); }
+  .theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+  <button class="theme-btn" id="themeBtn" type="button" aria-label="สลับธีม">🌗 ธีม</button>
+  <div class="wrap">
+  <div class="page">
+
+    <header>
+      <span class="eyebrow">Mouse Lab Management · แผนพัฒนาระยะถัดไป</span>
+      <h1>จาก Prototype สู่ระบบใช้งานจริง</h1>
+      <p class="lead">Prototype ปัจจุบันทดสอบ workflow กับผู้ใช้จริงได้ครบแล้ว ขั้นต่อไปคือหลังบ้าน — เอกสารนี้สรุปการเลือกฐานข้อมูล สถาปัตยกรรม การแนบเอกสาร PDF และ roadmap แบบแบ่งเฟส เพื่อใช้คุยกับทีมและลูกค้า</p>
+    </header>
+
+    <hr class="rule">
+
+    <section>
+      <h2><span class="num">01</span> สองเส้นทาง deploy</h2>
+      <p class="sec-sub">ตัวแปรตัดสินคือ<b> นโยบายข้อมูลของมหาวิทยาลัย</b> — จะฝากบน cloud ได้ หรือต้องเก็บในองค์กร ทั้งสองเส้นทางใช้ <b>PostgreSQL เหมือนกัน</b> ฉะนั้น data model ออกแบบครั้งเดียว ย้ายภายหลังได้โดยไม่รื้อ</p>
+
+      <div class="paths">
+        <div class="card reco">
+          <div class="card-top">
+            <h3>Cloud Managed</h3>
+            <span class="tag good">แนะนำเริ่มเร็ว</span>
+          </div>
+          <p class="who">Supabase — เหมาะกับทีมเล็ก อยากเห็นของใช้จริงเร็ว ไม่ติดข้อบังคับ on-prem</p>
+          <ul class="spec">
+            <li><span class="k">ฐานข้อมูล</span><span class="v"><b>PostgreSQL</b> (จัดการให้)</span></li>
+            <li><span class="k">Auth</span><span class="v">Supabase Auth (พร้อมใช้)</span></li>
+            <li><span class="k">ไฟล์</span><span class="v">Supabase Storage</span></li>
+            <li><span class="k">สิทธิ์</span><span class="v">Row-Level Security map จาก <b>ROLES</b> ตรงๆ</span></li>
+            <li><span class="k">งานหลังบ้าน</span><span class="v">น้อยมาก — auto REST / Realtime</span></li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-top">
+            <h3>On-prem</h3>
+            <span class="tag neutral">ถ้าต้องเก็บในองค์กร</span>
+          </div>
+          <p class="who">เซิร์ฟเวอร์มหาวิทยาลัย — เหมาะเมื่อ IT บังคับให้ข้อมูลอยู่ในองค์กร</p>
+          <ul class="spec">
+            <li><span class="k">ฐานข้อมูล</span><span class="v"><b>PostgreSQL</b> (self-host)</span></li>
+            <li><span class="k">Auth</span><span class="v">JWT — NestJS / FastAPI</span></li>
+            <li><span class="k">ไฟล์</span><span class="v">MinIO (S3-compatible)</span></li>
+            <li><span class="k">สิทธิ์</span><span class="v">guard ในชั้น API</span></li>
+            <li><span class="k">งานหลังบ้าน</span><span class="v">มากกว่า — ต้องเขียน API เอง</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout">
+        <span class="mark">&#10145;</span>
+        <p>ระบบสิทธิ์ที่ออกแบบไว้แล้ว (<b>admin/user</b> + roles รายโครงการ + capability union) map เข้ากับ <b>Supabase Row-Level Security</b> ได้พอดี — ประหยัดงานหลังบ้านมาก จึงเชียร์ Supabase เป็นค่าเริ่มต้น ยกเว้นมหาวิทยาลัยบังคับ on-prem</p>
+      </div>
+    </section>
+
+    <hr class="rule">
+
+    <section>
+      <h2><span class="num">02</span> ทำไม PostgreSQL</h2>
+      <p class="sec-sub">ข้อมูลของระบบนี้เป็น <b>relational ชัดเจน</b> (โครงการ → กลุ่ม → กรง → หนู → น้ำหนัก/การรักษา/ชันสูตร) และต้องคำนวณค่าเฉลี่ยกลุ่ม เทียบ control ตลอด — งานแบบ join + aggregate นี้ NoSQL/Firestore ทำได้ลำบาก Postgres จึงเป็นแกนที่เหมาะที่สุด</p>
+
+      <div class="stack">
+        <div class="layer client">
+          <p class="lt">Client — SPA เดิม</p>
+          <p class="ld">โค้ด <code>js/app.js</code> เรนเดอร์เหมือนเดิม เปลี่ยนแค่แหล่งข้อมูล</p>
+        </div>
+        <div class="connector"></div>
+        <div class="layer api">
+          <p class="lt">API + Auth</p>
+          <p class="ld">Supabase (auto-REST + RLS) &nbsp;·หรือ·&nbsp; NestJS / FastAPI + JWT</p>
+        </div>
+        <div class="fanout"></div>
+        <div class="split">
+          <div class="layer db">
+            <p class="lt">PostgreSQL</p>
+            <p class="ld">แกนข้อมูลเชิงสัมพันธ์ — projects · cages · mice · weights · treatments · necropsy</p>
+          </div>
+          <div class="layer store">
+            <p class="lt">Object Storage</p>
+            <p class="ld">ไฟล์ PDF เอกสารโครงการ (Supabase Storage / MinIO)</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <hr class="rule">
+
+    <section>
+      <h2><span class="num">03</span> การแนบเอกสาร PDF</h2>
+      <p class="sec-sub">แต่ละโครงการแนบเอกสารสำคัญได้ (โปรโตคอล · ใบอนุมัติ EC · SOP · ผลแล็บ) — เดโมหน้าตาพร้อมแล้วในตัว prototype ส่วนของจริงใช้แนวทางมาตรฐานคือแยกไฟล์ออกจากฐานข้อมูล</p>
+
+      <div class="twocol">
+        <div class="mini now">
+          <h4>&#9679; ในเดโมตอนนี้ (ทำแล้ว)</h4>
+          <ul>
+            <li>ปุ่ม <b>เอกสาร</b> ในหน้าโครงการ — แนบ / เปิด / ลบ PDF</li>
+            <li>เก็บไฟล์เป็น object URL <b>ในหน่วยความจำ</b></li>
+            <li>คุมสิทธิ์: ดูได้ทุกคนที่เข้าถึง · แนบ/ลบเฉพาะ <b>PI</b></li>
+            <li>ข้อจำกัด: รีเฟรชแล้วหาย — ไว้โชว์ UX เท่านั้น</li>
+          </ul>
+        </div>
+        <div class="mini real">
+          <h4>&#9679; ในระบบจริง</h4>
+          <ul>
+            <li>ตัวไฟล์ → <b>object storage</b> (ไม่เก็บ BLOB ในฐานข้อมูล)</li>
+            <li>metadata → ตาราง <b>documents</b></li>
+            <li>เปิดผ่าน <b>signed URL</b> (หมดอายุได้) คุมสิทธิ์รายโครงการ</li>
+            <li>แนบได้ทั้งระดับ<b>โครงการ</b>และระดับ<b>เคส</b> (สแกนใบชันสูตร ฯลฯ)</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="schema"><span class="cm">-- ตารางเก็บ metadata ของไฟล์ (ตัวไฟล์อยู่บน object storage)</span>
+<span class="kw">create table</span> documents (
+  id            uuid <span class="kw">primary key</span>,
+  project_id    uuid <span class="kw">references</span> projects,
+  mouse_id      uuid <span class="kw">references</span> mice,      <span class="cm">-- null = เอกสารระดับโครงการ</span>
+  filename      text, mime text, size bigint,
+  storage_key   text,                          <span class="cm">-- path บน storage</span>
+  category      text,                          <span class="cm">-- protocol · ec · sop · lab</span>
+  uploaded_by   uuid, uploaded_at timestamptz
+);</div>
+    </section>
+
+    <hr class="rule">
+
+    <section>
+      <h2><span class="num">04</span> Roadmap แบ่งเฟส</h2>
+      <p class="sec-sub">ต่อยอดจาก prototype โดยไม่รื้อ UI — <b>App เขียนแยกส่วน render กับ data ไว้แล้ว</b> ฉะนั้น Phase 1 แค่เปลี่ยน <code>Data.*</code> เป็น API call หน้าบ้านนี้จึงกลายเป็นระบบจริงได้เลย ไม่ต้องเขียนใหม่</p>
+
+      <div class="road">
+        <div class="phase p1">
+          <div class="rail"><div class="dot">1</div><div class="line"></div></div>
+          <div class="pbody">
+            <h4>ต่อฐานข้อมูลจริง + Auth</h4>
+            <p>สร้าง schema Postgres · ย้าย <code>DB</code>/<code>Data</code> ให้ดึงผ่าน API แทน in-memory · ทำ login จริง — โครง <code>App</code> เรนเดอร์เหมือนเดิม</p>
+            <div class="deliver"><span class="chip">schema</span><span class="chip">API</span><span class="chip">login จริง</span></div>
+          </div>
+        </div>
+        <div class="phase">
+          <div class="rail"><div class="dot">2</div><div class="line"></div></div>
+          <div class="pbody">
+            <h4>แนบเอกสาร (Storage)</h4>
+            <p>object storage + ตาราง documents + signed URL — ยกเดโมแนบไฟล์ให้เป็นของจริง</p>
+            <div class="deliver"><span class="chip">storage</span><span class="chip">signed URL</span><span class="chip">สิทธิ์รายโครงการ</span></div>
+          </div>
+        </div>
+        <div class="phase">
+          <div class="rail"><div class="dot">3</div><div class="line"></div></div>
+          <div class="pbody">
+            <h4>รายงาน / Export ฝั่ง server</h4>
+            <p>ฟอร์ม PDF ทั้ง 4 (Sick Case · Monitoring · Necropsy · Dead Report) gen ฝั่ง server เก็บสำเนาได้ · CSV/Excel จริง</p>
+            <div class="deliver"><span class="chip">PDF server-side</span><span class="chip">Excel export</span></div>
+          </div>
+        </div>
+        <div class="phase">
+          <div class="rail"><div class="dot">4</div><div class="line"></div></div>
+          <div class="pbody">
+            <h4>ฟีเจอร์ต่อยอด</h4>
+            <p>สิ่งที่ spec เดิมระบุ out-of-scope — แจ้งเตือน (endpoint / น้ำหนักลด) · audit log ถาวร · KPI dashboard · mobile</p>
+            <div class="deliver"><span class="chip">แจ้งเตือน</span><span class="chip">audit ถาวร</span><span class="chip">KPI</span><span class="chip">mobile</span></div>
+          </div>
+        </div>
+        <div class="phase">
+          <div class="rail"><div class="dot">5</div><div class="line"></div></div>
+          <div class="pbody">
+            <h4>ความมั่นคง &amp; ส่งมอบ</h4>
+            <p>backup / restore · log · ทบทวนสิทธิ์ · deploy ด้วย Docker</p>
+            <div class="deliver"><span class="chip">backup</span><span class="chip">Docker</span><span class="chip">hardening</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <span class="kicker"><b>Mouse Lab Management</b> — เอกสารประกอบการพูดคุย</span>
+      <span>ปรับปรุง 10 ก.ค. 2569</span>
+    </footer>
+
+  </div>
+  </div>
+
+  <script>
+    (function () {
+      var root = document.documentElement;
+      var btn = document.getElementById('themeBtn');
+      try {
+        var saved = localStorage.getItem('mlab-plan-theme');
+        if (saved) root.setAttribute('data-theme', saved);
+      } catch (e) {}
+      function current() {
+        var attr = root.getAttribute('data-theme');
+        if (attr) return attr;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }
+      btn.addEventListener('click', function () {
+        var next = current() === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        try { localStorage.setItem('mlab-plan-theme', next); } catch (e) {}
+      });
+    })();
+  </script>
+</body>
+</html>

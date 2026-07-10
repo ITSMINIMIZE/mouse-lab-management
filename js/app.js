@@ -621,6 +621,7 @@ const App = {
       shelves: this.draft.layout.shelves,
       cagesPerShelf: this.draft.layout.cols,
       groups, cages,
+      documents: [],
       // creator becomes PI of the new project (admins are superusers regardless)
       members: [{ userId: this.user.id, roles: ['PI'] }],
     });
@@ -680,6 +681,7 @@ const App = {
            <span style="flex:1"></span>
            ${canMembers ? `<button class="btn" id="manageMembers">👥 สมาชิก</button>` : ''}
            ${canEdit ? `<button class="btn" id="startEditing">✏️ จัดการกรง</button>` : ''}
+           <button class="btn" id="projectDocs">📎 เอกสาร</button>
            <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
            <button class="btn" id="deathReport">✝ รายงานการตาย</button>
            <button class="btn" data-nav="reports">📈 กราฟ</button>
@@ -729,6 +731,7 @@ const App = {
       this.el('manageMembers').addEventListener('click', () => this.openMembers(p));
     }
     if (!this.weighing && !this.editing) {
+      this.el('projectDocs').addEventListener('click', () => this.openDocuments(p));
       this.el('sickReport').addEventListener('click', () => this.openSickReport(p));
       this.el('deathReport').addEventListener('click', () => this.openDeathReport(p));
     }
@@ -1583,6 +1586,101 @@ const App = {
         if (found) this.openMouseDetail(p, found.cage, found.m);
       };
     });
+  },
+
+  // ---------------------------------------------------------
+  // PROJECT DOCUMENTS  (attach important PDFs to a project)
+  //   Prototype only: files are held in memory (object URLs) — a real
+  //   backend would upload to object storage and keep signed URLs.
+  // ---------------------------------------------------------
+  DOC_CATEGORIES: ['โปรโตคอล (Protocol)', 'ใบอนุมัติ EC', 'SOP', 'ผลแล็บ (Lab result)', 'อื่นๆ (Other)'],
+
+  fileSize(bytes) {
+    if (bytes == null) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + ' KB';
+    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+  },
+
+  openDocuments(p) {
+    p.documents = p.documents || [];
+    const canManage = this.can('editProject', p);   // PI/admin attach & delete; others view/open
+    const catIcon = c => c.startsWith('โปรโตคอล') ? '📄' : c.startsWith('ใบอนุมัติ') ? '✅' : c === 'SOP' ? '📋' : c.startsWith('ผลแล็บ') ? '🧪' : '📎';
+
+    const rows = p.documents.length ? p.documents.map(d => `
+      <div class="doc-row" data-id="${d.id}">
+        <span class="doc-ico">${catIcon(d.category)}</span>
+        <div class="doc-main">
+          <div class="doc-name">${d.name} ${d.url ? '' : '<span class="doc-sample">ตัวอย่าง</span>'}</div>
+          <div class="doc-meta">${d.category} · ${this.fileSize(d.size)} · ${d.uploadedBy} · ${d.date}</div>
+        </div>
+        <button class="mini-btn doc-open" data-id="${d.id}">เปิด</button>
+        ${canManage ? `<button class="mini-btn danger doc-del" data-id="${d.id}">ลบ</button>` : ''}
+      </div>`).join('') : `<p class="empty-note">ยังไม่มีเอกสารแนบ</p>`;
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>📎 เอกสารโครงการ</h3><div class="sub">${p.name} · ${p.documents.length} ไฟล์</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        ${canManage ? `
+        <div class="doc-add">
+          <select id="docCat">${this.DOC_CATEGORIES.map(c => `<option>${c}</option>`).join('')}</select>
+          <input type="file" id="docFile" accept="application/pdf">
+          <button class="btn btn-primary" id="docUpload">แนบไฟล์</button>
+        </div>
+        <p class="empty-note" style="margin:2px 0 12px">รองรับ PDF · เดโมนี้เก็บไฟล์ไว้ในหน่วยความจำเท่านั้น (รีเฟรชแล้วหาย · ระบบจริงจะเก็บบน object storage)</p>
+        ` : ''}
+        <div class="doc-list">${rows}</div>
+      </div>
+      <div class="modal-foot"><button class="btn" id="docClose">ปิด</button></div>
+    `);
+
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('docClose').onclick = () => this.closeModal();
+
+    // open a document (object URL opens the PDF inline; sample rows have no file)
+    document.querySelectorAll('.doc-open').forEach(b => {
+      b.onclick = () => {
+        const d = p.documents.find(x => x.id === b.dataset.id);
+        if (d && d.url) window.open(d.url, '_blank');
+        else this.toast('ไฟล์ตัวอย่าง (เมตาดาต้า) — อัปโหลดไฟล์จริงเพื่อเปิดดู');
+      };
+    });
+
+    if (canManage) {
+      document.querySelectorAll('.doc-del').forEach(b => {
+        b.onclick = () => {
+          const i = p.documents.findIndex(x => x.id === b.dataset.id);
+          if (i < 0) return;
+          const name = p.documents[i].name;
+          if (p.documents[i].url) URL.revokeObjectURL(p.documents[i].url);
+          p.documents.splice(i, 1);
+          this.log('ลบเอกสาร', name, p.name);
+          this.openDocuments(p);
+        };
+      });
+      this.el('docUpload').onclick = () => {
+        const input = this.el('docFile');
+        const file = input.files && input.files[0];
+        if (!file) { this.toast('กรุณาเลือกไฟล์ PDF'); return; }
+        if (file.type !== 'application/pdf') { this.toast('รองรับเฉพาะไฟล์ PDF'); return; }
+        if (file.size > 15 * 1024 * 1024) { this.toast('ไฟล์ใหญ่เกิน 15MB'); return; }
+        p.documents.push({
+          id: 'd' + Date.now(),
+          name: file.name,
+          size: file.size,
+          category: this.el('docCat').value,
+          uploadedBy: this.user.name,
+          date: todayISO(),
+          url: URL.createObjectURL(file),
+        });
+        this.log('แนบเอกสาร', `${file.name} (${this.fileSize(file.size)})`, p.name);
+        this.toast('แนบไฟล์แล้ว');
+        this.openDocuments(p);
+      };
+    }
   },
 
   // ---------------------------------------------------------
