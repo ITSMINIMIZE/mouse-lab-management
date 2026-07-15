@@ -1,5 +1,5 @@
 /* ============================================================
- * Mouse Laboratory Management System — Prototype v0.1
+ * iLAMP — Intelligent Laboratory Animal Management Platform (Prototype)
  * App controller: routing, rendering, weighing workflow
  * (Pure front-end mockup — no backend / no database)
  * ============================================================ */
@@ -42,6 +42,11 @@ const App = {
     const healed = !m.careOpen;
     return `<span class="treat-mark${healed ? ' healed' : ''}" title="${healed ? 'เคยรักษา (เคสปิดแล้ว)' : 'กำลังรักษา'}">+</span>`;
   },
+  // orange "!" when a mouse is flagged abnormal and awaiting VET review
+  flagMark(m) {
+    if (!m.flagOpen || !m.alive) return '';
+    return `<span class="flag-mark" title="แจ้งผิดปกติ — รอ VET ตรวจสอบ">!</span>`;
+  },
 
   // minimum acceptable daily weight gain (g). Below this = warning; loss/no-gain = bad.
   GAIN_THRESHOLD: 0.2,
@@ -61,6 +66,7 @@ const App = {
   cageStatus(cage) {
     if (cage.mice.some(m => m.alive && m.humaneOrder)) return 'danger';
     if (cage.mice.some(m => m.alive && m.careOpen)) return 'care';
+    if (cage.mice.some(m => m.alive && m.flagOpen)) return 'flag';   // orange — awaiting VET review
     return 'normal';
   },
 
@@ -74,6 +80,9 @@ const App = {
 
   get user() { return DB.users.find(u => u.id === DB.currentUserId) || DB.users[0]; },
   get isAdmin() { return this.user.systemRole === 'admin'; },
+  get isAV() { return this.user.systemRole === 'av'; },            // Attending Veterinarian (approves projects)
+  get canReview() { return this.isAdmin || this.isAV; },           // may approve/reject project creation
+  sysRoleLabel(u) { return u.systemRole === 'admin' ? 'admin' : u.systemRole === 'av' ? 'AV' : 'user'; },
 
   // roles the current user holds in a project (array of role keys)
   myRoles(project) {
@@ -150,16 +159,16 @@ const App = {
     const u = this.user;
     const initial = (u.firstName || u.name || '?').trim().charAt(0);
     const proj = Data.getProject(this.route.projectId);
-    const projRole = proj && !this.isAdmin ? this.myRoleLabel(proj) : '';
-    const sysLabel = this.isAdmin ? 'ผู้ดูแลระบบ (admin)' : 'ผู้ใช้ (user)';
+    const projRole = proj && !this.isAdmin && !this.isAV ? this.myRoleLabel(proj) : '';
+    const sysLabel = this.isAdmin ? 'ผู้ดูแลระบบ (admin)' : this.isAV ? 'สัตวแพทย์ผู้ควบคุม (AV)' : 'ผู้ใช้ (user)';
     const userOptions = DB.users
-      .map(x => `<option value="${x.id}" ${x.id === u.id ? 'selected' : ''}>${x.name} · ${x.systemRole === 'admin' ? 'admin' : 'user'}</option>`)
+      .map(x => `<option value="${x.id}" ${x.id === u.id ? 'selected' : ''}>${x.name} · ${this.sysRoleLabel(x)}</option>`)
       .join('');
 
     this.el('root').innerHTML = `
       <div id="app-shell">
         <header class="appbar">
-          <div class="brand"><span class="mark">🐭</span> Mouse Lab</div>
+          <div class="brand"><span class="mark">🐭</span> iLAMP</div>
           <nav class="crumbs">${crumbsHTML}</nav>
           <div class="spacer"></div>
           <button class="btn btn-ghost" data-nav="audit">📋 Audit Log</button>
@@ -167,7 +176,7 @@ const App = {
           <div class="user-menu">
             <button class="user-btn" id="userMenuBtn">
               <span class="avatar">${initial}</span>
-              <span class="user-meta"><span class="u-name">${u.name}</span><span class="u-sys">${this.isAdmin ? 'admin' : (projRole || 'user')}</span></span>
+              <span class="user-meta"><span class="u-name">${u.name}</span><span class="u-sys">${this.isAdmin ? 'admin' : this.isAV ? 'AV' : (projRole || 'user')}</span></span>
               <span class="caret">▾</span>
             </button>
             <div class="user-dropdown" id="userDropdown">
@@ -220,41 +229,32 @@ const App = {
   // 1. LOGIN
   // ---------------------------------------------------------
   renderLogin() {
-    const userOptions = DB.users
-      .map(u => `<option value="${u.id}" ${u.id === DB.currentUserId ? 'selected' : ''}>${u.name} · ${u.systemRole === 'admin' ? 'admin' : 'user'}</option>`)
-      .join('');
     this.el('root').innerHTML = `
       <div id="view-login">
-        <div class="login-hero">
-          <div class="login-logo">🐭</div>
-          <h1>Mouse Lab Management</h1>
-          <p class="hero-sub">ระบบบริหารจัดการสัตว์ทดลอง<br>Interactive Prototype v0.1</p>
-          <ul class="login-points">
-            <li>จำลองผังกรงจริง · ชั่งน้ำหนักได้รวดเร็ว</li>
-            <li>สิทธิ์รายโครงการ · งานสัตวแพทย์ · รายงานและกราฟ</li>
-            <li>Audit Log โปร่งใส ตรวจสอบย้อนหลังได้</li>
-          </ul>
-        </div>
-        <div class="login-panel">
+        <div class="login-main">
           <form class="login-card" id="loginForm">
-            <h2>เข้าสู่ระบบ</h2>
-            <p class="sub">โหมดสาธิต — เลือกผู้ใช้เพื่อทดสอบสิทธิ์</p>
+            <div class="login-logo-slot"><span class="li-ico">🏛️</span><span class="li-txt">LOGO</span></div>
+            <h1 class="login-sys">iLAMP</h1>
+            <p class="login-sysfull">Intelligent Laboratory Animal Management Platform</p>
             <div class="field">
-              <label>เข้าใช้เป็น</label>
-              <select id="loginUser">${userOptions}</select>
+              <label>Username</label>
+              <input type="text" id="loginEmail" placeholder="name@cmu.ac.th" autocomplete="username">
             </div>
             <div class="field">
-              <label>รหัสผ่าน</label>
-              <input type="password" value="demo1234">
+              <label>Password</label>
+              <input type="password" id="loginPass" placeholder="••••••••" autocomplete="current-password">
             </div>
             <button class="btn btn-primary btn-block btn-lg" type="submit">เข้าสู่ระบบ</button>
-            <p class="login-hint">ไม่เชื่อมต่อฐานข้อมูลจริง · สลับผู้ใช้ได้ทุกเมื่อจากมุมขวาบน</p>
           </form>
         </div>
+        <footer class="login-owner">Preclinical Laboratory Animal Center, Faculty of Medicine, Chiang Mai University&nbsp;: PLAC</footer>
       </div>`;
     this.el('loginForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      DB.currentUserId = this.el('loginUser').value;
+      // demo: match the typed e-mail to a seeded user; blank / unknown → admin (full access)
+      const email = (this.el('loginEmail').value || '').trim().toLowerCase();
+      const match = DB.users.find(u => (u.email || '').toLowerCase() === email);
+      DB.currentUserId = match ? match.id : 'u_admin';
       this.go('projects');
     });
   },
@@ -263,38 +263,234 @@ const App = {
   // 2. PROJECT LIST
   // ---------------------------------------------------------
   renderProjects() {
-    // only projects the current user has a role in (admin sees all)
-    const visible = DB.projects.filter(p => this.hasAccess(p));
+    // members see their own projects (admin & AV reviewer see all)
+    const visible = DB.projects.filter(p => this.hasAccess(p) || this.canReview);
     const cards = visible.map(p => {
+      const approval = p.approval || 'approved';
       const closed = p.status === 'closed';
       const mice = p.cages.reduce((s, c) => s + c.mice.length, 0);
       const roleLabel = this.myRoleLabel(p);
-      return `
-        <div class="project-card ${closed ? 'closed' : ''}" data-nav="project" data-project-id="${p.id}">
-          <div style="display:flex;justify-content:space-between;align-items:start;gap:8px">
-            <h3>${p.name}</h3>
-            <span class="pill ${closed ? 'closed' : 'active'}">${closed ? 'ปิดแล้ว' : 'กำลังดำเนิน'}</span>
+      const iAmOwner = this.can('editProject', p) || this.can('manageMembers', p);   // PI / admin
+
+      const badge = approval === 'waiting'
+        ? '<span class="pill waiting">⏳ รอตรวจสอบ</span>'
+        : approval === 'rejected'
+        ? '<span class="pill rejected">✗ ไม่อนุมัติ</span>'
+        : `<span class="pill ${closed ? 'closed' : 'active'}">${closed ? 'ปิดแล้ว' : 'กำลังดำเนิน'}</span>`;
+
+      // top-right actions menu (owner only): ข้อมูลโครงการ / จัดการกรง / จัดการสมาชิก
+      const ownerMenu = iAmOwner ? `
+        <div class="card-menu">
+          <button class="card-menu-btn" data-menu="${p.id}" title="การดำเนินการ" aria-label="การดำเนินการ">⋯</button>
+          <div class="card-menu-list" data-menulist="${p.id}">
+            <button class="cm-item" data-act="info" data-pid="${p.id}">ข้อมูลโครงการ</button>
+            <button class="cm-item" data-act="cages" data-pid="${p.id}">จัดการกรง</button>
+            <button class="cm-item" data-act="members" data-pid="${p.id}">จัดการสมาชิก</button>
           </div>
-          <p class="p-desc">${p.description}</p>
+        </div>` : '';
+
+      // per-state action strip
+      let strip = '';
+      if (approval === 'waiting' && this.canReview) {
+        strip = `<div class="card-actions"><button class="btn btn-sm btn-primary" data-act="review" data-pid="${p.id}">🔍 ตรวจสอบเพื่ออนุมัติ</button></div>`;
+      } else if (approval === 'waiting' && iAmOwner) {
+        strip = `<div class="card-note waiting-note">⏳ รอการตรวจสอบจาก AV (สัตวแพทย์ผู้ควบคุม)</div>`;
+      } else if (approval === 'rejected') {
+        strip = `<div class="card-note rejected-note"><b>ไม่อนุมัติ:</b> ${p.rejectReason || '—'}</div>`;
+        if (iAmOwner) strip += `<div class="card-actions">
+            <button class="btn btn-sm" data-act="info" data-pid="${p.id}">✏️ แก้ไข</button>
+            <button class="btn btn-sm btn-primary" data-act="resubmit" data-pid="${p.id}">↻ ส่งตรวจอีกครั้ง</button>
+            <button class="btn btn-sm danger" data-act="delete" data-pid="${p.id}">🗑 ลบ</button>
+          </div>`;
+      }
+
+      return `
+        <div class="project-card ${closed ? 'closed' : ''} ${approval === 'rejected' ? 'rejected' : ''} ${approval === 'waiting' ? 'waiting' : ''}">
+          <div class="pc-head">
+            <h3 class="pc-open" data-pid="${p.id}">${p.name}</h3>
+            <div class="pc-right">${badge}${ownerMenu}</div>
+          </div>
+          <p class="p-desc pc-open" data-pid="${p.id}">${p.description}</p>
           <div class="project-meta">
             <span>📅 เริ่ม ${p.startDate}</span>
             <span>📦 ${p.cages.length} กรง</span>
             <span>🐭 ${mice} ตัว</span>
             <span class="role-tag">${roleLabel}</span>
           </div>
+          ${strip}
         </div>`;
     }).join('') || `<p class="empty-note">คุณยังไม่มีโครงการที่เข้าถึงได้ — สร้างโครงการใหม่เพื่อเริ่มต้น (คุณจะเป็น PI ของโครงการนั้น)</p>`;
+
+    const sub = this.canReview
+      ? `เข้าใช้เป็น <b>${this.user.name}</b> (${this.sysRoleLabel(this.user)}) · เห็นทุกโครงการเพื่อตรวจสอบ/อนุมัติ`
+      : `แสดงเฉพาะโครงการที่คุณมีบทบาท · เข้าใช้เป็น <b>${this.user.name}</b>`;
 
     this.shell(
       `<a data-nav="projects">โครงการ</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>โครงการของฉัน</h2><div class="desc">แสดงเฉพาะโครงการที่คุณมีบทบาท · เข้าใช้เป็น <b>${this.user.name}</b></div></div>
+          <div><h2>โครงการ${this.canReview ? '' : 'ของฉัน'}</h2><div class="desc">${sub}</div></div>
           <button class="btn btn-primary" data-nav="create">➕ สร้างโครงการ</button>
         </div>
         <div class="project-grid">${cards}</div>
       </div>`
     );
+
+    // open a project (members → dashboard · reviewer → info modal)
+    document.querySelectorAll('.pc-open').forEach(el => {
+      el.addEventListener('click', () => {
+        const p = Data.getProject(el.dataset.pid);
+        if (!p) return;
+        if (this.hasAccess(p)) this.go('dashboard', p.id);
+        else if (this.canReview) this.openProjectInfo(p);
+      });
+    });
+    // owner actions menu (⋯)
+    document.querySelectorAll('.card-menu-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const list = document.querySelector(`[data-menulist="${btn.dataset.menu}"]`);
+        const wasOpen = list.classList.contains('open');
+        document.querySelectorAll('.card-menu-list.open').forEach(x => x.classList.remove('open'));
+        if (!wasOpen) list.classList.add('open');
+      });
+    });
+    // all action buttons (menu items + state strip)
+    document.querySelectorAll('[data-act][data-pid]').forEach(b => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.querySelectorAll('.card-menu-list.open').forEach(x => x.classList.remove('open'));
+        const p = Data.getProject(b.dataset.pid);
+        if (!p) return;
+        switch (b.dataset.act) {
+          case 'info': this.openProjectInfo(p); break;
+          case 'cages': this.go('dashboard', p.id); this.editing = true; this.renderDashboard(); break;
+          case 'members': this.openMembers(p); break;
+          case 'review': this.openProjectInfo(p); break;
+          case 'resubmit': this.resubmitProject(p); this.renderProjects(); break;
+          case 'delete': this.confirmDeleteProject(p); break;
+        }
+      });
+    });
+    // close any open card menu when clicking elsewhere
+    if (this._cardMenuDocHandler) document.removeEventListener('click', this._cardMenuDocHandler);
+    this._cardMenuDocHandler = (e) => {
+      if (!e.target.closest('.card-menu')) document.querySelectorAll('.card-menu-list.open').forEach(x => x.classList.remove('open'));
+    };
+    document.addEventListener('click', this._cardMenuDocHandler);
+  },
+
+  // ---- project approval workflow --------------------------------------
+  approveProject(p) {
+    p.approval = 'approved'; p.rejectReason = ''; p.reviewedBy = this.user.name; p.reviewedAt = todayISO();
+    this.log('อนุมัติโครงการ', p.name, p.name);
+    this.toast(`อนุมัติโครงการ "${p.name}" แล้ว`);
+  },
+  rejectProject(p, reason) {
+    p.approval = 'rejected'; p.rejectReason = reason; p.reviewedBy = this.user.name; p.reviewedAt = todayISO();
+    this.log('ไม่อนุมัติโครงการ', `${p.name} · ${reason}`, p.name);
+    this.toast(`ส่งกลับให้แก้ไข: ${p.name}`);
+  },
+  resubmitProject(p) {
+    p.approval = 'waiting'; p.rejectReason = '';
+    this.log('ส่งโครงการตรวจสอบอีกครั้ง', p.name, p.name);
+    this.toast('ส่งโครงการเพื่อรอตรวจสอบอีกครั้ง');
+  },
+  confirmDeleteProject(p) {
+    this.openModal(`
+      <div class="modal-head"><div><h3>ลบโครงการ</h3><div class="sub">${p.name}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body"><p>ยืนยันการลบโครงการนี้ถาวร? การลบไม่สามารถกู้คืนได้</p></div>
+      <div class="modal-foot">
+        <button class="btn" id="cancelDel">ยกเลิก</button>
+        <button class="btn btn-danger" id="okDel">🗑 ลบถาวร</button>
+      </div>`);
+    const close = () => { this.closeModal(); this.renderProjects(); };
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('cancelDel').onclick = () => this.closeModal();
+    this.el('okDel').onclick = () => {
+      const i = DB.projects.indexOf(p);
+      if (i >= 0) DB.projects.splice(i, 1);
+      this.log('ลบโครงการ', p.name, p.name);
+      this.toast(`ลบโครงการ "${p.name}" แล้ว`);
+      close();
+    };
+  },
+
+  // project info modal — read-only detail + review (AV/admin) + fix (PI on rejected)
+  openProjectInfo(p) {
+    const approval = p.approval || 'approved';
+    const mice = p.cages.reduce((s, c) => s + c.mice.length, 0);
+    const canReview = this.canReview && (approval === 'waiting' || approval === 'rejected');
+    const ownerFix = this.can('editProject', p) && approval === 'rejected';
+    const statusText = approval === 'waiting' ? '⏳ รอตรวจสอบ'
+      : approval === 'rejected' ? '✗ ไม่อนุมัติ'
+      : (p.status === 'closed' ? 'ปิดแล้ว' : 'อนุมัติแล้ว · กำลังดำเนิน');
+
+    const groups = p.groups.map(gr => `<div class="pi-grp"><i class="sw" style="background:${gr.color}"></i><b>${gr.name}</b>${gr.isControl ? ' <span class="muted">(control)</span>' : ''}${gr.desc ? ` — ${gr.desc}` : ''}</div>`).join('');
+    const members = (p.members || []).map(m => {
+      const u = DB.users.find(x => x.id === m.userId);
+      return `<div class="pi-mem"><b>${u ? u.name : m.userId}</b> ${(m.roles || []).map(r => `<span class="role-tag">${r}</span>`).join(' ')}</div>`;
+    }).join('') || '<span class="muted">—</span>';
+    const docs = (p.documents || []).length
+      ? p.documents.map(d => `<div class="pi-doc"><span>📄 ${d.name} <span class="muted">· ${this.fileSize(d.size)} · ${d.category}</span></span><button class="mini-btn pidoc-open" data-id="${d.id}">เปิด</button></div>`).join('')
+      : '<span class="muted">ไม่มีเอกสารแนบ</span>';
+
+    const head = ownerFix
+      ? `<div class="field"><label>ชื่อโครงการ</label><input id="piName" value="${p.name}"></div>
+         <div class="field"><label>รายละเอียด</label><textarea id="piDesc" rows="2">${p.description}</textarea></div>`
+      : `<h4 class="pi-name">${p.name}</h4><p class="pi-descread">${p.description}</p>`;
+
+    this.openModal(`
+      <div class="modal-head"><div><h3>ข้อมูลโครงการ</h3><div class="sub">${statusText}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        ${approval === 'rejected' ? `<div class="reject-banner"><b>ไม่อนุมัติ</b> — ${p.rejectReason || '—'}<div class="muted" style="font-size:12px;margin-top:3px">โดย ${p.reviewedBy || '—'} · ${p.reviewedAt || ''}</div></div>` : ''}
+        ${head}
+        <div class="pi-grid">
+          <div><span class="pi-k">วันที่เริ่ม</span> ${p.startDate}</div>
+          <div><span class="pi-k">สถานะ</span> ${statusText}</div>
+          <div><span class="pi-k">ผังกรง</span> ${p.shelves} ชั้น × ${p.cagesPerShelf} กรง</div>
+          <div><span class="pi-k">รวม</span> ${p.cages.length} กรง · ${mice} ตัว</div>
+        </div>
+        <div class="section-title">กลุ่มทดลอง</div>${groups || '<span class="muted">—</span>'}
+        <div class="section-title">สมาชิก</div>${members}
+        <div class="section-title">เอกสารแนบ</div><div class="pi-docs">${docs}</div>
+        ${canReview ? `<div class="field reject-box" id="rejectBox" style="display:none"><label>เหตุผลที่ไม่อนุมัติ <span style="color:var(--red)">*</span></label><textarea id="rejectReason" rows="3" placeholder="ระบุสิ่งที่ต้องแก้ไข"></textarea></div>` : ''}
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="piClose">ปิด</button>
+        <span class="spacer" style="flex:1"></span>
+        ${ownerFix ? `<button class="btn btn-danger" id="piDelete">🗑 ลบ</button><button class="btn btn-primary" id="piResubmit">↻ บันทึก & ส่งตรวจอีกครั้ง</button>` : ''}
+        ${canReview ? `<button class="btn btn-danger" id="piReject">✗ ไม่อนุมัติ</button><button class="btn btn-green" id="piApprove">✓ อนุมัติ</button>` : ''}
+      </div>`);
+
+    document.querySelectorAll('.pidoc-open').forEach(b => b.onclick = () => {
+      const d = (p.documents || []).find(x => x.id === b.dataset.id);
+      if (d && d.url) window.open(d.url, '_blank'); else this.toast('ไฟล์ตัวอย่าง (เมตาดาต้า)');
+    });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('piClose').onclick = () => this.closeModal();
+
+    if (ownerFix) {
+      this.el('piDelete').onclick = () => { this.closeModal(); this.confirmDeleteProject(p); };
+      this.el('piResubmit').onclick = () => {
+        p.name = this.el('piName').value.trim() || p.name;
+        p.description = this.el('piDesc').value.trim() || p.description;
+        this.resubmitProject(p);
+        this.closeModal(); this.renderProjects();
+      };
+    }
+    if (canReview) {
+      const rb = this.el('rejectBox');
+      this.el('piApprove').onclick = () => { this.approveProject(p); this.closeModal(); this.renderProjects(); };
+      this.el('piReject').onclick = () => {
+        if (rb.style.display === 'none') { rb.style.display = ''; this.el('rejectReason').focus(); this.toast('ระบุเหตุผล แล้วกด "ไม่อนุมัติ" อีกครั้ง'); return; }
+        const reason = this.el('rejectReason').value.trim();
+        if (!reason) { this.el('rejectReason').focus(); return; }
+        this.rejectProject(p, reason); this.closeModal(); this.renderProjects();
+      };
+    }
   },
 
   // ---------------------------------------------------------
@@ -622,13 +818,14 @@ const App = {
       cagesPerShelf: this.draft.layout.cols,
       groups, cages,
       documents: [],
+      approval: 'waiting',   // must be reviewed by AV before it goes live
       // creator becomes PI of the new project (admins are superusers regardless)
       members: [{ userId: this.user.id, roles: ['PI'] }],
     });
-    this.log('สร้างโครงการ', `${name} · ${this.draft.layout.shelves}×${this.draft.layout.cols} · ${cages.length} กรง`, name);
+    this.log('สร้างโครงการ', `${name} · ${this.draft.layout.shelves}×${this.draft.layout.cols} · ${cages.length} กรง · รอตรวจสอบ`, name);
     this.draft = null;
-    this.toast(`สร้างโครงการ "${name}" แล้ว`);
-    this.go('dashboard', pid);
+    this.toast(`สร้างโครงการ "${name}" แล้ว — ส่งให้ AV ตรวจสอบเพื่ออนุมัติ`);
+    this.go('projects');
   },
 
   // ---------------------------------------------------------
@@ -679,9 +876,6 @@ const App = {
          </div>`
       : `<div class="mode-bar">
            <span style="flex:1"></span>
-           ${canMembers ? `<button class="btn" id="manageMembers">👥 สมาชิก</button>` : ''}
-           ${canEdit ? `<button class="btn" id="startEditing">✏️ จัดการกรง</button>` : ''}
-           <button class="btn" id="projectDocs">📎 เอกสาร</button>
            <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
            <button class="btn" id="deathReport">✝ รายงานการตาย</button>
            <button class="btn" data-nav="reports">📈 กราฟ</button>
@@ -700,6 +894,7 @@ const App = {
           <b style="color:var(--text)">กรง:</b>
           <span><i class="dot normal"></i> ปกติ</span>
           <span><i class="dot care"></i> กำลังรักษา/ดูแล</span>
+          <span><i class="dot flag"></i> แจ้งผิดปกติ (รอ VET)</span>
           <span><i class="dot danger"></i> สั่งการุณยฆาต</span>
           <span class="legend-sep"></span>
           <b style="color:var(--text)">หนู:</b>
@@ -724,14 +919,7 @@ const App = {
         this.renderDashboard();
       });
     }
-    if (canEdit && !this.weighing && !this.editing) {
-      this.el('startEditing').addEventListener('click', () => { this.editing = true; this.renderDashboard(); });
-    }
-    if (canMembers && !this.weighing && !this.editing) {
-      this.el('manageMembers').addEventListener('click', () => this.openMembers(p));
-    }
     if (!this.weighing && !this.editing) {
-      this.el('projectDocs').addEventListener('click', () => this.openDocuments(p));
       this.el('sickReport').addEventListener('click', () => this.openSickReport(p));
       this.el('deathReport').addEventListener('click', () => this.openDeathReport(p));
     }
@@ -775,7 +963,7 @@ const App = {
 
     // reserve a dedicated badge lane only when this cage has a treatment mark,
     // so the weight column keeps full width in every other cage
-    const hasMarks = cage.mice.some(m => m.treatments && m.treatments.length);
+    const hasMarks = cage.mice.some(m => (m.treatments && m.treatments.length) || m.flagOpen);
 
     // per-mouse weight list — status shown by the coloured change value only
     const mouseList = cage.mice.map(m => {
@@ -785,7 +973,7 @@ const App = {
       const dead = !m.alive;
       const arrow = (dead || !weighed || chg == null) ? '' : `${chg >= 0 ? '▲' : '▼'}${this.g(Math.abs(chg))}`;
       return `<div class="mrow ${dead ? 'dead' : m.excluded ? 'stop' : ''}">
-        <span class="mid">${m.code.split('-').slice(-1)[0]}${this.treatMark(m)}</span>
+        <span class="mid">${m.code.split('-').slice(-1)[0]}${this.treatMark(m)}${this.flagMark(m)}</span>
         <span class="mw">${dead ? '' : (weighed ? this.g(cur) : '–') + '<span class="unit">g</span>'}</span>
         <span class="chg ${weighed ? st : ''}">${arrow}</span>
       </div>`;
@@ -935,6 +1123,8 @@ const App = {
     const controlChange = Data.controlAvgChange(p);
     const canTreat = this.can('treat', p);
     const canDeathStop = this.can('deathStop', p);
+    const canStop = this.can('stop', p);      // PI only
+    const canFlag = this.can('flag', p);      // everyone in the project
 
     const rows = cage.mice.map(m => {
       const cur = Data.latestWeight(m);
@@ -951,16 +1141,21 @@ const App = {
       const badges =
         (dead ? `<span class="m-badge dead">ตาย</span>` : '') +
         (!dead && m.humaneOrder ? `<span class="m-badge humane">สั่งการุณยฆาต</span>` : '') +
+        (!dead && m.flagOpen ? `<span class="m-badge flag">⚠️ ผิดปกติ</span>` : '') +
         (m.excluded && !dead ? `<span class="m-badge stop">ไม่คิดเฉลี่ย</span>` : '');
+      const items = [];
+      if (!dead) {
+        if (m.flagOpen) items.push(`<div class="menu-item flag-wait">⚠️ รอ VET ตรวจสอบ</div>`);
+        else if (canFlag && !m.careOpen) items.push(`<button class="menu-item flag" data-act="flag" data-mid="${m.id}">⚠️ แจ้งผิดปกติ</button>`);
+        if (canStop) items.push(`<button class="menu-item stop" data-act="stop" data-mid="${m.id}">${m.excluded ? 'รวมกลับเข้าค่าเฉลี่ย' : 'Stop (ไม่คิดเฉลี่ย)'}</button>`);
+        if (canDeathStop) items.push(`<button class="menu-item death" data-act="death" data-mid="${m.id}">Death (บันทึกการตาย)</button>`);
+      }
       const actions = dead
         ? `<span class="empty-note" style="font-size:12px">${m.death ? this.deathLabel(m.death) : 'ตาย'}</span>`
-        : canDeathStop
+        : items.length
         ? `<div class="kebab-wrap">
              <button class="mini-btn kebab" data-act="menu" data-mid="${m.id}">⋯</button>
-             <div class="kebab-menu" id="menu-${m.id}">
-               <button class="menu-item stop" data-act="stop" data-mid="${m.id}">${m.excluded ? 'รวมกลับเข้าค่าเฉลี่ย' : 'Stop (ไม่คิดเฉลี่ย)'}</button>
-               <button class="menu-item death" data-act="death" data-mid="${m.id}">Death (บันทึกการตาย)</button>
-             </div>
+             <div class="kebab-menu" id="menu-${m.id}">${items.join('')}</div>
            </div>`
         : `<span style="color:var(--text-muted)">—</span>`;
       return `
@@ -1030,6 +1225,8 @@ const App = {
           this.openCagePopup(p, cage);              // refresh table
         } else if (act === 'death') {
           this.openDeathForm(p, cage, m);
+        } else if (act === 'flag') {
+          this.openFlagForm(p, cage, m);
         }
       };
     });
@@ -1048,6 +1245,39 @@ const App = {
     const t = d.type === 'humane' ? 'Humane endpoint' : 'ตายเอง';
     const disp = d.disposition === 'necropsy' ? 'ชันสูตร/เก็บตัวอย่าง' : 'ทำลายซาก';
     return `${t} · ${disp}`;
+  },
+
+  // report a mouse as "looking abnormal" (any member) — raises the orange flag for VET review
+  openFlagForm(p, cage, mouse) {
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>⚠️ แจ้งหนูผิดปกติ — ${mouse.code}</h3><div class="sub">กรง ${cage.code} · แจ้งเพื่อให้ VET เข้าตรวจสอบ</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="empty-note" style="margin-bottom:12px">แจ้งว่าหนูดู “ผิดปกติ” (ยังไม่ใช่การวินิจฉัยว่าป่วย) — ระบบจะปักธงสีส้มไว้ให้สัตวแพทย์เข้ามาตรวจสอบและตัดสินใจ</p>
+        <div class="field">
+          <label>ผิดปกติอย่างไร <span style="color:var(--red)">*</span></label>
+          <textarea id="flagNote" rows="4" placeholder="เช่น ขนยุ่ง ซึม ไม่ขยับ · หายใจเร็ว · ตาบวม · เดินเอียง ฯลฯ">${mouse.flag ? mouse.flag.note : ''}</textarea>
+        </div>
+        <div class="field"><label>ผู้แจ้ง</label><input id="flagBy" value="${this.user.name}"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="cancelFlag">ยกเลิก</button>
+        <button class="btn btn-primary" id="saveFlag">🚩 แจ้งผิดปกติ</button>
+      </div>
+    `);
+    this.el('closeModal').onclick = () => this.openCagePopup(p, cage);
+    this.el('cancelFlag').onclick = () => this.openCagePopup(p, cage);
+    this.el('saveFlag').onclick = () => {
+      const note = this.el('flagNote').value.trim();
+      if (!note) { this.el('flagNote').focus(); this.toast('กรุณาระบุลักษณะที่ผิดปกติ'); return; }
+      mouse.flagOpen = true;
+      mouse.flag = { by: this.el('flagBy').value.trim() || this.user.name, note, date: todayISO() };
+      this.log('แจ้งหนูผิดปกติ', `${mouse.code} · ${note}`, p.name);
+      this.toast(`ปักธงผิดปกติที่ ${mouse.code} — รอ VET ตรวจสอบ`);
+      this.openCagePopup(p, cage);
+    };
   },
 
   // Death recording dialog
@@ -1109,6 +1339,7 @@ const App = {
       mouse.alive = false;
       mouse.excluded = true;   // dead → out of stats automatically
       mouse.careOpen = false;
+      mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved on death
       mouse.humaneOrder = null; // order fulfilled once death is recorded
       mouse.death = {
         type: sel.type,
@@ -1171,7 +1402,7 @@ const App = {
     this.openModal(`
       <div class="modal-head">
         <div>
-          <h3>หนู ${mouse.code} ${this.treatMark(mouse)}</h3>
+          <h3>หนู ${mouse.code} ${this.treatMark(mouse)}${this.flagMark(mouse)}</h3>
           <div class="sub">กรง ${cage.code} · เพศ ${mouse.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'}</div>
         </div>
         <span class="spacer"></span>
@@ -1186,6 +1417,11 @@ const App = {
               <div class="order-meta">โดย ${mouse.humaneOrder.vet} · ${mouse.humaneOrder.date}</div>
             </div>` : ''}
           ${mouse.careOpen && !mouse.humaneOrder ? `<div class="care-banner">🟡 เคสเปิดอยู่ — กำลังรักษา/ดูแล</div>` : ''}
+          ${mouse.flagOpen ? `
+            <div class="flag-banner">
+              <b>⚠️ แจ้งว่าผิดปกติ</b> — ${mouse.flag ? mouse.flag.note : ''}
+              <div class="order-meta">โดย ${mouse.flag ? mouse.flag.by : '—'} · ${mouse.flag ? mouse.flag.date : ''} · รอ VET ตรวจสอบ${canTreat ? ' → เปิดเคส / สั่งตาย / ยกเลิก(ปกติ)' : ''}</div>
+            </div>` : ''}
           ${!mouse.alive && mouse.death ? `
             <div class="death-banner">
               <b>✝ บันทึกการตาย</b> — ${this.deathLabel(mouse.death)}
@@ -1221,7 +1457,8 @@ const App = {
         ${mouse.treatments.length ? `<button class="btn" id="exportMonitor">🖨️ ฟอร์มติดตาม</button>` : ''}
         ${mouse.necropsy ? `<button class="btn" id="exportNec">🖨️ ฟอร์มชันสูตร</button>` : ''}
         <span class="spacer" style="flex:1"></span>
-        ${canTreat && mouse.alive ? `<button class="btn btn-primary" id="addTreat">🩺 รายงานอาการป่วย</button>` : ''}
+        ${canTreat && mouse.alive && mouse.flagOpen ? `<button class="btn btn-green" id="clearFlagBtn">✓ ปกติ (ยกเลิกแจ้ง)</button>` : ''}
+        ${canTreat && mouse.alive ? `<button class="btn btn-primary" id="addTreat">🩺 ${mouse.flagOpen ? 'เปิดเคส (ป่วย)' : 'รายงานอาการป่วย'}</button>` : ''}
         ${canTreat && mouse.alive && mouse.careOpen ? `<button class="btn btn-green" id="closeCase">✓ ปิดเคส</button>` : ''}
         ${canTreat && mouse.alive && !mouse.humaneOrder ? `<button class="btn btn-danger" id="humaneBtn">Humane endpoint</button>` : ''}
         ${canNecropsy && !mouse.alive && mouse.death && mouse.death.disposition === 'necropsy'
@@ -1248,6 +1485,14 @@ const App = {
       };
     }
     if (canTreat && mouse.alive) this.el('addTreat').onclick = () => this.openTreatForm(p, cage, mouse);
+    if (canTreat && mouse.alive && mouse.flagOpen) {
+      this.el('clearFlagBtn').onclick = () => {
+        mouse.flagOpen = false; mouse.flag = null;
+        this.log('ยกเลิกแจ้งผิดปกติ (ปกติ)', `${mouse.code}`, p.name);
+        this.toast(`${mouse.code} — ระบุว่าปกติ กลับสถานะเดิม`);
+        this.openMouseDetail(p, cage, mouse);
+      };
+    }
     if (canTreat && mouse.alive && mouse.careOpen) {
       this.el('closeCase').onclick = () => {
         mouse.careOpen = false;
@@ -1385,6 +1630,7 @@ const App = {
       if (!reason) { this.el('humaneReason').focus(); this.toast('กรุณาระบุสาเหตุ'); return; }
       mouse.humaneOrder = { reason, vet: this.el('humaneVet').value.trim(), date: todayISO() };
       mouse.careOpen = true;
+      mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved → humane order issued
       this.log('สั่ง Humane endpoint', `${mouse.code} · ${reason}`, p.name);
       this.toast(`ออกคำสั่ง Humane endpoint สำหรับ ${mouse.code}`);
       this.openMouseDetail(p, cage, mouse);
@@ -1463,6 +1709,7 @@ const App = {
       });
       mouse.remark = this.el('tRemark').value.trim();
       mouse.careOpen = true;   // adding a treatment opens/keeps the case open
+      mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved → case opened
       this.log('รายงานอาการป่วย', `${mouse.code} · ${dx}`, p.name);
       this.toast('บันทึกรายงานอาการป่วยแล้ว');
       this.openMouseDetail(p, cage, mouse);
@@ -1814,7 +2061,7 @@ const App = {
         <tr><td class="lbl">Progression</td><td class="sign-cell" colspan="3">${prog}</td></tr>
         <tr><td class="lbl">Vet. Sign/Date/Time</td><td colspan="3">__________ &nbsp;/&nbsp; ${!mouse.alive && mouse.death ? mouse.death.date : (mouse.careOpen ? '' : latest.date || '')} &nbsp;/&nbsp; </td></tr>
       </table>
-      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ Mouse Lab Management · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ iLAMP · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
   },
 
   // ---- 2) Necropsy Record (LA Guide-AF 11.3-01) ---------------------------
@@ -1865,7 +2112,7 @@ const App = {
         <tr><td class="lbl">Signature / Date/Time</td><td>${n.examiner || '__________'} &nbsp;/&nbsp; ${n.date || ''} ${n.time || ''}</td></tr>
         <tr><td class="lbl">AV Comment / Sign/Date/Time</td><td>${n.avComment || '—'}</td></tr>
       </table>
-      <p class="muted" style="margin-top:8px">A = Autolysis, N = Normal Finding, and Abnormal finding will be noted. &nbsp;·&nbsp; พิมพ์จากระบบ Mouse Lab Management · ${todayISO()}</p>`;
+      <p class="muted" style="margin-top:8px">A = Autolysis, N = Normal Finding, and Abnormal finding will be noted. &nbsp;·&nbsp; พิมพ์จากระบบ iLAMP · ${todayISO()}</p>`;
   },
 
   // ---- 3) Dead Report (LA Guide-AF 11.1-01) -------------------------------
@@ -1901,7 +2148,7 @@ const App = {
         <tr><th>No.</th><th>Date</th><th>Time</th><th>Cage No.</th><th>ID</th><th>Reporter</th></tr>
         ${filled.join('')}
       </table>
-      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ Mouse Lab Management · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ iLAMP · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
   },
 
   // ---- 4) Monitoring Record (LA Guide-AF 11.1-03) — one per sick animal ----
@@ -1958,7 +2205,7 @@ const App = {
         <tr><td class="lbl">PI Communication</td><td class="sign-cell" colspan="3">${this.tick('PI', false)} &nbsp; ${this.tick('Lab member', false)} Name: __________ &nbsp; ${this.tick('Technician', false)} Name: __________</td></tr>
         <tr><td class="lbl">Vet. Sign/Date/Time</td><td colspan="3">__________ / ${latest.date || ''} / </td></tr>
       </table>
-      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ Mouse Lab Management · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ iLAMP · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
   },
 
   // project export = one Monitoring Record per sick animal (page break between)
@@ -2563,7 +2810,7 @@ const App = {
           <button class="btn" id="myPwBtn">🔒 เปลี่ยนรหัสผ่านของฉัน</button>
         </div>
 
-        <div class="section-title">บทบาทของฉันในแต่ละโครงการ · เข้าใช้เป็น <b>${this.user.name}</b> (${this.isAdmin ? 'admin' : 'user'})</div>
+        <div class="section-title">บทบาทของฉันในแต่ละโครงการ · เข้าใช้เป็น <b>${this.user.name}</b> (${this.sysRoleLabel(this.user)})</div>
         <div class="report-canvas" style="padding:0;overflow:auto;margin-bottom:22px">
           <table class="data"><thead><tr><th>โครงการ</th><th>บทบาท</th></tr></thead><tbody>${mine}</tbody></table>
         </div>
@@ -2656,6 +2903,7 @@ const App = {
         <div class="field"><label>สิทธิ์ระดับระบบ</label>
           <div class="sex-row" id="uRole">
             <button type="button" class="role-sys ${u.systemRole === 'user' ? 'sel' : ''}" data-r="user" ${lockRole ? 'disabled' : ''}>user</button>
+            <button type="button" class="role-sys ${u.systemRole === 'av' ? 'sel' : ''}" data-r="av" ${lockRole ? 'disabled' : ''}>AV</button>
             <button type="button" class="role-sys ${u.systemRole === 'admin' ? 'sel' : ''}" data-r="admin">admin</button>
           </div>
           ${lockRole ? '<p class="empty-note">admin ลดสิทธิ์ตัวเองไม่ได้</p>' : ''}

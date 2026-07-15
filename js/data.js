@@ -1,5 +1,5 @@
 /* ============================================================
- * Mouse Laboratory Management System — Prototype v0.1
+ * iLAMP — Intelligent Laboratory Animal Management Platform (Prototype)
  * Mock data layer (in-memory only, no real database)
  * ============================================================ */
 
@@ -7,11 +7,11 @@
 // capabilities are the UNION of all roles held. Keys stay EC/PI/STOCK/VET/SCI
 // (STOCK is shown as "AHS"). System-level role (admin/user) is on the user.
 const ROLES = {
-  EC:    { key: 'EC',    label: 'EC (กรรมการจริยธรรม)',      caps: ['view'] },
-  PI:    { key: 'PI',    label: 'PI (หัวหน้าโครงการ)',        caps: ['view', 'editProject', 'deathStop', 'manageMembers'] },
-  STOCK: { key: 'STOCK', label: 'AHS (ดูแลสัตว์/สต็อก)',      caps: ['view', 'weigh', 'deathStop'] },
-  SCI:   { key: 'SCI',   label: 'นักวิทย์',                    caps: ['view', 'weigh', 'deathStop'] },
-  VET:   { key: 'VET',   label: 'Vet (สัตวแพทย์)',            caps: ['view', 'treat', 'deathStop'] },
+  EC:    { key: 'EC',    label: 'EC (กรรมการจริยธรรม)',      caps: ['view', 'flag'] },
+  PI:    { key: 'PI',    label: 'PI (หัวหน้าโครงการ)',        caps: ['view', 'editProject', 'deathStop', 'stop', 'manageMembers', 'flag'] },
+  STOCK: { key: 'STOCK', label: 'AHS (ดูแลสัตว์/สต็อก)',      caps: ['view', 'weigh', 'deathStop', 'flag'] },
+  SCI:   { key: 'SCI',   label: 'นักวิทย์',                    caps: ['view', 'weigh', 'deathStop', 'flag'] },
+  VET:   { key: 'VET',   label: 'Vet (สัตวแพทย์)',            caps: ['view', 'treat', 'deathStop', 'flag'] },
 };
 const ROLE_ORDER = ['EC', 'PI', 'STOCK', 'SCI', 'VET'];
 
@@ -20,8 +20,10 @@ const CAPABILITIES = [
   { key: 'view',          label: 'ดูข้อมูลโครงการ / กรง / หนู' },
   { key: 'editProject',   label: 'จัดการกรง / แก้ไขผังโครงการ' },
   { key: 'weigh',         label: 'ชั่งน้ำหนัก (บันทึกประจำวัน)' },
+  { key: 'flag',          label: 'แจ้งหนูผิดปกติ (รอ VET ตรวจ)' },
   { key: 'treat',         label: 'ตรวจรักษา / ปิดเคส / Humane endpoint' },
-  { key: 'deathStop',     label: 'บันทึกการตาย / Stop' },
+  { key: 'deathStop',     label: 'บันทึกการตาย' },
+  { key: 'stop',          label: 'สั่ง Stop (ไม่คิดเฉลี่ย)' },
   { key: 'manageMembers', label: 'จัดการสมาชิก & สิทธิในโครงการ' },
 ];
 
@@ -32,6 +34,7 @@ function makeUser(id, firstName, lastName, email, password, systemRole) {
 }
 const USERS = [
   makeUser('u_admin', 'แอดมิน', 'ระบบ',     'admin@lab.test',   'admin1234', 'admin'),
+  makeUser('u_av',    'อรุณ',   'ควบคุมสัตว์', 'av@lab.test',    'demo1234',  'av'),
   makeUser('u_pi',    'สมชาย',  'ใจดี',      'somchai@lab.test', 'demo1234',  'user'),
   makeUser('u_napa',  'นภา',    'ศรีสุข',    'napa@lab.test',    'demo1234',  'user'),
   makeUser('u_vet',   'กมล',    'รักสัตว์',  'kamon@lab.test',   'demo1234',  'user'),
@@ -86,6 +89,8 @@ function makeMouse(code, sex, baseline, trend) {
     alive: true,
     death: null,               // { type:'natural'|'humane', disposition:'dispose'|'necropsy', note, date, time, reporter }
     careOpen: false,           // vet case currently open (drives the cage "care" colour)
+    flagOpen: false,           // "looks abnormal" flag raised by any member → orange !, awaits VET review
+    flag: null,                // { by, note, date } — who reported and how it looks abnormal
     humaneOrder: null,         // vet order to euthanise: { reason, vet, date }
     necropsy: null,            // Necropsy Record (only when death.disposition==='necropsy'):
                                //   { date, time, examiner, results:{ [organ]:{v:'N'|'A'|'X', note} }, abnormal, avComment }
@@ -209,6 +214,11 @@ for (let si = 0; si < 4; si++) {
     vet: 'สพ.ญ. กมล',
     date: isoDaysAgo(1),
   };
+
+  // demo: a member flagged a mouse as "looking abnormal" — awaits VET review (orange !)
+  const a04 = cagesP1.find(c => c.code === 'A-04');
+  a04.mice[0].flagOpen = true;
+  a04.mice[0].flag = { by: 'ก้อง ดูแลสัตว์ (AHS)', note: 'ขนยุ่ง นั่งซึมมุมกรง ไม่ค่อยขยับ', date: isoDaysAgo(0) };
 
   // demo states: one "stopped" (out of stats) and one dead mouse
   c02.mice[1].excluded = true;
@@ -405,6 +415,44 @@ const DB = {
     { id: 'doc1', name: 'AR-Protocol_NAFLD_2026.pdf', size: 248000, category: 'โปรโตคอล (Protocol)', uploadedBy: 'ดร. นภา ศรีสุข', date: isoDaysAgo(40), url: null },
     { id: 'doc2', name: 'EC-Approval_2026-051.pdf', size: 132000, category: 'ใบอนุมัติ EC', uploadedBy: 'ดร. นภา ศรีสุข', date: isoDaysAgo(38), url: null },
     { id: 'doc3', name: 'SOP_Weighing-Procedure.pdf', size: 96000, category: 'SOP', uploadedBy: 'ปิยะ (นักวิทย์)', date: isoDaysAgo(20), url: null },
+  );
+})();
+
+// project approval workflow: every project has an `approval` state
+//   'waiting'  → newly created, awaiting AV (Attending Veterinarian) review
+//   'approved' → AV approved → project is live
+//   'rejected' → AV sent back with a reason (shown red; creator edits/deletes)
+(function seedApproval() {
+  DB.projects.forEach(p => { if (!p.approval) p.approval = 'approved'; });
+
+  // a small helper to build a tiny demo project
+  function tinyProject(id, name, description, creatorId, approval, extra = {}) {
+    const groups = [
+      { id: id + 'G1', name: 'Control', isControl: true, color: '#64748b' },
+      { id: id + 'G2', name: 'Treatment', isControl: false, color: '#2563eb' },
+    ];
+    const cages = [];
+    let seq = 0;
+    for (let pos = 1; pos <= 2; pos++) {
+      const code = `A-${String(pos).padStart(2, '0')}`;
+      const mice = [makeMouse(`${id}-${code}-1`, 'M', 27 + rand(-1, 1), 0.2),
+                    makeMouse(`${id}-${code}-2`, 'F', 26 + rand(-1, 1), 0.2)];
+      cages.push(makeCage(`${id}-C${++seq}`, code, groups[pos - 1].id, 1, pos, mice));
+    }
+    return {
+      id, name, description, startDate: todayISO(), status: 'active',
+      approval, shelves: 1, cagesPerShelf: 2, groups, cages, documents: [],
+      members: [{ userId: creatorId, roles: ['PI'] }],
+      ...extra,
+    };
+  }
+
+  DB.projects.push(
+    tinyProject('P5', 'Cardio Safety Study (รออนุมัติ)',
+      'ประเมินความปลอดภัยต่อระบบหัวใจของสารทดสอบ', 'u_pi', 'waiting'),
+    tinyProject('P6', 'Metabolic Screen (ถูกตีกลับ)',
+      'คัดกรองผลต่อเมแทบอลิซึมในหนูทดลอง', 'u_pi', 'rejected',
+      { rejectReason: 'ยังไม่แนบใบอนุมัติ EC และจำนวนสัตว์ต่อกลุ่มไม่สอดคล้องกับการคำนวณทางสถิติ', reviewedBy: 'อรุณ ควบคุมสัตว์', reviewedAt: isoDaysAgo(1) }),
   );
 })();
 

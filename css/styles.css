@@ -63,38 +63,31 @@ input, select { font-family: inherit; }
  * ============================================================ */
 #view-login {
   min-height: 100vh; min-height: 100dvh;
-  display: grid; grid-template-columns: 1.05fr 0.95fr;
+  display: flex; flex-direction: column;
   background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 55%, #3b82f6 100%);
 }
-.login-hero {
-  color: #fff; display: flex; flex-direction: column; justify-content: center;
-  gap: 16px; padding: 6vw 5vw; max-width: 620px;
-}
-.login-hero .login-logo {
-  width: 72px; height: 72px; border-radius: 20px; margin: 0 0 8px;
-  display: grid; place-items: center; font-size: 40px;
-  background: rgba(255, 255, 255, .16); backdrop-filter: blur(4px);
-}
-.login-hero h1 { font-size: 34px; line-height: 1.15; letter-spacing: -.01em; }
-.login-hero .hero-sub { font-size: 16px; opacity: .85; line-height: 1.6; }
-.login-points { list-style: none; margin-top: 8px; display: flex; flex-direction: column; gap: 10px; }
-.login-points li { position: relative; padding-left: 26px; font-size: 14.5px; opacity: .95; }
-.login-points li::before { content: "✓"; position: absolute; left: 0; font-weight: 800; color: #bfdbfe; }
-
-.login-panel { background: var(--surface); display: grid; place-items: center; padding: 32px; }
+.login-main { flex: 1; display: grid; place-items: center; width: 100%; padding: 32px 20px; }
 .login-card {
-  width: 100%; max-width: 380px; background: var(--surface);
-  border-radius: 16px; padding: 8px 4px;
+  width: 100%; max-width: 400px; background: var(--surface);
+  border-radius: 18px; padding: 40px 34px 30px; box-shadow: var(--shadow-lg);
+  text-align: center;
 }
-.login-card h2 { font-size: 24px; }
-.login-card p.sub { color: var(--text-muted); font-size: 13.5px; margin: 6px 0 24px; }
-
-@media (max-width: 860px) {
-  #view-login { grid-template-columns: 1fr; place-items: center; padding: 24px; }
-  .login-hero { display: none; }
-  .login-panel { background: transparent; padding: 0; width: 100%; max-width: 420px; }
-  .login-card { background: var(--surface); padding: 32px 28px; box-shadow: var(--shadow-lg); text-align: center; }
-  .login-card .field { text-align: left; }
+.login-logo-slot {
+  width: 96px; height: 96px; margin: 0 auto 22px; border-radius: 22px;
+  display: grid; place-items: center; align-content: center; gap: 2px;
+  background: var(--surface-2); border: 1px dashed #cbd5e1; color: var(--text-muted);
+}
+.login-logo-slot .li-ico { font-size: 26px; opacity: .55; line-height: 1; }
+.login-logo-slot .li-txt { font-size: 10px; font-weight: 700; letter-spacing: .08em; }
+.login-sys { font-size: 30px; font-weight: 800; letter-spacing: -.01em; margin: 0; color: var(--text); }
+.login-sysfull { font-size: 13px; color: var(--text-muted); margin: 6px 0 26px; line-height: 1.5; }
+.login-card .field { text-align: left; }
+.login-owner {
+  color: rgba(255, 255, 255, .9); font-size: 12.5px; text-align: center;
+  line-height: 1.6; padding: 0 20px 24px; max-width: 620px; margin: 0 auto;
+}
+@media (max-width: 480px) {
+  .login-card { padding: 32px 22px 26px; }
 }
 .field { margin-bottom: 16px; }
 .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--text-muted); }
@@ -196,6 +189,7 @@ input, select { font-family: inherit; }
 .page-head h2 { font-size: 22px; }
 .page-head .desc { color: var(--text-muted); font-size: 14px; margin-top: 4px; max-width: 640px; }
 
+
 /* ============================================================
  * PROJECT LIST
  * ============================================================ */
@@ -210,9 +204,61 @@ input, select { font-family: inherit; }
 .project-card h3 { font-size: 17px; }
 .project-card .p-desc { font-size: 13px; color: var(--text-muted); line-height: 1.5; flex: 1; }
 .project-meta { display: flex; gap: 14px; font-size: 12px; color: var(--text-muted); flex-wrap: wrap; }
-.pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+.pill { padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .pill.active { background: var(--green-soft); color: var(--green); }
 .pill.closed { background: #e2e8f0; color: var(--text-muted); }
+.pill.waiting { background: #fef9c3; color: #a16207; }
+.pill.rejected { background: var(--red-soft); color: var(--red); }
+
+/* approval states on the card */
+.project-card.rejected { border-color: #fca5a5; background: #fef7f7; }
+.project-card.rejected:hover { border-color: #f87171; }
+.project-card.waiting { border-color: #fde68a; }
+
+/* card header: title (clickable) + right cluster (badge + ⋯ menu) */
+.pc-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.pc-open { cursor: pointer; }
+.pc-open:hover { color: var(--primary); }
+.p-desc.pc-open:hover { color: var(--text-muted); }
+.pc-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* flat 2D actions menu (no shadow / no depth) */
+.card-menu { position: relative; }
+.card-menu-btn {
+  border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
+  width: 30px; height: 26px; font-size: 17px; line-height: 1; color: var(--text-muted); cursor: pointer;
+}
+.card-menu-btn:hover { background: var(--surface-2); color: var(--text); }
+.card-menu-list {
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: 30;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  min-width: 168px; display: none; flex-direction: column; overflow: hidden;
+}
+.card-menu-list.open { display: flex; }
+.cm-item { text-align: left; background: none; border: none; padding: 10px 13px; font-size: 14px; color: var(--text); cursor: pointer; font-family: inherit; }
+.cm-item + .cm-item { border-top: 1px solid var(--border); }
+.cm-item:hover { background: var(--surface-2); }
+
+/* per-state strip on the card */
+.card-note { font-size: 12.5px; margin-top: 2px; padding: 8px 11px; border-radius: 8px; line-height: 1.5; }
+.card-note.waiting-note { background: #fef9c3; color: #92600b; }
+.card-note.rejected-note { background: var(--red-soft); color: #b91c1c; }
+.card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.btn-sm { padding: 6px 11px; font-size: 13px; }
+.btn-sm.danger { color: var(--red); border-color: #fecaca; }
+.btn-sm.danger:hover { background: var(--red-soft); }
+
+/* project-info modal */
+.reject-banner { background: var(--red-soft); border: 1px solid #fca5a5; border-radius: 10px; padding: 11px 13px; font-size: 14px; color: #b91c1c; margin-bottom: 14px; }
+.pi-name { font-size: 18px; margin: 0 0 4px; }
+.pi-descread { color: var(--text-muted); font-size: 14px; margin: 0 0 8px; }
+.pi-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; font-size: 14px; margin: 10px 0 4px; }
+.pi-k { color: var(--text-muted); font-weight: 600; margin-right: 6px; }
+.pi-grp { display: flex; align-items: center; gap: 8px; font-size: 14px; padding: 3px 0; }
+.pi-grp .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.pi-mem { font-size: 14px; padding: 3px 0; }
+.pi-docs { display: flex; flex-direction: column; gap: 6px; }
+.pi-doc { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13.5px; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
 
 /* ============================================================
  * CREATE PROJECT
@@ -310,6 +356,7 @@ input, select { font-family: inherit; }
 .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
 .dot.normal { background: #cbd5e1; }
 .dot.care { background: var(--amber); }
+.dot.flag { background: #f97316; }
 .dot.danger { background: var(--red); }
 .dot.good { background: var(--green); }
 .dot.warn { background: var(--amber); }
@@ -353,6 +400,7 @@ input, select { font-family: inherit; }
 .cage:hover { transform: translateY(-2px); box-shadow: var(--shadow-lg); }
 .cage.normal { border-left-color: #cbd5e1; }
 .cage.care { border-left-color: var(--amber); background: #fffdf5; }
+.cage.flag { border-left-color: #f97316; background: #fff7ed; }
 .cage.danger { border-left-color: var(--red); background: #fef6f6; }
 .cage.done { border-left-color: var(--green); background: #f5fef9; }
 .cage.empty { opacity: .4; cursor: default; border-style: dashed; border-left-color: #cbd5e1; align-items: center; justify-content: center; }
@@ -414,6 +462,13 @@ input, select { font-family: inherit; }
 }
 /* past treatment, case closed/healed — same shape, light green */
 .treat-mark.healed { background: var(--green-soft); color: var(--green); }
+/* abnormal flag — orange "!" awaiting VET review */
+.flag-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; cursor: help; vertical-align: middle; flex: none;
+  background: #f97316; color: #fff; border-radius: 3px;
+  font-size: 12px; font-weight: 900; line-height: 1;
+}
 
 /* ============================================================
  * MODAL / POPUP
@@ -470,6 +525,7 @@ table.data td.actions-cell:hover { background: transparent; }
 .m-badge.dead { background: var(--red-soft); color: var(--red); }
 .m-badge.stop { background: #e2e8f0; color: #64748b; font-weight: 600; }
 .m-badge.humane { background: var(--red-soft); color: var(--red); }
+.m-badge.flag { background: #ffedd5; color: #c2410c; }
 
 /* banners in the mouse detail view */
 .order-banner {
@@ -482,6 +538,11 @@ table.data td.actions-cell:hover { background: transparent; }
   background: var(--amber-soft); border: 1px solid #fcd34d; border-left: 4px solid var(--amber);
   color: #92400e; border-radius: var(--radius-sm); padding: 10px 14px; font-size: 13px; font-weight: 600;
 }
+.flag-banner {
+  background: #fff7ed; border: 1px solid #fdba74; border-left: 4px solid #f97316;
+  color: #9a3412; border-radius: var(--radius-sm); padding: 11px 14px; font-size: 14px;
+}
+.flag-banner .order-meta { margin-top: 4px; font-size: 12px; color: #c2410c; font-weight: 500; }
 .mini-btn {
   padding: 5px 9px; margin-right: 4px; font-size: 12px; font-weight: 700;
   border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text);
@@ -509,6 +570,8 @@ table.data td.actions-cell:hover { background: transparent; }
 .menu-item:hover { background: var(--surface-2); }
 .menu-item.stop { color: var(--amber); }
 .menu-item.death { color: var(--red); }
+.menu-item.flag { color: #c2410c; }
+.menu-item.flag-wait { color: #c2410c; font-weight: 700; opacity: .8; cursor: default; }
 .mono { font-variant-numeric: tabular-nums; }
 
 /* ============================================================

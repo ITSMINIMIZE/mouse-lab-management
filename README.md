@@ -1,4 +1,4 @@
-# Mouse Laboratory Management System — Prototype
+# iLAMP — Intelligent Laboratory Animal Management Platform (Prototype)
 
 ระบบบริหารจัดการข้อมูลสัตว์ทดลอง (หนู) — **Interactive Prototype v0.1**
 
