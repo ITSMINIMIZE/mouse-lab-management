@@ -29,18 +29,21 @@ const CAPABILITIES = [
 
 // mock user accounts (system role: admin = superuser, user = per-project roles)
 // `name` is the display name kept in sync with firstName + lastName.
-function makeUser(id, firstName, lastName, email, password, systemRole) {
-  return { id, firstName, lastName, email, password, systemRole, name: `${firstName} ${lastName}`.trim() };
+// `role` (optional) marks a DEMO "position persona": one identity per position
+// that holds that project-role in EVERY project (see App.myRoles override) so a
+// client can switch position and see the same role across all projects. In a real
+// deployment users are members per project (no `role`); membership drives access.
+function makeUser(id, firstName, lastName, email, password, systemRole, role) {
+  return { id, firstName, lastName, email, password, systemRole, role: role || null, name: `${firstName} ${lastName}`.trim() };
 }
 const USERS = [
-  makeUser('u_admin', 'แอดมิน', 'ระบบ',     'admin@lab.test',   'admin1234', 'admin'),
-  makeUser('u_av',    'อรุณ',   'ควบคุมสัตว์', 'av@lab.test',    'demo1234',  'av'),
-  makeUser('u_pi',    'สมชาย',  'ใจดี',      'somchai@lab.test', 'demo1234',  'user'),
-  makeUser('u_napa',  'นภา',    'ศรีสุข',    'napa@lab.test',    'demo1234',  'user'),
-  makeUser('u_vet',   'กมล',    'รักสัตว์',  'kamon@lab.test',   'demo1234',  'user'),
-  makeUser('u_sci',   'ปิยะ',   'วิจัย',     'piya@lab.test',    'demo1234',  'user'),
-  makeUser('u_ahs',   'ก้อง',   'ดูแลสัตว์', 'kong@lab.test',    'demo1234',  'user'),
-  makeUser('u_ec',    'วิไล',   'ตรวจสอบ',   'wilai@lab.test',   'demo1234',  'user'),
+  makeUser('u_admin', 'ผู้ดูแลระบบ', '',            'admin@lab.test', 'admin1234', 'admin'),
+  makeUser('u_av',    'AV — สัตวแพทย์ผู้ควบคุม', '', 'av@lab.test',    'demo1234',  'av'),
+  makeUser('u_pi',    'PI — หัวหน้าโครงการ', '',     'pi@lab.test',    'demo1234',  'user', 'PI'),
+  makeUser('u_ahs',   'AHS — ผู้ดูแลสัตว์', '',      'ahs@lab.test',   'demo1234',  'user', 'STOCK'),
+  makeUser('u_sci',   'SCI — นักวิทยาศาสตร์', '',    'sci@lab.test',   'demo1234',  'user', 'SCI'),
+  makeUser('u_vet',   'VET — สัตวแพทย์', '',         'vet@lab.test',   'demo1234',  'user', 'VET'),
+  makeUser('u_ec',    'EC — กรรมการจริยธรรม', '',    'ec@lab.test',    'demo1234',  'user', 'EC'),
 ];
 
 // ---- helpers for generating believable weight histories -----
@@ -454,6 +457,20 @@ const DB = {
       'คัดกรองผลต่อเมแทบอลิซึมในหนูทดลอง', 'u_pi', 'rejected',
       { rejectReason: 'ยังไม่แนบใบอนุมัติ EC และจำนวนสัตว์ต่อกลุ่มไม่สอดคล้องกับการคำนวณทางสถิติ', reviewedBy: 'อรุณ ควบคุมสัตว์', reviewedAt: isoDaysAgo(1) }),
   );
+})();
+
+// demo: give every project the same position team so the members list is
+// consistent when switching positions. (Access is driven by App.myRoles, which
+// for a position persona returns its role in every project regardless.)
+(function seedTeam() {
+  const TEAM = [
+    { userId: 'u_pi',  roles: ['PI'] },
+    { userId: 'u_ahs', roles: ['STOCK'] },
+    { userId: 'u_sci', roles: ['SCI'] },
+    { userId: 'u_vet', roles: ['VET'] },
+    { userId: 'u_ec',  roles: ['EC'] },
+  ];
+  DB.projects.forEach(p => { p.members = TEAM.map(m => ({ userId: m.userId, roles: [...m.roles] })); });
 })();
 
 // ---- derived helpers used across the app --------------------

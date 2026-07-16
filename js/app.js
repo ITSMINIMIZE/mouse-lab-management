@@ -84,8 +84,12 @@ const App = {
   get canReview() { return this.isAdmin || this.isAV; },           // may approve/reject project creation
   sysRoleLabel(u) { return u.systemRole === 'admin' ? 'admin' : u.systemRole === 'av' ? 'AV' : 'user'; },
 
-  // roles the current user holds in a project (array of role keys)
+  // roles the current user holds in a project (array of role keys).
+  // A DEMO "position persona" (user.role set) holds that role in EVERY project,
+  // so a client can switch position and see the same role across all projects.
+  // Real deployment: no user.role → access is per-project membership.
   myRoles(project) {
+    if (this.user.role) return [this.user.role];
     if (!project) return [];
     const m = (project.members || []).find(x => x.userId === this.user.id);
     return m ? m.roles : [];
@@ -99,10 +103,17 @@ const App = {
   hasAccess(project) {
     return this.isAdmin || this.myRoles(project).length > 0;
   },
+  roleKeyLabel(k) { return k === 'STOCK' ? 'AHS' : k; },   // STOCK is shown as AHS to users
   myRoleLabel(project) {
     if (this.isAdmin) return 'ADMIN';
     const roles = this.myRoles(project);
-    return roles.length ? roles.join(' + ') : '—';
+    return roles.length ? roles.map(r => this.roleKeyLabel(r)).join(' + ') : '—';
+  },
+  // a project is "operational" (data can be recorded: weigh/flag/treat/death)
+  // only once AV has approved it and it isn't closed. Waiting/rejected projects
+  // are view-only for operations, but a PI may still edit cages/docs/members to prepare/fix.
+  isOperational(project) {
+    return (project.approval || 'approved') === 'approved' && project.status !== 'closed';
   },
 
   // ---------------------------------------------------------
@@ -162,7 +173,7 @@ const App = {
     const projRole = proj && !this.isAdmin && !this.isAV ? this.myRoleLabel(proj) : '';
     const sysLabel = this.isAdmin ? 'ผู้ดูแลระบบ (admin)' : this.isAV ? 'สัตวแพทย์ผู้ควบคุม (AV)' : 'ผู้ใช้ (user)';
     const userOptions = DB.users
-      .map(x => `<option value="${x.id}" ${x.id === u.id ? 'selected' : ''}>${x.name} · ${this.sysRoleLabel(x)}</option>`)
+      .map(x => `<option value="${x.id}" ${x.id === u.id ? 'selected' : ''}>${x.name}</option>`)
       .join('');
 
     this.el('root').innerHTML = `
@@ -193,9 +204,9 @@ const App = {
       </div>
       <div class="demo-fab ${this.demoOpen ? 'open' : ''}" id="demoFab">
         <div class="demo-body">
-          <div class="demo-label">🧪 โหมดสาธิต — เข้าใช้เป็น</div>
+          <div class="demo-label">🧪 โหมดสาธิต — ดูมุมมองตามตำแหน่ง</div>
           <select id="demoUser">${userOptions}</select>
-          <div class="demo-hint">สลับผู้ใช้เพื่อทดสอบสิทธิ์รายบทบาท/โครงการ</div>
+          <div class="demo-hint">เลือกตำแหน่งเพื่อดูว่าตำแหน่งนั้นเห็น/ทำอะไรได้บ้าง (แต่ละตำแหน่งเห็นทุกโครงการเหมือนกัน)</div>
         </div>
         <button class="demo-toggle" id="demoToggle" title="สลับผู้ใช้ (โหมดสาธิต)">🧪 <span class="demo-toggle-txt">สาธิต</span></button>
       </div>`;
@@ -251,10 +262,11 @@ const App = {
       </div>`;
     this.el('loginForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      // demo: match the typed e-mail to a seeded user; blank / unknown → admin (full access)
+      // demo: match the typed e-mail to a seeded user; blank / unknown → a regular user
+      // (switch identity/role for testing from the floating demo panel, bottom-right)
       const email = (this.el('loginEmail').value || '').trim().toLowerCase();
       const match = DB.users.find(u => (u.email || '').toLowerCase() === email);
-      DB.currentUserId = match ? match.id : 'u_admin';
+      DB.currentUserId = match ? match.id : 'u_pi';
       this.go('projects');
     });
   },
@@ -293,24 +305,24 @@ const App = {
       let strip = '';
       if (approval === 'waiting' && this.canReview) {
         strip = `<div class="card-actions"><button class="btn btn-sm btn-primary" data-act="review" data-pid="${p.id}">🔍 ตรวจสอบเพื่ออนุมัติ</button></div>`;
-      } else if (approval === 'waiting' && iAmOwner) {
+      } else if (approval === 'waiting') {
         strip = `<div class="card-note waiting-note">⏳ รอการตรวจสอบจาก AV (สัตวแพทย์ผู้ควบคุม)</div>`;
       } else if (approval === 'rejected') {
         strip = `<div class="card-note rejected-note"><b>ไม่อนุมัติ:</b> ${p.rejectReason || '—'}</div>`;
         if (iAmOwner) strip += `<div class="card-actions">
-            <button class="btn btn-sm" data-act="info" data-pid="${p.id}">✏️ แก้ไข</button>
+            <button class="btn btn-sm" data-act="edit" data-pid="${p.id}">✏️ แก้ไข</button>
             <button class="btn btn-sm btn-primary" data-act="resubmit" data-pid="${p.id}">↻ ส่งตรวจอีกครั้ง</button>
             <button class="btn btn-sm danger" data-act="delete" data-pid="${p.id}">🗑 ลบ</button>
           </div>`;
       }
 
       return `
-        <div class="project-card ${closed ? 'closed' : ''} ${approval === 'rejected' ? 'rejected' : ''} ${approval === 'waiting' ? 'waiting' : ''}">
+        <div class="project-card card-open ${closed ? 'closed' : ''} ${approval === 'rejected' ? 'rejected' : ''} ${approval === 'waiting' ? 'waiting' : ''}" data-pid="${p.id}">
           <div class="pc-head">
-            <h3 class="pc-open" data-pid="${p.id}">${p.name}</h3>
+            <h3>${p.name}</h3>
             <div class="pc-right">${badge}${ownerMenu}</div>
           </div>
-          <p class="p-desc pc-open" data-pid="${p.id}">${p.description}</p>
+          <p class="p-desc">${p.description}</p>
           <div class="project-meta">
             <span>📅 เริ่ม ${p.startDate}</span>
             <span>📦 ${p.cages.length} กรง</span>
@@ -330,19 +342,22 @@ const App = {
       `<div class="page">
         <div class="page-head">
           <div><h2>โครงการ${this.canReview ? '' : 'ของฉัน'}</h2><div class="desc">${sub}</div></div>
-          <button class="btn btn-primary" data-nav="create">➕ สร้างโครงการ</button>
+          <button class="btn btn-primary" id="newProjectBtn">➕ สร้างโครงการ</button>
         </div>
         <div class="project-grid">${cards}</div>
       </div>`
     );
 
-    // open a project (members → dashboard · reviewer → info modal)
-    document.querySelectorAll('.pc-open').forEach(el => {
-      el.addEventListener('click', () => {
+    // "new project" always starts a fresh draft (never resumes a stale edit-draft)
+    this.el('newProjectBtn').onclick = () => { this.draft = null; this.go('create'); };
+
+    // open a project by clicking the card (members → dashboard · reviewer → info modal).
+    // buttons/menu inside the card call stopPropagation, so they never trigger this.
+    document.querySelectorAll('.card-open').forEach(el => {
+      el.addEventListener('click', (e) => {
+        if (e.target.closest('.card-menu') || e.target.closest('[data-act]')) return;
         const p = Data.getProject(el.dataset.pid);
-        if (!p) return;
-        if (this.hasAccess(p)) this.go('dashboard', p.id);
-        else if (this.canReview) this.openProjectInfo(p);
+        if (p) this.openProject(p);
       });
     });
     // owner actions menu (⋯)
@@ -364,8 +379,12 @@ const App = {
         if (!p) return;
         switch (b.dataset.act) {
           case 'info': this.openProjectInfo(p); break;
-          case 'cages': this.go('dashboard', p.id); this.editing = true; this.renderDashboard(); break;
+          case 'cages':
+            if ((p.approval || 'approved') !== 'approved') this.editProject(p);   // not real yet → edit page
+            else { this.go('dashboard', p.id); this.editing = true; this.renderDashboard(); }
+            break;
           case 'members': this.openMembers(p); break;
+          case 'edit': this.editProject(p); break;
           case 'review': this.openProjectInfo(p); break;
           case 'resubmit': this.resubmitProject(p); this.renderProjects(); break;
           case 'delete': this.confirmDeleteProject(p); break;
@@ -378,6 +397,37 @@ const App = {
       if (!e.target.closest('.card-menu')) document.querySelectorAll('.card-menu-list.open').forEach(x => x.classList.remove('open'));
     };
     document.addEventListener('click', this._cardMenuDocHandler);
+  },
+
+  // route a card click by approval state. Waiting/rejected projects are "not real yet":
+  // nobody enters the dashboard — PI edits via the create/edit page, AV reviews via the
+  // popup, everyone else (even members) is blocked.
+  openProject(p) {
+    const approval = p.approval || 'approved';
+    if (approval === 'waiting' || approval === 'rejected') {
+      if (this.can('editProject', p)) this.editProject(p);        // PI/admin → edit page
+      else if (this.canReview) this.openProjectInfo(p);           // AV → review popup
+      else this.toast('โครงการนี้ยังไม่ได้รับอนุมัติ — ยังเข้าใช้งานไม่ได้');
+      return;
+    }
+    if (this.hasAccess(p)) this.go('dashboard', p.id);            // approved (incl. closed) → dashboard
+    else if (this.canReview) this.openProjectInfo(p);
+  },
+
+  // load an existing (non-approved) project into the create wizard for editing
+  editProject(p) {
+    const idx = {};
+    const groups = p.groups.map((g, i) => { idx[g.id] = i; return { name: g.name, color: g.color, isControl: g.isControl, desc: g.desc || '' }; });
+    const cells = {};
+    p.cages.forEach(c => { cells[`${c.shelf}_${c.position}`] = { g: idx[c.groupId] ?? 0, mice: c.mice.length, sex: (c.mice[0] && c.mice[0].sex) || 'M' }; });
+    this.draft = {
+      editId: p.id,
+      meta: { name: p.name, desc: p.description === '—' ? '' : p.description, date: p.startDate },
+      groups,
+      layout: { shelves: p.shelves, cols: p.cagesPerShelf },
+      cells,
+    };
+    this.go('create');
   },
 
   // ---- project approval workflow --------------------------------------
@@ -430,7 +480,7 @@ const App = {
     const groups = p.groups.map(gr => `<div class="pi-grp"><i class="sw" style="background:${gr.color}"></i><b>${gr.name}</b>${gr.isControl ? ' <span class="muted">(control)</span>' : ''}${gr.desc ? ` — ${gr.desc}` : ''}</div>`).join('');
     const members = (p.members || []).map(m => {
       const u = DB.users.find(x => x.id === m.userId);
-      return `<div class="pi-mem"><b>${u ? u.name : m.userId}</b> ${(m.roles || []).map(r => `<span class="role-tag">${r}</span>`).join(' ')}</div>`;
+      return `<div class="pi-mem"><b>${u ? u.name : m.userId}</b> ${(m.roles || []).map(r => `<span class="role-tag">${this.roleKeyLabel(r)}</span>`).join(' ')}</div>`;
     }).join('') || '<span class="muted">—</span>';
     const docs = (p.documents || []).length
       ? p.documents.map(d => `<div class="pi-doc"><span>📄 ${d.name} <span class="muted">· ${this.fileSize(d.size)} · ${d.category}</span></span><button class="mini-btn pidoc-open" data-id="${d.id}">เปิด</button></div>`).join('')
@@ -460,10 +510,12 @@ const App = {
       </div>
       <div class="modal-foot">
         <button class="btn" id="piClose">ปิด</button>
+        ${this.can('editProject', p) ? `<button class="btn" id="piDocs">📎 จัดการเอกสาร</button>` : ''}
         <span class="spacer" style="flex:1"></span>
         ${ownerFix ? `<button class="btn btn-danger" id="piDelete">🗑 ลบ</button><button class="btn btn-primary" id="piResubmit">↻ บันทึก & ส่งตรวจอีกครั้ง</button>` : ''}
         ${canReview ? `<button class="btn btn-danger" id="piReject">✗ ไม่อนุมัติ</button><button class="btn btn-green" id="piApprove">✓ อนุมัติ</button>` : ''}
       </div>`);
+    if (this.can('editProject', p)) this.el('piDocs').onclick = () => this.openDocuments(p);
 
     document.querySelectorAll('.pidoc-open').forEach(b => b.onclick = () => {
       const d = (p.documents || []).find(x => x.id === b.dataset.id);
@@ -511,12 +563,14 @@ const App = {
         cells: {},        // "shelf_pos" -> { g: groupIndex, mice: count }
       };
     }
+    const isEdit = !!this.draft.editId;
+    const meta = this.draft.meta || {};
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="create">สร้างโครงการ</a>`,
+      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="create">${isEdit ? 'แก้ไขโครงการ' : 'สร้างโครงการ'}</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>สร้างโครงการใหม่</h2><div class="desc">กำหนดข้อมูล กลุ่มทดลอง แล้วจัดผังกรงและหนูในหน้านี้ (แก้ไขภายหลังได้)</div></div>
+          <div><h2>${isEdit ? 'แก้ไขโครงการ' : 'สร้างโครงการใหม่'}</h2><div class="desc">กำหนดข้อมูล กลุ่มทดลอง แล้วจัดผังกรงและหนูในหน้านี้ (แก้ไขภายหลังได้)</div></div>
         </div>
         <div class="create-wrap">
           <div class="create-grid">
@@ -524,14 +578,11 @@ const App = {
               <div class="form-card">
                 <div class="form-card-title">ข้อมูลโครงการ</div>
                 <div class="field"><label>ชื่อโครงการ <span style="color:var(--red)">*</span></label>
-                  <input id="cpName" placeholder="เช่น NAFLD Diet Study"></div>
+                  <input id="cpName" placeholder="เช่น NAFLD Diet Study" value="${(meta.name || '').replace(/"/g, '&quot;')}"></div>
                 <div class="field"><label>รายละเอียด</label>
-                  <textarea id="cpDesc" rows="2" placeholder="วัตถุประสงค์ / คำอธิบายโครงการ"></textarea></div>
-                <div class="two-col">
-                  <div class="field"><label>วันที่เริ่ม</label><input id="cpDate" type="date" value="${todayISO()}"></div>
-                  <div class="field"><label>สถานะ</label>
-                    <select id="cpStatus"><option value="active">กำลังดำเนิน</option><option value="closed">ปิดแล้ว</option></select></div>
-                </div>
+                  <textarea id="cpDesc" rows="2" placeholder="วัตถุประสงค์ / คำอธิบายโครงการ">${meta.desc || ''}</textarea></div>
+                <div class="field"><label>วันที่เริ่ม</label><input id="cpDate" type="date" value="${meta.date || todayISO()}"></div>
+                <p class="empty-note" style="margin:2px 0 0">${isEdit ? 'บันทึกแล้วโครงการจะกลับไปสถานะ <b>รอตรวจสอบ</b> เพื่อให้ AV อนุมัติอีกครั้ง' : 'เมื่อสร้างแล้ว โครงการจะอยู่สถานะ <b>รอตรวจสอบ</b> เพื่อให้ AV (สัตวแพทย์ผู้ควบคุม) อนุมัติก่อนเริ่มใช้งาน'}</p>
               </div>
             </div>
 
@@ -558,7 +609,7 @@ const App = {
 
           <div class="create-actions">
             <button class="btn" data-nav="projects">ยกเลิก</button>
-            <button class="btn btn-primary" id="cpCreate">สร้างโครงการ</button>
+            <button class="btn btn-primary" id="cpCreate">${isEdit ? '💾 บันทึก & ส่งตรวจอีกครั้ง' : 'สร้างโครงการ'}</button>
           </div>
         </div>
       </div>`
@@ -788,7 +839,8 @@ const App = {
     if (this.draft.groups.some(g => !g.name.trim())) { this.toast('กรุณาตั้งชื่อให้ครบทุกกลุ่ม'); return; }
     if (!this.draft.groups.some(g => g.isControl)) this.draft.groups[0].isControl = true;
 
-    const pid = 'P' + Date.now();
+    const editId = this.draft.editId;
+    const pid = editId || ('P' + Date.now());
     const groups = this.draft.groups.map((g, i) => ({ id: `${pid}-G${i + 1}`, name: g.name.trim(), isControl: g.isControl, color: g.color, desc: (g.desc || '').trim() }));
 
     // build cages from painted cells
@@ -809,11 +861,28 @@ const App = {
       }
     }
 
+    const desc = this.el('cpDesc').value.trim() || '—';
+    const startDate = this.el('cpDate').value || todayISO();
+
+    // editing an existing (non-approved) project → update in place + resubmit for review
+    if (editId) {
+      const p = Data.getProject(editId);
+      Object.assign(p, {
+        name, description: desc, startDate,
+        shelves: this.draft.layout.shelves, cagesPerShelf: this.draft.layout.cols,
+        groups, cages, approval: 'waiting', rejectReason: '',
+      });
+      this.log('แก้ไขโครงการ', `${name} · ${cages.length} กรง · ส่งตรวจอีกครั้ง`, name);
+      this.draft = null;
+      this.toast(`บันทึกการแก้ไข "${name}" แล้ว — ส่งให้ AV ตรวจสอบอีกครั้ง`);
+      return this.go('projects');
+    }
+
     DB.projects.push({
       id: pid, name,
-      description: this.el('cpDesc').value.trim() || '—',
-      startDate: this.el('cpDate').value || todayISO(),
-      status: this.el('cpStatus').value,
+      description: desc,
+      startDate,
+      status: 'active',      // operational status; approval gate below governs go-live
       shelves: this.draft.layout.shelves,
       cagesPerShelf: this.draft.layout.cols,
       groups, cages,
@@ -835,9 +904,19 @@ const App = {
     const p = Data.getProject(this.route.projectId);
     if (!p) return this.go('projects');
     if (!this.hasAccess(p)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงโครงการนี้'); return this.go('projects'); }
+    // waiting/rejected projects aren't "real" yet — nobody enters the dashboard
+    // (PI edits via the create/edit page; AV reviews via the info popup).
+    if ((p.approval || 'approved') !== 'approved') {
+      this.toast('โครงการยังไม่ได้รับอนุมัติ — ยังเปิดใช้งานไม่ได้');
+      return this.go('projects');
+    }
 
     const closed = p.status === 'closed';   // closed projects are view-only
-    const canWeigh = !closed && this.can('weigh', p);
+    const approval = p.approval || 'approved';
+    const operational = this.isOperational(p);   // approved & not closed → data can be recorded
+    // weighing needs an operational project; cage/member/doc editing stays available to PI
+    // on waiting/rejected so they can prepare/fix before (re)submitting.
+    const canWeigh = operational && this.can('weigh', p);
     const canEdit = !closed && this.can('editProject', p);
     const canMembers = this.can('manageMembers', p);
     if (this.editing && !canEdit) this.editing = false;
@@ -1125,6 +1204,7 @@ const App = {
     const canDeathStop = this.can('deathStop', p);
     const canStop = this.can('stop', p);      // PI only
     const canFlag = this.can('flag', p);      // everyone in the project
+    const operational = this.isOperational(p); // recording actions require an approved, open project
 
     const rows = cage.mice.map(m => {
       const cur = Data.latestWeight(m);
@@ -1144,7 +1224,7 @@ const App = {
         (!dead && m.flagOpen ? `<span class="m-badge flag">⚠️ ผิดปกติ</span>` : '') +
         (m.excluded && !dead ? `<span class="m-badge stop">ไม่คิดเฉลี่ย</span>` : '');
       const items = [];
-      if (!dead) {
+      if (!dead && operational) {
         if (m.flagOpen) items.push(`<div class="menu-item flag-wait">⚠️ รอ VET ตรวจสอบ</div>`);
         else if (canFlag && !m.careOpen) items.push(`<button class="menu-item flag" data-act="flag" data-mid="${m.id}">⚠️ แจ้งผิดปกติ</button>`);
         if (canStop) items.push(`<button class="menu-item stop" data-act="stop" data-mid="${m.id}">${m.excluded ? 'รวมกลับเข้าค่าเฉลี่ย' : 'Stop (ไม่คิดเฉลี่ย)'}</button>`);
@@ -1365,8 +1445,9 @@ const App = {
   // Mouse detail (chart + history + treatment)
   // ---------------------------------------------------------
   openMouseDetail(p, cage, mouse) {
-    const canTreat = this.can('treat', p);
-    const canNecropsy = this.can('deathStop', p);   // necropsy (gross exam) follows the death record
+    const operational = this.isOperational(p);        // no recording actions on waiting/rejected/closed
+    const canTreat = this.can('treat', p) && operational;
+    const canNecropsy = this.can('deathStop', p) && operational;   // necropsy (gross exam) follows the death record
     const cur = Data.latestWeight(mouse);
     const chg = Data.weightChange(mouse);
     const chgClass = chg == null ? '' : chg >= 0 ? 'up' : 'down';
@@ -2799,7 +2880,7 @@ const App = {
     const mine = DB.projects.filter(p => this.hasAccess(p)).map(p => `
       <tr>
         <td><b>${p.name}</b></td>
-        <td>${this.isAdmin ? '<span class="role-tag">ADMIN</span>' : this.myRoles(p).map(r => `<span class="role-tag">${r}</span>`).join(' ') || '—'}</td>
+        <td>${this.isAdmin ? '<span class="role-tag">ADMIN</span>' : this.myRoles(p).map(r => `<span class="role-tag">${this.roleKeyLabel(r)}</span>`).join(' ') || '—'}</td>
       </tr>`).join('') || `<tr><td colspan="2" class="empty-note">ยังไม่มีโครงการที่เข้าถึงได้</td></tr>`;
 
     this.shell(
