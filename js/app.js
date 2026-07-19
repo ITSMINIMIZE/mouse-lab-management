@@ -78,36 +78,71 @@ const App = {
     });
   },
 
+  // ---- identity: POSITION (system) + PROJECT ROLES (per project) ----------
+  // See the permission-model comment at the top of data.js. Effective
+  // capability = POSITION caps ∪ PROJECT ROLE caps. Gate through can().
   get user() { return DB.users.find(u => u.id === DB.currentUserId) || DB.users[0]; },
-  get isAdmin() { return this.user.systemRole === 'admin'; },
-  get isAV() { return this.user.systemRole === 'av'; },            // Attending Veterinarian (approves projects)
-  get canReview() { return this.isAdmin || this.isAV; },           // may approve/reject project creation
-  sysRoleLabel(u) { return u.systemRole === 'admin' ? 'admin' : u.systemRole === 'av' ? 'AV' : 'user'; },
+  get position() { return POSITIONS[this.user.position] || POSITIONS.EXTERNAL; },
+  get isAdmin() { return this.user.position === 'ADMIN'; },
+  get isAV() { return this.user.position === 'AV'; },              // หัวหน้าสัตวแพทย์
+  get canReview() { return this.position.caps.includes('approve'); },   // approve/reject a project
+  get canManageUsers() { return this.position.caps.includes('manageUsers'); },
+  // service & oversight positions see every project without being appointed
+  get seesAllProjects() { return this.position.scope === 'all'; },
+  positionKey(u) { return (u || this.user).position; },
+  positionLabel(u) { const p = POSITIONS[this.positionKey(u)]; return p ? p.label : '—'; },
+  // legacy alias kept so older call sites keep printing something sensible
+  sysRoleLabel(u) { return this.positionKey(u); },
 
-  // roles the current user holds in a project (array of role keys).
-  // A DEMO "position persona" (user.role set) holds that role in EVERY project,
-  // so a client can switch position and see the same role across all projects.
-  // Real deployment: no user.role → access is per-project membership.
-  myRoles(project) {
-    if (this.user.role) return [this.user.role];
+  // project roles the current user holds (array of ROLES keys).
+  // A DEMO persona (user.projectRole set) holds that role in EVERY project so a
+  // client can compare views. Real deployment: membership in project.members only.
+  myProjectRoles(project) {
+    if (this.user.projectRole) return [this.user.projectRole];
     if (!project) return [];
     const m = (project.members || []).find(x => x.userId === this.user.id);
     return m ? m.roles : [];
   },
-  // capability check — admin can do anything; otherwise union of held roles
+  // capability check — admin can do anything; otherwise POSITION ∪ PROJECT ROLES
   can(cap, project) {
     if (this.isAdmin) return true;
-    return this.myRoles(project).some(r => ROLES[r] && ROLES[r].caps.includes(cap));
+    if (this.position.caps.includes(cap)) return true;
+    return this.myProjectRoles(project).some(r => ROLES[r] && ROLES[r].caps.includes(cap));
   },
   // can the current user see/open this project at all?
+  // needs the `view` capability first — that is what keeps GM (stockroom/finance
+  // only) out of every project even though their position scope is 'all'.
   hasAccess(project) {
-    return this.isAdmin || this.myRoles(project).length > 0;
+    if (!this.can('view', project)) return false;
+    if (this.seesAllProjects) return true;
+    return this.myProjectRoles(project).length > 0;
   },
-  roleKeyLabel(k) { return k === 'STOCK' ? 'AHS' : k; },   // STOCK is shown as AHS to users
+
+  // ---- top-level tabs (โครงการ / งานคลัง / การเงิน) ----------------------
+  // Visibility is per capability: GM sees only the last two, EX sees all three,
+  // everyone else sees only โครงการ.
+  TABS: [
+    { key: 'projects', label: 'โครงการ', icon: '🧪', cap: 'view' },
+    { key: 'supply',   label: 'งานคลัง', icon: '📦', cap: 'viewSupply' },
+    { key: 'finance',  label: 'การเงิน', icon: '💰', cap: 'viewFinance' },
+  ],
+  visibleTabs() { return this.TABS.filter(t => this.can(t.cap)); },
+  // which tab a route belongs to (for highlighting)
+  tabOfRoute(name) {
+    if (name === 'supply' || name === 'finance') return name;
+    if (['projects', 'dashboard', 'reports', 'create'].includes(name)) return 'projects';
+    return '';
+  },
+  // where to land after login / when a route is not permitted
+  homeRoute() {
+    const t = this.visibleTabs()[0];
+    return t ? t.key : 'roles';
+  },
+  roleKeyLabel(k) { return k; },
+  // what to show as "my role here": project role if any, else the position
   myRoleLabel(project) {
-    if (this.isAdmin) return 'ADMIN';
-    const roles = this.myRoles(project);
-    return roles.length ? roles.map(r => this.roleKeyLabel(r)).join(' + ') : '—';
+    const roles = this.myProjectRoles(project);
+    return roles.length ? roles.join(' + ') : this.positionKey();
   },
   // a project is "operational" (data can be recorded: weigh/flag/treat/death)
   // only once AV has approved it and it isn't closed. Waiting/rejected projects
@@ -128,6 +163,8 @@ const App = {
       case 'audit':    this.go('audit', this.route.projectId); break;
       case 'roles':    this.go('roles', this.route.projectId); break;
       case 'users':    this.go('users'); break;
+      case 'supply':   this.go('supply'); break;
+      case 'finance':  this.go('finance'); break;
       case 'logout':   this.go('login'); break;
     }
   },
@@ -145,16 +182,47 @@ const App = {
     if (name === 'audit') return this.renderAudit();
     if (name === 'roles') return this.renderRoles();
     if (name === 'users') return this.renderUsers();
+    if (name === 'supply') return this.renderModulePlaceholder('supply');
+    if (name === 'finance') return this.renderModulePlaceholder('finance');
+  },
+
+  // ---------------------------------------------------------
+  // Top-level modules reserved for the next phase (งานคลัง / การเงิน).
+  // These are facility-wide, NOT per project. The tab, route and permission gate
+  // exist now so the real screens can drop straight in; there is deliberately no
+  // data model behind them yet.
+  // ---------------------------------------------------------
+  MODULES: {
+    supply:  { icon: '📦', title: 'งานคลัง', cap: 'viewSupply',  desc: 'คลังวัสดุ อาหารสัตว์ และครุภัณฑ์ของหน่วยสัตว์ทดลอง' },
+    finance: { icon: '💰', title: 'การเงิน', cap: 'viewFinance', desc: 'งบประมาณ ค่าใช้จ่าย และการเบิกจ่าย' },
+  },
+  renderModulePlaceholder(key) {
+    const mod = this.MODULES[key];
+    if (!this.can(mod.cap)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้านี้'); return this.go(this.homeRoute()); }
+
+    this.shell(
+      '',   // the active tab already says where we are
+      `<div class="page">
+        <div class="page-head">
+          <div><h2>${mod.icon} ${mod.title}</h2><div class="desc">${mod.desc}</div></div>
+        </div>
+        <div class="report-canvas module-soon">
+          <div class="ms-ico">${mod.icon}</div>
+          <h3>อยู่ระหว่างพัฒนา — เฟสถัดไป</h3>
+          <p>โครงสร้างหน้าและสิทธิ์การเข้าถึงถูกวางไว้แล้ว รอออกแบบรายละเอียดร่วมกับผู้ใช้งานจริง</p>
+        </div>
+      </div>`
+    );
   },
 
   // ---- user account helpers ----
-  adminCount() { return DB.users.filter(u => u.systemRole === 'admin').length; },
-  isLastAdmin(u) { return u.systemRole === 'admin' && this.adminCount() <= 1; },
+  adminCount() { return DB.users.filter(u => u.position === 'ADMIN').length; },
+  isLastAdmin(u) { return u.position === 'ADMIN' && this.adminCount() <= 1; },
 
   // ---- audit log (append-only, visible to everyone) ----
   log(action, detail, projectName = '') {
     const proj = DB.projects.find(p => p.name === projectName);
-    const role = this.isAdmin ? 'ADMIN' : (proj && this.myRoles(proj).join('/')) || 'USER';
+    const role = (proj && this.myProjectRoles(proj).join('/')) || this.positionKey();
     DB.auditLog.push({ ts: Date.now(), user: this.user.name, role, action, detail, project: projectName });
   },
   formatTs(ts) {
@@ -170,24 +238,36 @@ const App = {
     const u = this.user;
     const initial = (u.firstName || u.name || '?').trim().charAt(0);
     const proj = Data.getProject(this.route.projectId);
-    const projRole = proj && !this.isAdmin && !this.isAV ? this.myRoleLabel(proj) : '';
-    const sysLabel = this.isAdmin ? 'ผู้ดูแลระบบ (admin)' : this.isAV ? 'สัตวแพทย์ผู้ควบคุม (AV)' : 'ผู้ใช้ (user)';
-    const userOptions = DB.users
-      .map(x => `<option value="${x.id}" ${x.id === u.id ? 'selected' : ''}>${x.name}</option>`)
+    // project role is only meaningful when actually appointed to this project
+    const projRoles = proj ? this.myProjectRoles(proj) : [];
+    const projRole = projRoles.join(' + ');
+    const sysLabel = `${this.positionLabel()} (${this.positionKey()})`;
+    // top-level tabs — only those the position is entitled to (GM: คลัง+การเงิน only)
+    const activeTab = this.tabOfRoute(this.route.name);
+    // always rendered: the lit tab is both the "you are here" marker and the way
+    // back up (the redundant leading breadcrumb was removed in favour of it)
+    const tabsHTML = this.visibleTabs()
+      .map(t => `<button class="main-tab ${t.key === activeTab ? 'on' : ''}" data-nav="${t.key}">${t.icon} ${t.label}</button>`)
       .join('');
+    // demo switcher: system positions first, then the project-role personas
+    const opt = x => `<option value="${x.id}" ${x.id === u.id ? 'selected' : ''}>${x.name}</option>`;
+    const userOptions =
+      `<optgroup label="ตำแหน่งระดับระบบ">${DB.users.filter(x => !x.projectRole).map(opt).join('')}</optgroup>` +
+      `<optgroup label="บทบาทในโครงการ (ทีมวิจัย)">${DB.users.filter(x => x.projectRole).map(opt).join('')}</optgroup>`;
 
     this.el('root').innerHTML = `
       <div id="app-shell">
         <header class="appbar">
           <div class="brand"><span class="mark">🐭</span> iLAMP</div>
+          <nav class="main-tabs">${tabsHTML}</nav>
           <nav class="crumbs">${crumbsHTML}</nav>
           <div class="spacer"></div>
           <button class="btn btn-ghost" data-nav="audit">📋 Audit Log</button>
-          ${this.isAdmin ? `<button class="btn btn-ghost" data-nav="users">👤 จัดการผู้ใช้</button>` : ''}
+          ${this.canManageUsers ? `<button class="btn btn-ghost" data-nav="users">👤 จัดการผู้ใช้</button>` : ''}
           <div class="user-menu">
             <button class="user-btn" id="userMenuBtn">
               <span class="avatar">${initial}</span>
-              <span class="user-meta"><span class="u-name">${u.name}</span><span class="u-sys">${this.isAdmin ? 'admin' : this.isAV ? 'AV' : (projRole || 'user')}</span></span>
+              <span class="user-meta"><span class="u-name">${u.name}</span><span class="u-sys">${projRole || this.positionKey()}</span></span>
               <span class="caret">▾</span>
             </button>
             <div class="user-dropdown" id="userDropdown">
@@ -230,8 +310,11 @@ const App = {
     this.el('demoUser').addEventListener('change', (e) => {
       DB.currentUserId = e.target.value;
       this.demoOpen = true;   // keep the panel open after switching
+      // the new identity may not be allowed on the current route/project
       const cur = Data.getProject(this.route.projectId);
-      if (this.route.projectId && cur && !this.hasAccess(cur)) this.go('projects');
+      const tabOk = this.visibleTabs().some(t => t.key === this.tabOfRoute(this.route.name));
+      if (this.tabOfRoute(this.route.name) && !tabOk) this.go(this.homeRoute());
+      else if (this.route.projectId && cur && !this.hasAccess(cur)) this.go(this.homeRoute());
       else this.go(this.route.name, this.route.projectId);
     });
   },
@@ -267,7 +350,8 @@ const App = {
       const email = (this.el('loginEmail').value || '').trim().toLowerCase();
       const match = DB.users.find(u => (u.email || '').toLowerCase() === email);
       DB.currentUserId = match ? match.id : 'u_pi';
-      this.go('projects');
+      // land on the first tab this position is entitled to (GM starts at งานคลัง)
+      this.go(this.homeRoute());
     });
   },
 
@@ -275,6 +359,8 @@ const App = {
   // 2. PROJECT LIST
   // ---------------------------------------------------------
   renderProjects() {
+    // positions without `view` (GM) have no โครงการ tab at all
+    if (!this.can('view')) { this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้าโครงการ'); return this.go(this.homeRoute()); }
     // members see their own projects (admin & AV reviewer see all)
     const visible = DB.projects.filter(p => this.hasAccess(p) || this.canReview);
     const cards = visible.map(p => {
@@ -333,16 +419,20 @@ const App = {
         </div>`;
     }).join('') || `<p class="empty-note">คุณยังไม่มีโครงการที่เข้าถึงได้ — สร้างโครงการใหม่เพื่อเริ่มต้น (คุณจะเป็น PI ของโครงการนั้น)</p>`;
 
+    // what the list is showing depends on the POSITION's scope, not on approval rights
+    const who = `เข้าใช้เป็น <b>${this.user.name}</b> (${this.positionKey()})`;
     const sub = this.canReview
-      ? `เข้าใช้เป็น <b>${this.user.name}</b> (${this.sysRoleLabel(this.user)}) · เห็นทุกโครงการเพื่อตรวจสอบ/อนุมัติ`
-      : `แสดงเฉพาะโครงการที่คุณมีบทบาท · เข้าใช้เป็น <b>${this.user.name}</b>`;
+      ? `${who} · เห็นทุกโครงการเพื่อตรวจสอบ/อนุมัติ`
+      : this.seesAllProjects
+        ? `${who} · เห็นทุกโครงการตามหน้าที่ของตำแหน่ง`
+        : `${who} · แสดงเฉพาะโครงการที่คุณได้รับแต่งตั้ง`;
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a>`,
+      '',   // the active tab already says "โครงการ"
       `<div class="page">
         <div class="page-head">
           <div><h2>โครงการ${this.canReview ? '' : 'ของฉัน'}</h2><div class="desc">${sub}</div></div>
-          <button class="btn btn-primary" id="newProjectBtn">➕ สร้างโครงการ</button>
+          <button class="btn btn-primary" id="newProjectBtn"><span class="ico-plus">+</span> สร้างโครงการ</button>
         </div>
         <div class="project-grid">${cards}</div>
       </div>`
@@ -567,7 +657,7 @@ const App = {
     const meta = this.draft.meta || {};
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="create">${isEdit ? 'แก้ไขโครงการ' : 'สร้างโครงการ'}</a>`,
+      `<a data-nav="create">${isEdit ? 'แก้ไขโครงการ' : 'สร้างโครงการ'}</a>`,
       `<div class="page">
         <div class="page-head">
           <div><h2>${isEdit ? 'แก้ไขโครงการ' : 'สร้างโครงการใหม่'}</h2><div class="desc">กำหนดข้อมูล กลุ่มทดลอง แล้วจัดผังกรงและหนูในหน้านี้ (แก้ไขภายหลังได้)</div></div>
@@ -962,7 +1052,7 @@ const App = {
          </div>`;
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="project" data-project-id="${p.id}">${p.name}</a>`,
+      `<a data-nav="project" data-project-id="${p.id}">${p.name}</a>`,
       `<div class="page wide">
         <div class="page-head">
           <div><h2>${p.name} ${closed ? '<span class="pill closed">ปิดแล้ว</span>' : ''}</h2><div class="desc">${p.description}${closed ? ' · โครงการปิดแล้ว (ดูอย่างเดียว)' : ''}</div></div>
@@ -2016,7 +2106,7 @@ const App = {
   // ---------------------------------------------------------
   PRINT_CSS: `
     * { box-sizing: border-box; }
-    body { font-family: 'Sarabun', sans-serif; color: #111; margin: 0; padding: 14px; font-size: 12px; line-height: 1.35; }
+    body { font-family: 'IBM Plex Sans Thai', sans-serif; color: #111; margin: 0; padding: 14px; font-size: 12px; line-height: 1.35; }
     .doc { max-width: 760px; margin: 0 auto; }
     table { width: 100%; border-collapse: collapse; }
     .hd td { border: 1px solid #333; padding: 5px 7px; vertical-align: middle; }
@@ -2050,9 +2140,12 @@ const App = {
   `,
 
   printDocument(filename, bodyHtml) {
+    // The print doc is its own document, so it needs the embedded font too.
+    // The iframe has no base URL of its own — resolve css/fonts.css against the
+    // app's own URL so the form prints in IBM Plex Sans Thai and still works offline.
+    const fontHref = new URL('css/fonts.css', document.baseURI).href;
     const html = `<!DOCTYPE html><html lang="th"><head><meta charset="utf-8"><title>${filename}</title>`
-      + `<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>`
-      + `<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">`
+      + `<link rel="stylesheet" href="${fontHref}">`
       + `<style>${this.PRINT_CSS}</style></head><body><div class="doc">${bodyHtml}</div></body></html>`;
     const frame = document.createElement('iframe');
     frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
@@ -2580,7 +2673,7 @@ const App = {
     const dense = p.groups.length > 5 ? ' dense' : '';
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="project" data-project-id="${p.id}">${p.name}</a><span class="sep">/</span><a data-nav="reports">รายงาน</a>`,
+      `<a data-nav="project" data-project-id="${p.id}">${p.name}</a><span class="sep">/</span><a data-nav="reports">รายงาน</a>`,
       `<div class="page report-page">
         <div class="page-head">
           <h2>รายงาน & กราฟ</h2>
@@ -2843,7 +2936,7 @@ const App = {
       : `<tr><td colspan="5" class="empty-note" style="text-align:center;padding:24px">ยังไม่มีบันทึกกิจกรรม</td></tr>`;
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="audit">Audit Log</a>`,
+      `<a data-nav="audit">Audit Log</a>`,
       `<div class="page">
         <div class="page-head">
           <div><h2>📋 Audit Log</h2><div class="desc">บันทึกกิจกรรมทั้งหมดในระบบ — ทุกคนเข้าดูได้เพื่อความโปร่งใส</div></div>
@@ -2868,39 +2961,62 @@ const App = {
   // 6. ROLE & PERMISSION  (reference matrix + my memberships)
   // ---------------------------------------------------------
   renderRoles() {
-    const roleList = ROLE_ORDER.map(k => ROLES[k]);
-    const head = roleList.map(r => `<th>${r.label.split(' ')[0]}</th>`).join('');
-    const matrix = CAPABILITIES.map(c => `
-      <tr>
-        <td>${c.label}</td>
-        ${roleList.map(r => `<td class="pm-cell">${r.caps.includes(c.key) ? '<span class="pm-yes">✓</span>' : '<span class="pm-no">–</span>'}</td>`).join('')}
-      </tr>`).join('');
+    // one matrix per tier
+    const buildMatrix = (defs, keys) => {
+      const list = keys.map(k => defs[k]);
+      const head = list.map(r => `<th>${r.key}</th>`).join('');
+      const rows = CAPABILITIES.map(c => `
+        <tr>
+          <td>${c.label}</td>
+          ${list.map(r => `<td class="pm-cell">${r.caps.includes(c.key) ? '<span class="pm-yes">✓</span>' : '<span class="pm-no">–</span>'}</td>`).join('')}
+        </tr>`).join('');
+      return { head, rows };
+    };
+    const pos = buildMatrix(POSITIONS, POSITION_ORDER);
+    const prj = buildMatrix(ROLES, ROLE_ORDER);
+
+    // legend: what each position key means + who sees every project
+    const posLegend = POSITION_ORDER.map(k => {
+      const p = POSITIONS[k];
+      const scope = p.scope === 'all' ? 'ทุกโครงการ' : 'เฉพาะที่ได้รับแต่งตั้ง';
+      return `<tr><td><span class="role-tag">${p.key}</span></td><td>${p.label}</td><td>${scope}</td></tr>`;
+    }).join('');
 
     // my memberships across projects
-    const mine = DB.projects.filter(p => this.hasAccess(p)).map(p => `
-      <tr>
-        <td><b>${p.name}</b></td>
-        <td>${this.isAdmin ? '<span class="role-tag">ADMIN</span>' : this.myRoles(p).map(r => `<span class="role-tag">${this.roleKeyLabel(r)}</span>`).join(' ') || '—'}</td>
-      </tr>`).join('') || `<tr><td colspan="2" class="empty-note">ยังไม่มีโครงการที่เข้าถึงได้</td></tr>`;
+    const mine = DB.projects.filter(p => this.hasAccess(p)).map(p => {
+      const roles = this.myProjectRoles(p);
+      const tags = roles.length
+        ? roles.map(r => `<span class="role-tag">${r}</span>${ROLES[r] && ROLES[r].nominal ? ' <span class="empty-note">(ในนาม)</span>' : ''}`).join(' ')
+        : `<span class="empty-note">เข้าถึงตามตำแหน่ง ${this.positionKey()}</span>`;
+      return `<tr><td><b>${p.name}</b></td><td>${tags}</td></tr>`;
+    }).join('') || `<tr><td colspan="2" class="empty-note">ยังไม่มีโครงการที่เข้าถึงได้</td></tr>`;
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="roles">ข้อมูลผู้ใช้</a>`,
+      `<a data-nav="roles">ข้อมูลผู้ใช้</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>👤 ข้อมูลผู้ใช้ & สิทธิ์</h2><div class="desc">สิทธิ์เป็นรายโครงการ · ระดับระบบมี admin (ทำได้ทุกอย่าง) และ user · 1 คนถือได้หลายบทบาทต่อโครงการ (สิทธิ์รวมกัน)</div></div>
+          <div><h2>👤 ข้อมูลผู้ใช้ & สิทธิ์</h2><div class="desc">สิทธิ์มี 2 ชั้น — <b>ตำแหน่งระดับระบบ</b> (1 ตำแหน่งต่อบัญชี) และ <b>บทบาทในโครงการ</b> (ทีมวิจัย) · สิทธิ์ที่ใช้จริง = รวมกันทั้งสองชั้น</div></div>
           <button class="btn" id="myPwBtn">🔒 เปลี่ยนรหัสผ่านของฉัน</button>
         </div>
 
-        <div class="section-title">บทบาทของฉันในแต่ละโครงการ · เข้าใช้เป็น <b>${this.user.name}</b> (${this.sysRoleLabel(this.user)})</div>
+        <div class="section-title">ตำแหน่งของฉัน · เข้าใช้เป็น <b>${this.user.name}</b> — <span class="role-tag">${this.positionKey()}</span> ${this.positionLabel()}</div>
         <div class="report-canvas" style="padding:0;overflow:auto;margin-bottom:22px">
-          <table class="data"><thead><tr><th>โครงการ</th><th>บทบาท</th></tr></thead><tbody>${mine}</tbody></table>
+          <table class="data"><thead><tr><th>โครงการ</th><th>บทบาทในโครงการ</th></tr></thead><tbody>${mine}</tbody></table>
         </div>
 
-        <div class="section-title">ตารางสิทธิ์รายบทบาท (Permission Matrix)</div>
+        <div class="section-title">1) สิทธิ์ตามตำแหน่งระดับระบบ</div>
         <div class="report-canvas" style="padding:0;overflow:auto">
-          <table class="data perm-matrix"><thead><tr><th>สิทธิ์ / การกระทำ</th>${head}</tr></thead><tbody>${matrix}</tbody></table>
+          <table class="data perm-matrix"><thead><tr><th>สิทธิ์ / การกระทำ</th>${pos.head}</tr></thead><tbody>${pos.rows}</tbody></table>
         </div>
-        <p class="empty-note" style="margin-top:10px">การจัดสมาชิก/มอบสิทธิทำได้จากปุ่ม “👥 สมาชิก” ในหน้าโครงการ (เฉพาะ PI และ admin)</p>
+        <div class="report-canvas" style="padding:0;overflow:auto;margin:12px 0 22px">
+          <table class="data"><thead><tr><th>ตำแหน่ง</th><th>ความหมาย</th><th>มองเห็นโครงการ</th></tr></thead><tbody>${posLegend}</tbody></table>
+        </div>
+
+        <div class="section-title">2) สิทธิ์ตามบทบาทในโครงการ (ทีมวิจัย)</div>
+        <div class="report-canvas" style="padding:0;overflow:auto">
+          <table class="data perm-matrix"><thead><tr><th>สิทธิ์ / การกระทำ</th>${prj.head}</tr></thead><tbody>${prj.rows}</tbody></table>
+        </div>
+        <p class="empty-note" style="margin-top:10px">Sci / VET / ACT ที่ระบุในโครงการเป็น <b>การแต่งตั้งในนาม</b> เท่านั้น — อำนาจจริงมาจากตำแหน่งระดับระบบของบุคคลนั้น · การจัดสมาชิกทำได้จาก “👥 สมาชิก” ในหน้าโครงการ (PI และผู้ดูแลระบบ)</p>
       </div>`
     );
     this.el('myPwBtn').onclick = () => this.openMyPassword();
@@ -2910,7 +3026,7 @@ const App = {
   // 7. USER MANAGEMENT (admin only)
   // ---------------------------------------------------------
   renderUsers() {
-    if (!this.isAdmin) { this.toast('เฉพาะ admin เท่านั้น'); return this.go('projects'); }
+    if (!this.canManageUsers) { this.toast('เฉพาะผู้ดูแลระบบและหัวหน้าสัตวแพทย์เท่านั้น'); return this.go('projects'); }
 
     const rows = DB.users.map(u => {
       const self = u.id === this.user.id;
@@ -2918,7 +3034,7 @@ const App = {
       return `<tr>
         <td><b>${u.name}</b>${self ? ' <span class="role-tag">คุณ</span>' : ''}</td>
         <td class="mono" style="color:var(--text-muted)">${u.email}</td>
-        <td><span class="audit-act ${u.systemRole === 'admin' ? 'red' : 'gray'}">${u.systemRole}</span></td>
+        <td><span class="audit-act ${u.position === 'ADMIN' ? 'red' : 'gray'}">${u.position}</span> <span style="color:var(--text-muted);font-size:12px">${this.positionLabel(u)}</span></td>
         <td style="white-space:nowrap">
           <button class="mini-btn" data-edit="${u.id}">แก้ไข</button>
           <button class="mini-btn danger" data-del="${u.id}" ${self || lastAdmin ? 'disabled title="ลบไม่ได้"' : ''}>ลบ</button>
@@ -2927,11 +3043,11 @@ const App = {
     }).join('');
 
     this.shell(
-      `<a data-nav="projects">โครงการ</a><span class="sep">/</span><a data-nav="users">จัดการผู้ใช้</a>`,
+      `<a data-nav="users">จัดการผู้ใช้</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>👤 จัดการผู้ใช้</h2><div class="desc">เพิ่ม แก้ไข ลบบัญชีผู้ใช้ในระบบ (เฉพาะ admin) · มี admin ${this.adminCount()} คน</div></div>
-          <button class="btn btn-primary" id="addUserBtn">➕ เพิ่มผู้ใช้</button>
+          <div><h2>👤 จัดการผู้ใช้</h2><div class="desc">เพิ่ม แก้ไข ลบบัญชีผู้ใช้ และกำหนดตำแหน่งระดับระบบ · บุคคลภายนอกต้องให้ผู้ดูแลระบบหรือหัวหน้าสัตวแพทย์เปิดบัญชี <b>External</b> ให้ก่อน · มีผู้ดูแลระบบ ${this.adminCount()} คน</div></div>
+          <button class="btn btn-primary" id="addUserBtn"><span class="ico-plus">+</span> เพิ่มผู้ใช้</button>
         </div>
         <div class="report-canvas" style="padding:0;overflow:auto">
           <table class="data">
@@ -2964,9 +3080,11 @@ const App = {
 
   openUserForm(user) {
     const isNew = !user;
-    const u = user || { firstName: '', lastName: '', email: '', password: '', systemRole: 'user' };
+    const u = user || { firstName: '', lastName: '', email: '', password: '', position: 'SCI' };
     const self = user && user.id === this.user.id;
-    const lockRole = self && user.systemRole === 'admin';   // admin can't demote self
+    const lockRole = self && user.position === 'ADMIN';   // admin can't demote self
+    // only a full admin may hand out the ADMIN position
+    const posChoices = POSITION_ORDER.filter(k => k !== 'ADMIN' || this.isAdmin);
 
     this.openModal(`
       <div class="modal-head">
@@ -2981,13 +3099,12 @@ const App = {
         <div class="field"><label>อีเมล <span style="color:var(--red)">*</span></label><input id="uEmail" type="email" value="${u.email}"></div>
         <div class="field"><label>รหัสผ่าน ${isNew ? '<span style="color:var(--red)">*</span>' : '<span style="font-weight:400;color:var(--text-muted)">(เว้นว่างหากไม่เปลี่ยน)</span>'}</label>
           <input id="uPass" type="text" value="${isNew ? u.password : ''}" placeholder="${isNew ? 'อย่างน้อย 6 ตัวอักษร' : '••••••'}"></div>
-        <div class="field"><label>สิทธิ์ระดับระบบ</label>
-          <div class="sex-row" id="uRole">
-            <button type="button" class="role-sys ${u.systemRole === 'user' ? 'sel' : ''}" data-r="user" ${lockRole ? 'disabled' : ''}>user</button>
-            <button type="button" class="role-sys ${u.systemRole === 'av' ? 'sel' : ''}" data-r="av" ${lockRole ? 'disabled' : ''}>AV</button>
-            <button type="button" class="role-sys ${u.systemRole === 'admin' ? 'sel' : ''}" data-r="admin">admin</button>
+        <div class="field"><label>ตำแหน่งระดับระบบ <span style="color:var(--red)">*</span></label>
+          <div class="pos-grid" id="uRole">
+            ${posChoices.map(k => `<button type="button" class="role-sys ${u.position === k ? 'sel' : ''}" data-r="${k}" ${lockRole ? 'disabled' : ''} title="${POSITIONS[k].label}">${k}</button>`).join('')}
           </div>
-          ${lockRole ? '<p class="empty-note">admin ลดสิทธิ์ตัวเองไม่ได้</p>' : ''}
+          <p class="empty-note" id="posHint">${POSITIONS[u.position] ? POSITIONS[u.position].label : ''}</p>
+          ${lockRole ? '<p class="empty-note">ผู้ดูแลระบบลดสิทธิ์ตัวเองไม่ได้</p>' : ''}
         </div>
       </div>
       <div class="modal-foot">
@@ -2996,9 +3113,14 @@ const App = {
       </div>
     `);
 
-    let role = u.systemRole;
+    let role = u.position;
     this.el('uRole').querySelectorAll('.role-sys').forEach(b => {
-      b.onclick = () => { if (b.disabled) return; role = b.dataset.r; this.el('uRole').querySelectorAll('.role-sys').forEach(x => x.classList.toggle('sel', x === b)); };
+      b.onclick = () => {
+        if (b.disabled) return;
+        role = b.dataset.r;
+        this.el('uRole').querySelectorAll('.role-sys').forEach(x => x.classList.toggle('sel', x === b));
+        this.el('posHint').textContent = POSITIONS[role].label;
+      };
     });
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('uCancel').onclick = () => this.closeModal();
@@ -3013,15 +3135,15 @@ const App = {
       if (isNew && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
       if (!isNew && pass && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
       // last-admin safety net (role toggle is already disabled for self-admin)
-      if (user && user.systemRole === 'admin' && role !== 'admin' && this.isLastAdmin(user)) { this.toast('ต้องมี admin อย่างน้อย 1 คน'); return; }
+      if (user && user.position === 'ADMIN' && role !== 'ADMIN' && this.isLastAdmin(user)) { this.toast('ต้องมีผู้ดูแลระบบอย่างน้อย 1 คน'); return; }
 
       if (isNew) {
-        DB.users.push({ id: 'u_' + Date.now().toString(36), firstName, lastName, email, password: pass, systemRole: role, name: `${firstName} ${lastName}`.trim() });
+        DB.users.push({ id: 'u_' + Date.now().toString(36), firstName, lastName, email, password: pass, position: role, projectRole: null, name: `${firstName} ${lastName}`.trim() });
         this.log('เพิ่มผู้ใช้', `${firstName} ${lastName} (${email}) · ${role}`, '');
       } else {
         user.firstName = firstName; user.lastName = lastName; user.email = email;
         user.name = `${firstName} ${lastName}`.trim();
-        user.systemRole = role;
+        user.position = role;
         if (pass) user.password = pass;
         this.log('แก้ไขผู้ใช้', `${user.name} (${email}) · ${role}`, '');
       }
@@ -3073,18 +3195,18 @@ const App = {
     const rows = p.members.map(m => {
       const u = DB.users.find(x => x.id === m.userId);
       const chips = ROLE_ORDER.map(rk =>
-        `<button type="button" class="role-chip ${m.roles.includes(rk) ? 'on' : ''}" data-uid="${m.userId}" data-role="${rk}">${rk === 'STOCK' ? 'AHS' : rk}</button>`).join('');
+        `<button type="button" class="role-chip ${m.roles.includes(rk) ? 'on' : ''} ${ROLES[rk].nominal ? 'nominal' : ''}" data-uid="${m.userId}" data-role="${rk}" title="${ROLES[rk].label}">${rk}</button>`).join('');
       return `<tr>
-        <td><b>${u ? u.name : m.userId}</b> <span style="color:var(--text-muted);font-size:12px">${u ? u.systemRole : ''}</span></td>
+        <td><b>${u ? u.name : m.userId}</b> <span style="color:var(--text-muted);font-size:12px">${u ? u.position : ''}</span></td>
         <td><div class="role-chips">${chips}</div></td>
         <td><button class="icon-btn" data-remove="${m.userId}" title="เอาออกจากโครงการ">🗑️</button></td>
       </tr>`;
     }).join('');
 
     // admins are system-wide superusers, not assignable as ordinary project members
-    const nonMembers = DB.users.filter(u => u.systemRole !== 'admin' && !p.members.some(m => m.userId === u.id));
+    const nonMembers = DB.users.filter(u => u.position !== 'ADMIN' && !p.members.some(m => m.userId === u.id));
     const addOpts = nonMembers.length
-      ? `<select id="addUser">${nonMembers.map(u => `<option value="${u.id}">${u.name} · ${u.systemRole}</option>`).join('')}</select>
+      ? `<select id="addUser">${nonMembers.map(u => `<option value="${u.id}">${u.name} · ${u.position}</option>`).join('')}</select>
          <button class="btn btn-primary btn-sm" id="addMemberBtn">+ เพิ่มเป็นสมาชิก</button>`
       : `<span class="empty-note">เพิ่มผู้ใช้ครบทุกคนแล้ว</span>`;
 
@@ -3096,7 +3218,7 @@ const App = {
       <div class="modal-body">
         <table class="data"><thead><tr><th>ผู้ใช้</th><th>บทบาทในโครงการ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
         <div class="add-member">${addOpts}</div>
-        <p class="empty-note">EC=ดูอย่างเดียว · PI=จัดการกรง/สมาชิก · AHS/นักวิทย์=ชั่งน้ำหนัก · Vet=รักษา · (ทุกบทบาทยกเว้น EC บันทึกตาย/Stop ได้)</p>
+        <p class="empty-note"><b>ทีมวิจัย</b> — PI=จัดการโครงการ/สมาชิก/สั่ง Stop · CoPI=จัดการกรง/ชั่งน้ำหนัก · AHS=ชั่งน้ำหนัก/แจ้งผิดปกติ (CoPI และ AHS เป็นบุคคลภายนอกได้)<br><b>แต่งตั้งในนาม</b> — Sci / VET / ACT ระบุว่าใครเป็นผู้ดูแลประจำโครงการ ไม่ได้ให้สิทธิ์เพิ่ม เพราะทำงานได้จากตำแหน่งระดับระบบอยู่แล้ว</p>
       </div>
       <div class="modal-foot"><button class="btn" id="closeMembers">เสร็จสิ้น</button></div>
     `, { wide: true });
@@ -3124,8 +3246,8 @@ const App = {
     });
     if (nonMembers.length) this.el('addMemberBtn').onclick = () => {
       const uid = this.el('addUser').value;
-      p.members.push({ userId: uid, roles: ['EC'] });   // start as view-only
-      this.log('จัดการสมาชิก', `เพิ่ม ${DB.users.find(u => u.id === uid)?.name} (EC)`, p.name);
+      p.members.push({ userId: uid, roles: ['AHS'] });   // start as the basic operator role
+      this.log('จัดการสมาชิก', `เพิ่ม ${DB.users.find(u => u.id === uid)?.name} (AHS)`, p.name);
       refresh();
     };
   },

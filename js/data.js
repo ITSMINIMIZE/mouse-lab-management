@@ -3,47 +3,104 @@
  * Mock data layer (in-memory only, no real database)
  * ============================================================ */
 
-// Project-level roles. A user can hold several of these per project; their
-// capabilities are the UNION of all roles held. Keys stay EC/PI/STOCK/VET/SCI
-// (STOCK is shown as "AHS"). System-level role (admin/user) is on the user.
-const ROLES = {
-  EC:    { key: 'EC',    label: 'EC (กรรมการจริยธรรม)',      caps: ['view', 'flag'] },
-  PI:    { key: 'PI',    label: 'PI (หัวหน้าโครงการ)',        caps: ['view', 'editProject', 'deathStop', 'stop', 'manageMembers', 'flag'] },
-  STOCK: { key: 'STOCK', label: 'AHS (ดูแลสัตว์/สต็อก)',      caps: ['view', 'weigh', 'deathStop', 'flag'] },
-  SCI:   { key: 'SCI',   label: 'นักวิทย์',                    caps: ['view', 'weigh', 'deathStop', 'flag'] },
-  VET:   { key: 'VET',   label: 'Vet (สัตวแพทย์)',            caps: ['view', 'treat', 'deathStop', 'flag'] },
+/* ------------------------------------------------------------------
+ * PERMISSION MODEL — two independent tiers
+ *
+ *  1) POSITION (ตำแหน่งระดับระบบ) — exactly ONE per user account, stored as
+ *     `user.position`. This is the person's job in the facility. Service
+ *     positions (AV/VET/ACT/SCI) work across EVERY project because they
+ *     physically handle the animals; oversight positions (IACUC/EX/QA/AUDIT/
+ *     OCH/GM) see every project read-only. EXTERNAL sees only the projects
+ *     they were appointed to.
+ *
+ *  2) PROJECT ROLE (บทบาทในโครงการ) — the research team, per project, in
+ *     `project.members[] = { userId, roles[] }`. PI/COPI/AHS carry real
+ *     capabilities. SCI/VET/ACT may also be listed on a project, but that is
+ *     a NOMINAL appointment (ผู้ดูแลประจำโครงการในนามเท่านั้น) — it documents
+ *     who is assigned; their actual power still comes from their POSITION.
+ *
+ *  Effective capability = POSITION caps  ∪  PROJECT ROLE caps (if a member).
+ *  Always gate through App.can(cap, project) — never test a key directly.
+ * ------------------------------------------------------------------ */
+
+// scope: 'all'    = sees every project without being a member
+//        'member' = only projects they are appointed to
+const POSITIONS = {
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'createProject', 'editProject', 'manageMembers', 'weigh', 'flag', 'treat', 'deathStop', 'stop', 'approve', 'manageUsers', 'viewSupply', 'viewFinance'] },
+  AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'createProject', 'flag', 'treat', 'deathStop', 'approve', 'manageUsers'] },
+  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'createProject', 'flag', 'treat', 'deathStop'] },
+  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'createProject', 'flag', 'weigh', 'deathStop'] },
+  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'createProject', 'flag', 'weigh', 'deathStop'] },
+  IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'createProject', 'flag'] },
+  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewSupply', 'viewFinance'] },
+  OCH:      { key: 'OCH',      label: 'เจ้าหน้าที่ชีวอนามัย',           scope: 'all',    caps: ['view', 'createProject'] },
+  QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'createProject'] },
+  AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'createProject'] },
+  // GM works the stockroom/finance side only — deliberately has no `view`, so
+  // hasAccess() keeps them out of every project and the โครงการ tab is hidden.
+  GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewSupply', 'viewFinance'] },
+  EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'createProject'] },
 };
-const ROLE_ORDER = ['EC', 'PI', 'STOCK', 'SCI', 'VET'];
+const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'ACT', 'SCI', 'IACUC', 'EX', 'OCH', 'QA', 'AUDIT', 'GM', 'EXTERNAL'];
+
+// Project-level roles. `nominal: true` = appointed on paper only; the role
+// grants no power of its own (the holder's POSITION does the work).
+const ROLES = {
+  PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'editProject', 'manageMembers', 'weigh', 'flag', 'stop'] },
+  COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'editProject', 'weigh', 'flag'] },
+  AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'weigh', 'flag'] },
+  SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view'], nominal: true },
+  VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view'], nominal: true },
+  ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view'], nominal: true },
+};
+const ROLE_ORDER = ['PI', 'COPI', 'AHS', 'SCI', 'VET', 'ACT'];
 
 // capability catalogue (for the permission matrix / gating)
 const CAPABILITIES = [
   { key: 'view',          label: 'ดูข้อมูลโครงการ / กรง / หนู' },
+  { key: 'createProject', label: 'ยื่นขอสร้างโครงการ' },
   { key: 'editProject',   label: 'จัดการกรง / แก้ไขผังโครงการ' },
-  { key: 'weigh',         label: 'ชั่งน้ำหนัก (บันทึกประจำวัน)' },
-  { key: 'flag',          label: 'แจ้งหนูผิดปกติ (รอ VET ตรวจ)' },
-  { key: 'treat',         label: 'ตรวจรักษา / ปิดเคส / Humane endpoint' },
-  { key: 'deathStop',     label: 'บันทึกการตาย' },
-  { key: 'stop',          label: 'สั่ง Stop (ไม่คิดเฉลี่ย)' },
   { key: 'manageMembers', label: 'จัดการสมาชิก & สิทธิในโครงการ' },
+  { key: 'weigh',         label: 'ชั่งน้ำหนัก (บันทึกประจำวัน)' },
+  { key: 'flag',          label: 'แจ้งหนูผิดปกติ (รอสัตวแพทย์ตรวจ)' },
+  { key: 'treat',         label: 'ตรวจรักษา / ปิดเคส / Humane endpoint' },
+  { key: 'deathStop',     label: 'บันทึกการตาย / ชันสูตรซาก' },
+  { key: 'stop',          label: 'สั่ง Stop (ไม่คิดเฉลี่ย)' },
+  { key: 'approve',       label: 'อนุมัติ / ไม่อนุมัติโครงการ' },
+  { key: 'manageUsers',   label: 'จัดการบัญชีผู้ใช้ระบบ' },
+  { key: 'viewSupply',    label: 'เข้าถึงงานคลัง' },
+  { key: 'viewFinance',   label: 'เข้าถึงการเงิน' },
 ];
 
-// mock user accounts (system role: admin = superuser, user = per-project roles)
+// mock user accounts. `position` = the system-level job (POSITIONS key).
 // `name` is the display name kept in sync with firstName + lastName.
-// `role` (optional) marks a DEMO "position persona": one identity per position
-// that holds that project-role in EVERY project (see App.myRoles override) so a
-// client can switch position and see the same role across all projects. In a real
-// deployment users are members per project (no `role`); membership drives access.
-function makeUser(id, firstName, lastName, email, password, systemRole, role) {
-  return { id, firstName, lastName, email, password, systemRole, role: role || null, name: `${firstName} ${lastName}`.trim() };
+// `projectRole` (optional) marks a DEMO persona for a PROJECT role: that identity
+// holds the role in EVERY project (see App.myProjectRoles override) so a client can
+// switch and compare views without hunting for a project they belong to. In a real
+// deployment nobody has `projectRole` — membership in project.members drives it.
+function makeUser(id, firstName, lastName, email, password, position, projectRole) {
+  return { id, firstName, lastName, email, password, position, projectRole: projectRole || null, name: `${firstName} ${lastName}`.trim() };
 }
 const USERS = [
-  makeUser('u_admin', 'ผู้ดูแลระบบ', '',            'admin@lab.test', 'admin1234', 'admin'),
-  makeUser('u_av',    'AV — สัตวแพทย์ผู้ควบคุม', '', 'av@lab.test',    'demo1234',  'av'),
-  makeUser('u_pi',    'PI — หัวหน้าโครงการ', '',     'pi@lab.test',    'demo1234',  'user', 'PI'),
-  makeUser('u_ahs',   'AHS — ผู้ดูแลสัตว์', '',      'ahs@lab.test',   'demo1234',  'user', 'STOCK'),
-  makeUser('u_sci',   'SCI — นักวิทยาศาสตร์', '',    'sci@lab.test',   'demo1234',  'user', 'SCI'),
-  makeUser('u_vet',   'VET — สัตวแพทย์', '',         'vet@lab.test',   'demo1234',  'user', 'VET'),
-  makeUser('u_ec',    'EC — กรรมการจริยธรรม', '',    'ec@lab.test',    'demo1234',  'user', 'EC'),
+  // --- one persona per system position -------------------------------------
+  makeUser('u_admin', 'Admin — ผู้ดูแลระบบ', '',            'admin@lab.test', 'admin1234', 'ADMIN'),
+  makeUser('u_av',    'AV — หัวหน้าสัตวแพทย์', '',           'av@lab.test',    'demo1234',  'AV'),
+  makeUser('u_vet',   'VET — สัตวแพทย์', '',                'vet@lab.test',   'demo1234',  'VET'),
+  makeUser('u_act',   'ACT — จนท.ดูแลสัตว์ทดลอง', '',        'act@lab.test',   'demo1234',  'ACT'),
+  makeUser('u_scisys','Sci — นักวิทยาศาสตร์', '',            'sci@lab.test',   'demo1234',  'SCI'),
+  makeUser('u_iacuc', 'IACUC — คณะกรรมการกำกับดูแล', '',     'iacuc@lab.test', 'demo1234',  'IACUC'),
+  makeUser('u_ex',    'Ex — ผู้บริหารหน่วยสัตว์ทดลอง', '',    'ex@lab.test',    'demo1234',  'EX'),
+  makeUser('u_och',   'OCH — จนท.ชีวอนามัย', '',             'och@lab.test',   'demo1234',  'OCH'),
+  makeUser('u_qa',    'QA — หน่วยประกันคุณภาพ', '',           'qa@lab.test',    'demo1234',  'QA'),
+  makeUser('u_audit', 'Audit — ผู้ตรวจสอบ', '',              'audit@lab.test', 'demo1234',  'AUDIT'),
+  makeUser('u_gm',    'GM — จนท.บริหารงานทั่วไป', '',         'gm@lab.test',    'demo1234',  'GM'),
+  makeUser('u_ext',   'External — บุคคลภายนอก', '',          'ext@lab.test',   'demo1234',  'EXTERNAL'),
+  // --- personas for the project-level roles (research team) ----------------
+  // A PI/AHS is an internal scientist; a CoPI here is external, to show that
+  // CoPI/AHS may be filled by บุคคลภายนอก.
+  makeUser('u_pi',    'PI — นักวิจัย', '',                   'pi@lab.test',    'demo1234',  'SCI',      'PI'),
+  makeUser('u_copi',  'CoPI — นักวิจัยร่วม', '',              'copi@lab.test',  'demo1234',  'EXTERNAL', 'COPI'),
+  makeUser('u_ahs',   'AHS — นักวิจัยปฏิบัติการ', '',         'ahs@lab.test',   'demo1234',  'SCI',      'AHS'),
 ];
 
 // ---- helpers for generating believable weight histories -----
@@ -126,36 +183,40 @@ function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
 }
 
 // ------------------------------------------------------------
-// Project 1 : NAFLD Diet Study
+// Project 1 : NAFLD Diet Study — the main demo project.
+// Layout: 4 shelves × 6 cages × 2 mice = 48 mice, 4 groups (control + 3 doses),
+// one group per shelf. Every clinical case the app supports is seeded here.
 // ------------------------------------------------------------
 const groupsP1 = [
   { id: 'G1', name: 'Control',      isControl: true,  color: '#64748b' },
   { id: 'G2', name: 'Treatment-1',  isControl: false, color: '#2563eb' },
   { id: 'G3', name: 'Treatment-2',  isControl: false, color: '#7c3aed' },
+  { id: 'G4', name: 'Treatment-3',  isControl: false, color: '#dc2626' },
 ];
 
 // per-group weight profile (baseline weight + average daily gain)
 const groupProfile = {
-  G1: { baseline: 28.0, trend: 0.30 },   // control — normal healthy gain
-  G2: { baseline: 30.0, trend: 0.18 },   // treatment-1 — reduced gain
-  G3: { baseline: 32.0, trend: 0.08 },   // treatment-2 — poor gain
+  G1: { baseline: 27.5, trend: 0.30 },   // control — normal healthy gain
+  G2: { baseline: 28.0, trend: 0.22 },   // treatment-1 — slightly reduced gain
+  G3: { baseline: 28.5, trend: 0.14 },   // treatment-2 — reduced gain
+  G4: { baseline: 29.0, trend: 0.06 },   // treatment-3 — poorest gain
 };
 
 let _cageSeq = 0;
 function nextCageId() { _cageSeq++; return 'C' + _cageSeq; }
 
-// Layout: 4 shelves × 6 cages, 5 mice per cage. One group per shelf (cycled).
+// Layout: 4 shelves × 6 cages, 2 mice per cage (♂ + ♀). One group per shelf.
 const shelfLetters = ['A', 'B', 'C', 'D'];
 const cagesP1 = [];
 for (let si = 0; si < 4; si++) {
-  const groupId = groupsP1[si % groupsP1.length].id;
+  const groupId = groupsP1[si].id;
   const prof = groupProfile[groupId];
   const letter = shelfLetters[si];
   for (let pos = 1; pos <= 6; pos++) {
     const code = `${letter}-${String(pos).padStart(2, '0')}`;
     const mice = [];
-    for (let k = 1; k <= 5; k++) {
-      mice.push(makeMouse(`${code}-${k}`, 'M',
+    for (let k = 1; k <= 2; k++) {
+      mice.push(makeMouse(`${code}-${k}`, k === 1 ? 'M' : 'F',
         prof.baseline + rand(-1.2, 1.2),
         prof.trend + rand(-0.05, 0.05)));
     }
@@ -165,9 +226,17 @@ for (let si = 0; si < 4; si++) {
   }
 }
 
-// Seed a couple of individual treatments + one alert cage for demo
+// Seed one example of EVERY clinical case the app supports, so a demo can walk
+// through the whole workflow without creating anything:
+//   A-04-1  แจ้งผิดปกติ (flag, awaiting VET)      → cage orange
+//   B-03-1  กำลังรักษา (open sick case)            → cage yellow
+//   B-01-1  สั่งการุณยฆาต (humane order, pending)  → cage red
+//   C-02-1  รักษาหายแล้ว (closed 3-visit timeline) → cage normal
+//   C-02-2  Stop (ตัดออกจากค่าเฉลี่ย แต่ยังมีชีวิต)
+//   D-01-2  ตาย · humane · ส่งชันสูตร (+ necropsy record)
+//   C-04-2  ตาย · natural · ทำลายซาก (ไม่ชันสูตร)
 (function seedTreatments() {
-  // sick mouse in cage B-03 → cage flagged alert
+  // --- เคสรักษา: sick mouse in cage B-03, case still open → cage "care" ---
   const b03 = cagesP1.find(c => c.code === 'B-03');
   const sick = b03.mice[0];
   sick.remark = 'ซึม กินอาหารน้อยลง';
@@ -186,9 +255,10 @@ for (let si = 0; si < 4; si++) {
   });
   sick.careOpen = true;   // case still open → cage shows "care"
 
-  // a healed mouse elsewhere carries a multi-day treatment timeline (case closed)
+  // --- เคสรักษาที่หายแล้ว: multi-day treatment timeline, case closed ---
   const c02 = cagesP1.find(c => c.code === 'C-02');
-  c02.mice[2].treatments.push(
+  c02.mice[0].remark = 'เคยมีบาดแผลที่หาง · รักษาหายแล้ว';
+  c02.mice[0].treatments.push(
     {
       date: isoDaysAgo(6), time: '10:15', vet: 'สพ. อนันต์',
       signs: ['Wound/Ulcer'], support: ['Topical wound care', 'Separate'],
@@ -209,31 +279,36 @@ for (let si = 0; si < 4; si++) {
     },
   );
 
-  // demo: a vet has ordered humane endpoint (awaiting the experimenter to act)
+  // --- เคสสั่งตาย: vet ordered humane endpoint, awaiting the experimenter ---
   const b01 = cagesP1.find(c => c.code === 'B-01');
-  b01.mice[2].remark = 'น้ำหนักลดต่อเนื่อง เข้าเกณฑ์ endpoint';
-  b01.mice[2].humaneOrder = {
+  b01.mice[0].remark = 'น้ำหนักลดต่อเนื่อง เข้าเกณฑ์ endpoint';
+  const bw = b01.mice[0].weights;
+  bw[bw.length - 1].weight = Math.round((bw[bw.length - 2].weight - 2.4) * 10) / 10;
+  b01.mice[0].humaneOrder = {
     reason: 'น้ำหนักลด >20% จากค่าเริ่มต้น และไม่ตอบสนองต่อการรักษา',
     vet: 'สพ.ญ. กมล',
     date: isoDaysAgo(1),
   };
 
-  // demo: a member flagged a mouse as "looking abnormal" — awaits VET review (orange !)
+  // --- เคสแจ้งป่วย: a member flagged a mouse as "looks abnormal" (orange !) ---
   const a04 = cagesP1.find(c => c.code === 'A-04');
   a04.mice[0].flagOpen = true;
-  a04.mice[0].flag = { by: 'ก้อง ดูแลสัตว์ (AHS)', note: 'ขนยุ่ง นั่งซึมมุมกรง ไม่ค่อยขยับ', date: isoDaysAgo(0) };
+  a04.mice[0].flag = { by: 'ก้อง วัฒนา (AHS)', note: 'ขนยุ่ง นั่งซึมมุมกรง ไม่ค่อยขยับ', date: isoDaysAgo(0) };
 
-  // demo states: one "stopped" (out of stats) and one dead mouse
+  // --- Stop: out of the group average but still alive and eating ---
   c02.mice[1].excluded = true;
+  c02.mice[1].remark = 'ถูก Stop — ไม่นำไปคิดค่าเฉลี่ยกลุ่ม';
+
+  // --- เคสตาย (1/2): humane endpoint → ส่งชันสูตร (มี Necropsy Record) ---
   const d01 = cagesP1.find(c => c.code === 'D-01');
-  d01.mice[4].alive = false;
-  d01.mice[4].excluded = true;
-  d01.mice[4].death = {
+  d01.mice[1].alive = false;
+  d01.mice[1].excluded = true;
+  d01.mice[1].death = {
     type: 'humane', disposition: 'necropsy',
     note: 'น้ำหนักลดต่อเนื่องเกินเกณฑ์ · เก็บตับและไตส่งตรวจ',
     date: isoDaysAgo(2), time: '13:30', reporter: 'สพ.ญ. กมล',
   };
-  d01.mice[4].necropsy = {
+  d01.mice[1].necropsy = {
     date: isoDaysAgo(2),
     time: '14:00',
     examiner: 'สพ.ญ. กมล',
@@ -248,11 +323,11 @@ for (let si = 0; si < 4; si++) {
     avComment: '',
   };
 
-  // a second death — found dead, disposed (no necropsy)
+  // --- เคสตาย (2/2): found dead → ทำลายซาก (ไม่ชันสูตร) ---
   const c04 = cagesP1.find(c => c.code === 'C-04');
-  c04.mice[3].alive = false;
-  c04.mice[3].excluded = true;
-  c04.mice[3].death = {
+  c04.mice[1].alive = false;
+  c04.mice[1].excluded = true;
+  c04.mice[1].death = {
     type: 'natural', disposition: 'dispose',
     note: 'พบตายในกรงตอนเช้า ไม่มีอาการนำมาก่อน',
     date: isoDaysAgo(5), time: '08:15', reporter: 'นายสมชาย (AHS)',
@@ -260,59 +335,22 @@ for (let si = 0; si < 4; si++) {
 })();
 
 // ------------------------------------------------------------
-// Project 2 : Wound Healing (fewer cages, different layout)
+// Project 4 : the finished (closed) demo project — small, view-only.
 // ------------------------------------------------------------
-const groupsP2 = [
-  { id: 'G4', name: 'Control (Saline)',   isControl: true,  color: '#64748b' },
-  { id: 'G5', name: 'Treatment (Gel)',    isControl: false, color: '#16a34a' },
+const groupsDone = [
+  { id: 'GD1', name: 'Control',   isControl: true,  color: '#64748b' },
+  { id: 'GD2', name: 'Treatment', isControl: false, color: '#2563eb' },
 ];
-const cagesP2 = [
-  makeCage(nextCageId(), 'W-01', 'G4', 1, 1, [
-    makeMouse('W-01-1', 'F', 24.0, 0.08),
-    makeMouse('W-01-2', 'F', 23.5, 0.10),
-  ], { status: 'pending' }),
-  makeCage(nextCageId(), 'W-02', 'G4', 1, 2, [
-    makeMouse('W-02-1', 'F', 24.2, 0.09),
-  ], { status: 'pending' }),
-  makeCage(nextCageId(), 'W-03', 'G5', 2, 1, [
-    makeMouse('W-03-1', 'F', 23.8, 0.11),
-    makeMouse('W-03-2', 'F', 24.5, 0.12),
-  ], { status: 'pending' }),
-];
-
-// ------------------------------------------------------------
-// Project 4 : Dose-Response (จำลอง) — 4 shelves × 6 cages, 2 mice/cage, 4 groups
-// ------------------------------------------------------------
-const groupsP4 = [
-  { id: 'G7',  name: 'Control',   isControl: true,  color: '#64748b' },
-  { id: 'G8',  name: 'Dose Low',  isControl: false, color: '#2563eb' },
-  { id: 'G9',  name: 'Dose Mid',  isControl: false, color: '#7c3aed' },
-  { id: 'G10', name: 'Dose High', isControl: false, color: '#dc2626' },
-];
-const groupProfileP4 = {
-  G7:  { baseline: 27.5, trend: 0.30 },   // control — normal gain
-  G8:  { baseline: 28.0, trend: 0.22 },   // low dose
-  G9:  { baseline: 28.5, trend: 0.14 },   // mid dose
-  G10: { baseline: 29.0, trend: 0.06 },   // high dose — poorest gain
-};
-
-// Layout: 4 shelves × 6 cages, 2 mice per cage. One group per shelf.
-const cagesP4 = [];
-for (let si = 0; si < 4; si++) {
-  const groupId = groupsP4[si % groupsP4.length].id;
-  const prof = groupProfileP4[groupId];
+const cagesDone = [];
+for (let si = 0; si < 2; si++) {
+  const groupId = groupsDone[si].id;
   const letter = shelfLetters[si];
-  for (let pos = 1; pos <= 6; pos++) {
+  for (let pos = 1; pos <= 3; pos++) {
     const code = `${letter}-${String(pos).padStart(2, '0')}`;
-    const mice = [];
-    for (let k = 1; k <= 2; k++) {
-      mice.push(makeMouse(`${code}-${k}`, k === 1 ? 'M' : 'F',
-        prof.baseline + rand(-1.2, 1.2),
-        prof.trend + rand(-0.05, 0.05)));
-    }
-    cagesP4.push(makeCage(nextCageId(), code, groupId, si + 1, pos, mice, {
-      lastRecordDate: isoDaysAgo(1),
-    }));
+    cagesDone.push(makeCage(nextCageId(), code, groupId, si + 1, pos, [
+      makeMouse(`${code}-1`, 'M', 26.5 + rand(-1, 1), si === 0 ? 0.28 : 0.16),
+      makeMouse(`${code}-2`, 'F', 25.5 + rand(-1, 1), si === 0 ? 0.26 : 0.15),
+    ], { lastRecordDate: isoDaysAgo(96) }));
   }
 }
 
@@ -333,61 +371,25 @@ const DB = {
       cagesPerShelf: 6,
       groups: groupsP1,
       cages: cagesP1,
-      // ดร. นภา ถือ 2 บทบาท (PI+VET) ในโครงการนี้ เพื่อสาธิต union สิทธิ์
+      // (seedTeam below replaces these with the standard demo team)
       members: [
         { userId: 'u_pi', roles: ['PI'] },
-        { userId: 'u_napa', roles: ['PI', 'VET'] },
+        { userId: 'u_copi', roles: ['COPI'] },
+        { userId: 'u_ahs', roles: ['AHS'] },
         { userId: 'u_vet', roles: ['VET'] },
-        { userId: 'u_sci', roles: ['SCI'] },
-        { userId: 'u_ahs', roles: ['STOCK'] },
-        { userId: 'u_ec', roles: ['EC'] },
-      ],
-    },
-    {
-      id: 'P2',
-      name: 'Wound Healing Gel',
-      description: 'ทดสอบประสิทธิภาพเจลสมานแผลเทียบกับกลุ่มควบคุม',
-      startDate: '2026-06-20',
-      status: 'active',
-      shelves: 2,
-      cagesPerShelf: 4,
-      groups: groupsP2,
-      cages: cagesP2,
-      // ดร. สมชาย เป็น EC ในโครงการนี้ (ต่างจากโครงการ P1 ที่เป็น PI)
-      members: [
-        { userId: 'u_pi', roles: ['EC'] },
-        { userId: 'u_sci', roles: ['SCI'] },
-        { userId: 'u_vet', roles: ['VET'] },
-      ],
-    },
-    {
-      id: 'P4',
-      name: 'Dose-Response Study (จำลอง)',
-      description: 'ทดสอบ 3 ระดับขนาดยาเทียบกลุ่มควบคุม · 4 ชั้น × 6 กรง กรงละ 2 ตัว',
-      startDate: '2026-06-28',
-      status: 'active',
-      shelves: 4,
-      cagesPerShelf: 6,
-      groups: groupsP4,
-      cages: cagesP4,
-      members: [
-        { userId: 'u_pi', roles: ['PI'] },
-        { userId: 'u_sci', roles: ['SCI'] },
-        { userId: 'u_vet', roles: ['VET'] },
-        { userId: 'u_ahs', roles: ['STOCK'] },
       ],
     },
     {
       id: 'P3',
-      name: 'Behavioral Pilot (เสร็จสิ้น)',
-      description: 'โครงการนำร่องพฤติกรรม — ปิดโครงการแล้ว',
+      name: 'Behavioral Pilot',
+      description: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
       startDate: '2026-01-08',
       status: 'closed',
       shelves: 2,
-      cagesPerShelf: 4,
-      groups: [{ id: 'G6', name: 'Pilot', isControl: true, color: '#64748b' }],
-      cages: [],
-      members: [{ userId: 'u_napa', roles: ['PI'] }],
+      cagesPerShelf: 3,
+      groups: groupsDone,
+      cages: cagesDone,
+      members: [{ userId: 'u_pi', roles: ['PI'] }],
     },
   ],
   // append-only activity log (visible to everyone for transparency)
@@ -399,13 +401,17 @@ const DB = {
   const DAY = 86400000;
   const now = Date.now();
   DB.auditLog.push(
-    { ts: now - 5 * DAY, user: 'ผู้ดูแลระบบ', role: 'PI', action: 'สร้างโครงการ', detail: 'NAFLD Diet Study · 4 ชั้น × 6 กรง', project: 'NAFLD Diet Study' },
-    { ts: now - 4 * DAY, user: 'สพ. อนันต์', role: 'VET', action: 'บันทึกการรักษา', detail: 'C-02-3 · บาดแผลถลอกที่หาง', project: 'NAFLD Diet Study' },
-    { ts: now - 2 * DAY, user: 'สพ.ญ. กมล', role: 'VET', action: 'สั่ง Humane endpoint', detail: 'B-01-3 · น้ำหนักลด >20% ไม่ตอบสนองการรักษา', project: 'NAFLD Diet Study' },
-    { ts: now - 2 * DAY + 3600000, user: 'ปิยะ (นักวิทย์)', role: 'SCI', action: 'บันทึกการตาย', detail: 'D-01-5 · Humane endpoint · ชันสูตร/เก็บตัวอย่าง', project: 'NAFLD Diet Study' },
-    { ts: now - 1 * DAY, user: 'สพ.ญ. กมล', role: 'VET', action: 'บันทึกการรักษา', detail: 'B-03-1 · สงสัยติดเชื้อทางเดินอาหาร', project: 'NAFLD Diet Study' },
-    { ts: now - 1 * DAY + 1800000, user: 'ปิยะ (นักวิทย์)', role: 'SCI', action: 'ชั่งน้ำหนัก', detail: 'บันทึกกรง A-01', project: 'NAFLD Diet Study' },
-    { ts: now - 6 * 3600000, user: 'ปิยะ (นักวิทย์)', role: 'SCI', action: 'Stop (ไม่คิดเฉลี่ย)', detail: 'C-02-2 · หยุดนำไปคิดค่าเฉลี่ยกลุ่ม', project: 'NAFLD Diet Study' },
+    { ts: now - 5 * DAY, user: 'ดร. นภา ศรีสุข', role: 'PI', action: 'สร้างโครงการ', detail: 'NAFLD Diet Study · 4 ชั้น × 6 กรง กรงละ 2 ตัว', project: 'NAFLD Diet Study' },
+    { ts: now - 5 * DAY + 7200000, user: 'สพ.ญ. อรุณ ทองดี', role: 'AV', action: 'อนุมัติโครงการ', detail: 'NAFLD Diet Study · เอกสารครบถ้วน', project: 'NAFLD Diet Study' },
+    { ts: now - 6 * DAY, user: 'สพ. อนันต์', role: 'VET', action: 'บันทึกการรักษา', detail: 'C-02-1 · บาดแผลถลอกที่หาง', project: 'NAFLD Diet Study' },
+    { ts: now - 5 * DAY, user: 'นายสมชาย (AHS)', role: 'ACT', action: 'บันทึกการตาย', detail: 'C-04-2 · พบตายในกรง · ทำลายซาก', project: 'NAFLD Diet Study' },
+    { ts: now - 2 * DAY, user: 'สพ. อนันต์', role: 'VET', action: 'ปิดเคส', detail: 'C-02-1 · แผลหายดี ขนขึ้นปกติ', project: 'NAFLD Diet Study' },
+    { ts: now - 2 * DAY + 3600000, user: 'สพ.ญ. กมล', role: 'VET', action: 'บันทึกการตาย', detail: 'D-01-2 · Humane endpoint · ส่งชันสูตร', project: 'NAFLD Diet Study' },
+    { ts: now - 1 * DAY, user: 'สพ.ญ. กมล', role: 'VET', action: 'สั่ง Humane endpoint', detail: 'B-01-1 · น้ำหนักลด >20% ไม่ตอบสนองการรักษา', project: 'NAFLD Diet Study' },
+    { ts: now - 1 * DAY + 900000, user: 'สพ.ญ. กมล', role: 'VET', action: 'บันทึกการรักษา', detail: 'B-03-1 · สงสัยติดเชื้อทางเดินอาหาร', project: 'NAFLD Diet Study' },
+    { ts: now - 1 * DAY + 1800000, user: 'ปิยะ ใจดี (ACT)', role: 'ACT', action: 'ชั่งน้ำหนัก', detail: 'บันทึกกรง A-01', project: 'NAFLD Diet Study' },
+    { ts: now - 6 * 3600000, user: 'ดร. นภา ศรีสุข', role: 'PI', action: 'Stop (ไม่คิดเฉลี่ย)', detail: 'C-02-2 · หยุดนำไปคิดค่าเฉลี่ยกลุ่ม', project: 'NAFLD Diet Study' },
+    { ts: now - 3 * 3600000, user: 'ก้อง วัฒนา (AHS)', role: 'AHS', action: 'แจ้งผิดปกติ', detail: 'A-04-1 · ขนยุ่ง นั่งซึมมุมกรง', project: 'NAFLD Diet Study' },
   );
 })();
 
@@ -450,25 +456,28 @@ const DB = {
     };
   }
 
+  // the two remaining demo states — status is shown by the card badge, so the
+  // project names stay clean (no "(รออนุมัติ)" suffix)
   DB.projects.push(
-    tinyProject('P5', 'Cardio Safety Study (รออนุมัติ)',
+    tinyProject('P5', 'Cardio Safety Study',
       'ประเมินความปลอดภัยต่อระบบหัวใจของสารทดสอบ', 'u_pi', 'waiting'),
-    tinyProject('P6', 'Metabolic Screen (ถูกตีกลับ)',
+    tinyProject('P6', 'Metabolic Screen',
       'คัดกรองผลต่อเมแทบอลิซึมในหนูทดลอง', 'u_pi', 'rejected',
-      { rejectReason: 'ยังไม่แนบใบอนุมัติ EC และจำนวนสัตว์ต่อกลุ่มไม่สอดคล้องกับการคำนวณทางสถิติ', reviewedBy: 'อรุณ ควบคุมสัตว์', reviewedAt: isoDaysAgo(1) }),
+      { rejectReason: 'ยังไม่แนบใบอนุมัติ EC และจำนวนสัตว์ต่อกลุ่มไม่สอดคล้องกับการคำนวณทางสถิติ', reviewedBy: 'สพ.ญ. อรุณ ทองดี (AV)', reviewedAt: isoDaysAgo(1) }),
   );
 })();
 
-// demo: give every project the same position team so the members list is
-// consistent when switching positions. (Access is driven by App.myRoles, which
-// for a position persona returns its role in every project regardless.)
+// demo: give every project the same team so the members list is consistent when
+// switching personas. PI/CoPI/AHS are the working research team; Sci/VET/ACT are
+// the nominal per-project appointments (their real power comes from POSITION).
 (function seedTeam() {
   const TEAM = [
-    { userId: 'u_pi',  roles: ['PI'] },
-    { userId: 'u_ahs', roles: ['STOCK'] },
-    { userId: 'u_sci', roles: ['SCI'] },
-    { userId: 'u_vet', roles: ['VET'] },
-    { userId: 'u_ec',  roles: ['EC'] },
+    { userId: 'u_pi',     roles: ['PI'] },
+    { userId: 'u_copi',   roles: ['COPI'] },
+    { userId: 'u_ahs',    roles: ['AHS'] },
+    { userId: 'u_scisys', roles: ['SCI'] },
+    { userId: 'u_vet',    roles: ['VET'] },
+    { userId: 'u_act',    roles: ['ACT'] },
   ];
   DB.projects.forEach(p => { p.members = TEAM.map(m => ({ userId: m.userId, roles: [...m.roles] })); });
 })();
