@@ -78,45 +78,65 @@ const App = {
     });
   },
 
-  // ---- identity: POSITION (system) + PROJECT ROLES (per project) ----------
+  // ---- identity: POSITIONS (system, may be several) + PROJECT ROLES -------
   // See the permission-model comment at the top of data.js. Effective
-  // capability = POSITION caps ∪ PROJECT ROLE caps. Gate through can().
+  // capability = every position's caps ∪ every project role's caps, additive.
+  // Gate through can() — never test a position or role key directly.
   get user() { return DB.users.find(u => u.id === DB.currentUserId) || DB.users[0]; },
-  get position() { return POSITIONS[this.user.position] || POSITIONS.EXTERNAL; },
-  get isAdmin() { return this.user.position === 'ADMIN'; },
-  get isAV() { return this.user.position === 'AV'; },              // หัวหน้าสัตวแพทย์
-  get canReview() { return this.position.caps.includes('approve'); },   // approve/reject a project
-  get canManageUsers() { return this.position.caps.includes('manageUsers'); },
-  // service & oversight positions see every project without being appointed
-  get seesAllProjects() { return this.position.scope === 'all'; },
-  positionKey(u) { return (u || this.user).position; },
-  positionLabel(u) { const p = POSITIONS[this.positionKey(u)]; return p ? p.label : '—'; },
-  // legacy alias kept so older call sites keep printing something sensible
+  positionKeys(u) {
+    const x = u || this.user;
+    return (x.positions && x.positions.length) ? x.positions : ['EXTERNAL'];
+  },
+  get positions() { return this.positionKeys().map(k => POSITIONS[k]).filter(Boolean); },
+  positionLabel(u) {
+    return this.positionKeys(u).map(k => (POSITIONS[k] ? POSITIONS[k].label : k)).join(' + ');
+  },
+  // caps granted by the positions alone (no project involved)
+  hasPositionCap(cap) { return this.positions.some(p => p.caps.includes(cap)); },
+  get isAdmin() { return this.positionKeys().includes('ADMIN'); },
+  get isAV() { return this.positionKeys().includes('AV'); },        // หัวหน้าสัตวแพทย์
+  get canReview() { return this.hasPositionCap('approve'); },       // approve/reject a project
+  get canManageUsers() { return this.hasPositionCap('manageUsers'); },
+  // any position with facility-wide scope lets the user see every project
+  get seesAllProjects() { return this.positions.some(p => p.scope === 'all'); },
+  // legacy aliases kept so older call sites keep printing something sensible
+  positionKey(u) { return this.positionKeys(u).join(' + '); },
   sysRoleLabel(u) { return this.positionKey(u); },
 
+  // Is this project "live"? Project roles only take effect once AV has approved
+  // it — before that the project does not exist yet and only its creator may
+  // touch it (see myProjectRoles).
+  isApproved(project) { return (project.approval || 'approved') === 'approved'; },
+  isCreator(project) { return !!project && project.createdBy === this.user.id; },
+
   // project roles the current user holds (array of ROLES keys).
-  // A DEMO persona (user.projectRole set) holds that role in EVERY project so a
-  // client can compare views. Real deployment: membership in project.members only.
+  // A DEMO persona (user.projectRole set) holds that role in every project so a
+  // client can compare views. Real deployment: project.members drives it.
   myProjectRoles(project) {
-    if (this.user.projectRole) return [this.user.projectRole];
     if (!project) return [];
+    // waiting / rejected: nobody is appointed yet — only the creator acts, as PI
+    if (!this.isApproved(project)) return this.isCreator(project) ? ['PI'] : [];
+    if (this.user.projectRole) return [this.user.projectRole];
     const m = (project.members || []).find(x => x.userId === this.user.id);
     return m ? m.roles : [];
   },
-  // capability check — admin can do anything; otherwise POSITION ∪ PROJECT ROLES
+  // capability check — admin can do anything; otherwise positions ∪ project roles
   can(cap, project) {
     if (this.isAdmin) return true;
-    if (this.position.caps.includes(cap)) return true;
+    if (this.hasPositionCap(cap)) return true;
     return this.myProjectRoles(project).some(r => ROLES[r] && ROLES[r].caps.includes(cap));
   },
-  // can the current user see/open this project at all?
+  // can the current user see this project in the list at all?
   // needs the `view` capability first — that is what keeps GM (stockroom/finance
   // only) out of every project even though their position scope is 'all'.
   hasAccess(project) {
     if (!this.can('view', project)) return false;
     if (this.seesAllProjects) return true;
-    return this.myProjectRoles(project).length > 0;
+    return this.myProjectRoles(project).length > 0 || this.isCreator(project);
   },
+  // may the user actually open the project and look inside? OCH sees the cards
+  // but has no enterProject, so a card click takes them to the safety form instead.
+  canEnter(project) { return this.hasAccess(project) && this.can('enterProject', project); },
 
   // ---- top-level tabs (โครงการ / งานคลัง / การเงิน) ----------------------
   // Visibility is per capability: GM sees only the last two, EX sees all three,
@@ -130,7 +150,7 @@ const App = {
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
     if (name === 'supply' || name === 'finance') return name;
-    if (['projects', 'dashboard', 'reports', 'create'].includes(name)) return 'projects';
+    if (['projects', 'dashboard', 'reports', 'create', 'cagecare', 'dosing', 'ochreport'].includes(name)) return 'projects';
     return '';
   },
   // where to land after login / when a route is not permitted
@@ -165,6 +185,9 @@ const App = {
       case 'users':    this.go('users'); break;
       case 'supply':   this.go('supply'); break;
       case 'finance':  this.go('finance'); break;
+      case 'cagecare':
+      case 'dosing':
+      case 'ochreport': this.go(name, ds.projectId || this.route.projectId); break;
       case 'logout':   this.go('login'); break;
     }
   },
@@ -184,6 +207,7 @@ const App = {
     if (name === 'users') return this.renderUsers();
     if (name === 'supply') return this.renderModulePlaceholder('supply');
     if (name === 'finance') return this.renderModulePlaceholder('finance');
+    if (this.PROJECT_MODULES[name]) return this.renderProjectModule(name);
   },
 
   // ---------------------------------------------------------
@@ -195,6 +219,43 @@ const App = {
   MODULES: {
     supply:  { icon: '📦', title: 'งานคลัง', cap: 'viewSupply',  desc: 'คลังวัสดุ อาหารสัตว์ และครุภัณฑ์ของหน่วยสัตว์ทดลอง' },
     finance: { icon: '💰', title: 'การเงิน', cap: 'viewFinance', desc: 'งบประมาณ ค่าใช้จ่าย และการเบิกจ่าย' },
+  },
+
+  // Per-project screens reserved for the next phase. Same idea as MODULES, but
+  // these hang off a project, so they carry a projectId and a breadcrumb.
+  PROJECT_MODULES: {
+    cagecare: { icon: '🧹', title: 'บันทึกการดูแลกรง', cap: 'cageCare',
+                desc: 'บันทึกรายกรงว่าวันนั้นทำอะไรไปบ้าง — เปลี่ยน/เติมวัสดุรองนอน ทำความสะอาด' },
+    dosing:   { icon: '💉', title: 'การให้สารทดสอบ',   cap: 'dosing',
+                desc: 'ชนิดสาร/ยา ปริมาณ วิธีให้ และหัตถการตามโปรโตคอลการทดลอง' },
+    ochreport:{ icon: '🦺', title: 'รายงานความปลอดภัย', cap: 'ochReport',
+                desc: 'ตรวจหน้างานตามมาตรฐานชีวอนามัย และออกรายงานเมื่อพบสิ่งผิดปกติ' },
+  },
+  renderProjectModule(key) {
+    const mod = this.PROJECT_MODULES[key];
+    const p = Data.getProject(this.route.projectId);
+    if (!p) return this.go(this.homeRoute());
+    if (!this.hasAccess(p) || !this.can(mod.cap, p)) {
+      this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้านี้');
+      return this.go(this.homeRoute());
+    }
+    // OCH never enters the project, so their breadcrumb must not link inside it
+    const canEnter = this.canEnter(p);
+    this.shell(
+      `${canEnter ? `<a data-nav="project" data-project-id="${p.id}">${p.name}</a><span class="sep">/</span>` : `<span>${p.name}</span><span class="sep">/</span>`}
+       <a data-nav="${key}" data-project-id="${p.id}">${mod.title}</a>`,
+      `<div class="page">
+        <div class="page-head">
+          <div><h2>${mod.icon} ${mod.title}</h2><div class="desc">${p.name} · ${mod.desc}</div></div>
+        </div>
+        <div class="report-canvas module-soon">
+          <div class="ms-ico">${mod.icon}</div>
+          <h3>อยู่ระหว่างพัฒนา — เฟสถัดไป</h3>
+          <p>โครงสร้างหน้าและสิทธิ์การเข้าถึงถูกวางไว้แล้ว รอออกแบบรายละเอียดร่วมกับผู้ใช้งานจริง</p>
+          <button class="btn" data-nav="projects">← กลับไปหน้ารายการโครงการ</button>
+        </div>
+      </div>`
+    );
   },
   renderModulePlaceholder(key) {
     const mod = this.MODULES[key];
@@ -216,8 +277,8 @@ const App = {
   },
 
   // ---- user account helpers ----
-  adminCount() { return DB.users.filter(u => u.position === 'ADMIN').length; },
-  isLastAdmin(u) { return u.position === 'ADMIN' && this.adminCount() <= 1; },
+  adminCount() { return DB.users.filter(u => (u.positions || []).includes('ADMIN')).length; },
+  isLastAdmin(u) { return (u.positions || []).includes('ADMIN') && this.adminCount() <= 1; },
 
   // ---- audit log (append-only, visible to everyone) ----
   log(action, detail, projectName = '') {
@@ -493,15 +554,21 @@ const App = {
   // nobody enters the dashboard — PI edits via the create/edit page, AV reviews via the
   // popup, everyone else (even members) is blocked.
   openProject(p) {
+    // OCH inspects on site: a card click opens the safety report, never the dashboard
+    if (!this.can('enterProject', p) && this.can('ochReport', p)) {
+      return this.go('ochreport', p.id);
+    }
     const approval = p.approval || 'approved';
     if (approval === 'waiting' || approval === 'rejected') {
-      if (this.can('editProject', p)) this.editProject(p);        // PI/admin → edit page
+      // nobody is appointed yet — only the creator may edit and resubmit
+      if (this.isCreator(p) || this.isAdmin) this.editProject(p);
       else if (this.canReview) this.openProjectInfo(p);           // AV → review popup
       else this.toast('โครงการนี้ยังไม่ได้รับอนุมัติ — ยังเข้าใช้งานไม่ได้');
       return;
     }
-    if (this.hasAccess(p)) this.go('dashboard', p.id);            // approved (incl. closed) → dashboard
+    if (this.canEnter(p)) this.go('dashboard', p.id);             // approved (incl. closed) → dashboard
     else if (this.canReview) this.openProjectInfo(p);
+    else this.toast('คุณไม่มีสิทธิ์เข้าไปในโครงการนี้');
   },
 
   // load an existing (non-approved) project into the create wizard for editing
@@ -993,9 +1060,10 @@ const App = {
   renderDashboard() {
     const p = Data.getProject(this.route.projectId);
     if (!p) return this.go('projects');
-    if (!this.hasAccess(p)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงโครงการนี้'); return this.go('projects'); }
+    // `canEnter` also stops OCH, who sees the cards but never the inside
+    if (!this.canEnter(p)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงโครงการนี้'); return this.go(this.homeRoute()); }
     // waiting/rejected projects aren't "real" yet — nobody enters the dashboard
-    // (PI edits via the create/edit page; AV reviews via the info popup).
+    // (the creator edits via the create/edit page; AV reviews via the info popup).
     if ((p.approval || 'approved') !== 'approved') {
       this.toast('โครงการยังไม่ได้รับอนุมัติ — ยังเปิดใช้งานไม่ได้');
       return this.go('projects');
@@ -1047,7 +1115,9 @@ const App = {
            <span style="flex:1"></span>
            <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
            <button class="btn" id="deathReport">✝ รายงานการตาย</button>
-           <button class="btn" data-nav="reports">📈 กราฟ</button>
+           ${this.can('viewReports', p) ? `<button class="btn" data-nav="reports">📈 กราฟ</button>` : ''}
+           ${operational && this.can('cageCare', p) ? `<button class="btn" data-nav="cagecare" data-project-id="${p.id}">🧹 ดูแลกรง</button>` : ''}
+           ${operational && this.can('dosing', p) ? `<button class="btn" data-nav="dosing" data-project-id="${p.id}">💉 ให้สารทดสอบ</button>` : ''}
            ${canWeigh ? `<button class="btn btn-primary" id="startWeighing">⚖️ ชั่งน้ำหนัก</button>` : ''}
          </div>`;
 
@@ -1291,8 +1361,9 @@ const App = {
     const group = Data.getGroup(p, cage.groupId);
     const controlChange = Data.controlAvgChange(p);
     const canTreat = this.can('treat', p);
-    const canDeathStop = this.can('deathStop', p);
-    const canStop = this.can('stop', p);      // PI only
+    const canReportDeath = this.can('reportDeath', p);   // anyone on the team
+    const canCarcass = this.can('handleCarcass', p);     // SCI / VET only
+    const canStop = this.can('stop', p);      // PI / CoPI only
     const canFlag = this.can('flag', p);      // everyone in the project
     const operational = this.isOperational(p); // recording actions require an approved, open project
 
@@ -1318,10 +1389,14 @@ const App = {
         if (m.flagOpen) items.push(`<div class="menu-item flag-wait">⚠️ รอ VET ตรวจสอบ</div>`);
         else if (canFlag && !m.careOpen) items.push(`<button class="menu-item flag" data-act="flag" data-mid="${m.id}">⚠️ แจ้งผิดปกติ</button>`);
         if (canStop) items.push(`<button class="menu-item stop" data-act="stop" data-mid="${m.id}">${m.excluded ? 'รวมกลับเข้าค่าเฉลี่ย' : 'Stop (ไม่คิดเฉลี่ย)'}</button>`);
-        if (canDeathStop) items.push(`<button class="menu-item death" data-act="death" data-mid="${m.id}">Death (บันทึกการตาย)</button>`);
+        if (canReportDeath) items.push(`<button class="menu-item death" data-act="death" data-mid="${m.id}">แจ้งหนูตาย</button>`);
       }
+      // a frozen carcass still needs SCI/VET to decide dispose vs necropsy
+      const frozen = dead && m.death && m.death.carcass === 'frozen';
       const actions = dead
-        ? `<span class="empty-note" style="font-size:12px">${m.death ? this.deathLabel(m.death) : 'ตาย'}</span>`
+        ? (frozen && canCarcass && operational
+            ? `<button class="mini-btn" data-act="carcass" data-mid="${m.id}">❄️ จัดการซาก</button>`
+            : `<span class="empty-note" style="font-size:12px">${m.death ? this.deathLabel(m.death) : 'ตาย'}</span>`)
         : items.length
         ? `<div class="kebab-wrap">
              <button class="mini-btn kebab" data-act="menu" data-mid="${m.id}">⋯</button>
@@ -1395,6 +1470,8 @@ const App = {
           this.openCagePopup(p, cage);              // refresh table
         } else if (act === 'death') {
           this.openDeathForm(p, cage, m);
+        } else if (act === 'carcass') {
+          this.openCarcassForm(p, cage, m);
         } else if (act === 'flag') {
           this.openFlagForm(p, cage, m);
         }
@@ -1410,9 +1487,11 @@ const App = {
     });
   },
 
-  // short summary label for a recorded death
+  // short summary label for a recorded death. A carcass that has only been
+  // reported (stage 1) is still in the freezer awaiting a SCI/VET decision.
   deathLabel(d) {
     const t = d.type === 'humane' ? 'Humane endpoint' : 'ตายเอง';
+    if (!d.disposition) return `${t} · ❄️ แช่แข็ง รอจัดการซาก`;
     const disp = d.disposition === 'necropsy' ? 'ชันสูตร/เก็บตัวอย่าง' : 'ทำลายซาก';
     return `${t} · ${disp}`;
   },
@@ -1450,15 +1529,20 @@ const App = {
     };
   },
 
-  // Death recording dialog
+  // STAGE 1 — report a death (`reportDeath`, anyone on the team).
+  // The carcass goes to the freezer; SCI/VET decide dispose vs necropsy later.
   openDeathForm(p, cage, mouse) {
     const d = mouse.death || {};
     this.openModal(`
       <div class="modal-head">
-        <div><h3>✝ บันทึกการตาย — ${mouse.code}</h3><div class="sub">กรง ${cage.code}</div></div>
+        <div><h3>✝ แจ้งหนูตาย — ${mouse.code}</h3><div class="sub">กรง ${cage.code}</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
       </div>
       <div class="modal-body">
+        <p class="empty-note" style="margin-bottom:12px">
+          แจ้งว่าพบหนูตาย — ระบบจะบันทึกว่า <b>นำซากไปแช่แข็ง</b> ไว้ก่อน
+          แล้วรอ <b>นักวิทยาศาสตร์ (Sci) หรือสัตวแพทย์ (VET)</b> เข้ามาตัดสินใจว่าจะทำลายซากหรือส่งชันสูตรตามโปรโตคอล
+        </p>
         <div class="form-row3">
           <div class="field"><label>วันที่ (Date)</label><input id="deathDate" value="${d.date || todayISO()}"></div>
           <div class="field"><label>เวลา (Time)</label><input id="deathTime" value="${d.time || nowHM()}"></div>
@@ -1472,61 +1556,104 @@ const App = {
           </div>
         </div>
         <div class="field">
-          <label>การจัดการซาก</label>
-          <div class="choice-row" id="deathDisp">
-            <button type="button" class="choice ${d.disposition === 'dispose' ? 'sel' : ''}" data-v="dispose">🗑️ ทำลายซาก</button>
-            <button type="button" class="choice ${d.disposition === 'necropsy' ? 'sel' : ''}" data-v="necropsy">🔬 ชันสูตร / เก็บตัวอย่าง</button>
-          </div>
-        </div>
-        <div class="field">
           <label>รายละเอียด / หมายเหตุ (Clinical Sign ก่อนตาย)</label>
-          <textarea id="deathNote" rows="3" placeholder="เช่น พบตายในกรงตอนเช้า, อาการก่อนตาย, ตัวอย่างที่เก็บ ฯลฯ">${d.note || ''}</textarea>
+          <textarea id="deathNote" rows="3" placeholder="เช่น พบตายในกรงตอนเช้า, อาการก่อนตาย ฯลฯ">${d.note || ''}</textarea>
         </div>
       </div>
       <div class="modal-foot">
         <button class="btn" id="cancelDeath">ยกเลิก</button>
-        <button class="btn btn-danger" id="saveDeath">💾 บันทึกการตาย</button>
+        <button class="btn btn-danger" id="saveDeath">❄️ แจ้งตาย & นำไปแช่แข็ง</button>
       </div>
     `);
 
-    let sel = { type: d.type || null, disposition: d.disposition || null };
-    const wire = (id, key) => {
-      this.el(id).querySelectorAll('.choice').forEach(b => {
-        b.onclick = () => {
-          sel[key] = b.dataset.v;
-          this.el(id).querySelectorAll('.choice').forEach(x => x.classList.toggle('sel', x === b));
-        };
-      });
-    };
-    wire('deathType', 'type');
-    wire('deathDisp', 'disposition');
+    let type = d.type || null;
+    this.el('deathType').querySelectorAll('.choice').forEach(b => {
+      b.onclick = () => {
+        type = b.dataset.v;
+        this.el('deathType').querySelectorAll('.choice').forEach(x => x.classList.toggle('sel', x === b));
+      };
+    });
 
     this.el('closeModal').onclick = () => this.openCagePopup(p, cage);
     this.el('cancelDeath').onclick = () => this.openCagePopup(p, cage);
     this.el('saveDeath').onclick = () => {
-      if (!sel.type) { this.toast('กรุณาเลือกลักษณะการตาย'); return; }
-      if (!sel.disposition) { this.toast('กรุณาเลือกการจัดการซาก'); return; }
+      if (!type) { this.toast('กรุณาเลือกลักษณะการตาย'); return; }
       mouse.alive = false;
       mouse.excluded = true;   // dead → out of stats automatically
       mouse.careOpen = false;
       mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved on death
       mouse.humaneOrder = null; // order fulfilled once death is recorded
       mouse.death = {
-        type: sel.type,
-        disposition: sel.disposition,
+        type,
+        carcass: 'frozen',      // stage 1 done — awaiting SCI/VET
+        disposition: null,
         note: this.el('deathNote').value.trim(),
         date: this.el('deathDate').value || todayISO(),
         time: this.el('deathTime').value.trim(),
         reporter: this.el('deathReporter').value.trim(),
+        handledBy: '', handledAt: '',
       };
-      this.log('บันทึกการตาย', `${mouse.code} · ${this.deathLabel(mouse.death)}`, p.name);
-      // if a necropsy was chosen, go straight to the necropsy form so it actually gets recorded
-      if (sel.disposition === 'necropsy') {
-        this.toast(`บันทึกการตายแล้ว — กรอกผลการผ่าชันสูตรต่อได้เลย`);
+      this.log('แจ้งหนูตาย', `${mouse.code} · ${this.deathLabel(mouse.death)}`, p.name);
+      this.toast(`บันทึกแล้ว — ซากของ ${mouse.code} อยู่ระหว่างแช่แข็ง รอ Sci/VET จัดการ`);
+      this.openCagePopup(p, cage);
+    };
+  },
+
+  // STAGE 2 — decide what happens to the frozen carcass (`handleCarcass`, SCI/VET).
+  openCarcassForm(p, cage, mouse) {
+    const d = mouse.death || {};
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>❄️ จัดการซาก — ${mouse.code}</h3><div class="sub">กรง ${cage.code} · แจ้งตายเมื่อ ${d.date || '—'} ${d.time || ''} โดย ${d.reporter || '—'}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="empty-note" style="margin-bottom:12px">ตัดสินใจตามโปรโตคอลของโครงการ — หากเลือกชันสูตร ระบบจะเปิดฟอร์มบันทึกการผ่าชันสูตรซาก (LA Guide-AF 11.3-01) ต่อทันที</p>
+        <div class="field">
+          <label>ผลการตัดสินใจ</label>
+          <div class="choice-row" id="carcassDisp">
+            <button type="button" class="choice" data-v="dispose">🗑️ ทำลายซาก</button>
+            <button type="button" class="choice" data-v="necropsy">🔬 ชันสูตร / เก็บตัวอย่าง</button>
+          </div>
+        </div>
+        <div class="form-row3">
+          <div class="field"><label>ผู้ดำเนินการ</label><input id="carcassBy" value="${this.user.name}"></div>
+          <div class="field"><label>วันที่</label><input id="carcassAt" value="${todayISO()}"></div>
+        </div>
+        <div class="field">
+          <label>หมายเหตุเพิ่มเติม</label>
+          <textarea id="carcassNote" rows="2" placeholder="เช่น ตัวอย่างที่เก็บ, เหตุผลที่ไม่ชันสูตร">${d.note || ''}</textarea>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="cancelCarcass">ยกเลิก</button>
+        <button class="btn btn-primary" id="saveCarcass">บันทึก</button>
+      </div>
+    `);
+
+    let disp = null;
+    this.el('carcassDisp').querySelectorAll('.choice').forEach(b => {
+      b.onclick = () => {
+        disp = b.dataset.v;
+        this.el('carcassDisp').querySelectorAll('.choice').forEach(x => x.classList.toggle('sel', x === b));
+      };
+    });
+    this.el('closeModal').onclick = () => this.openCagePopup(p, cage);
+    this.el('cancelCarcass').onclick = () => this.openCagePopup(p, cage);
+    this.el('saveCarcass').onclick = () => {
+      if (!disp) { this.toast('กรุณาเลือกว่าจะทำลายซากหรือชันสูตร'); return; }
+      mouse.death.carcass = 'done';
+      mouse.death.disposition = disp;
+      mouse.death.note = this.el('carcassNote').value.trim();
+      mouse.death.handledBy = this.el('carcassBy').value.trim();
+      mouse.death.handledAt = this.el('carcassAt').value || todayISO();
+      this.log('จัดการซาก', `${mouse.code} · ${disp === 'necropsy' ? 'ส่งชันสูตร' : 'ทำลายซาก'}`, p.name);
+      if (disp === 'necropsy') {
+        this.toast('บันทึกแล้ว — กรอกผลการผ่าชันสูตรต่อได้เลย');
         this.openNecropsyForm(p, cage, mouse);
         return;
       }
-      this.toast(`บันทึกการตายของ ${mouse.code} แล้ว`);
+      this.toast(`ทำลายซากของ ${mouse.code} เรียบร้อย`);
       this.openCagePopup(p, cage);
     };
   },
@@ -1537,7 +1664,7 @@ const App = {
   openMouseDetail(p, cage, mouse) {
     const operational = this.isOperational(p);        // no recording actions on waiting/rejected/closed
     const canTreat = this.can('treat', p) && operational;
-    const canNecropsy = this.can('deathStop', p) && operational;   // necropsy (gross exam) follows the death record
+    const canNecropsy = this.can('handleCarcass', p) && operational;   // SCI/VET perform the gross exam
     const cur = Data.latestWeight(mouse);
     const chg = Data.weightChange(mouse);
     const chgClass = chg == null ? '' : chg >= 0 ? 'up' : 'down';
@@ -1596,7 +1723,10 @@ const App = {
           ${!mouse.alive && mouse.death ? `
             <div class="death-banner">
               <b>✝ บันทึกการตาย</b> — ${this.deathLabel(mouse.death)}
-              <div class="order-meta">${mouse.death.date}${mouse.death.note ? ' · ' + mouse.death.note : ''}</div>
+              <div class="order-meta">แจ้งโดย ${mouse.death.reporter || '—'} · ${mouse.death.date} ${mouse.death.time || ''}${mouse.death.note ? ' · ' + mouse.death.note : ''}</div>
+              ${mouse.death.carcass === 'frozen'
+                ? `<div class="order-meta">❄️ ซากอยู่ระหว่างแช่แข็ง — รอนักวิทยาศาสตร์ (Sci) หรือสัตวแพทย์ (VET) ตัดสินใจทำลาย/ชันสูตร</div>`
+                : `<div class="order-meta">ดำเนินการโดย ${mouse.death.handledBy || '—'}${mouse.death.handledAt ? ' · ' + mouse.death.handledAt : ''}</div>`}
             </div>` : ''}
           <div class="stat-row">
             <div class="stat"><div class="l">น้ำหนักล่าสุด</div><div class="v">${this.g(cur)} g</div></div>
@@ -1632,6 +1762,8 @@ const App = {
         ${canTreat && mouse.alive ? `<button class="btn btn-primary" id="addTreat">🩺 ${mouse.flagOpen ? 'เปิดเคส (ป่วย)' : 'รายงานอาการป่วย'}</button>` : ''}
         ${canTreat && mouse.alive && mouse.careOpen ? `<button class="btn btn-green" id="closeCase">✓ ปิดเคส</button>` : ''}
         ${canTreat && mouse.alive && !mouse.humaneOrder ? `<button class="btn btn-danger" id="humaneBtn">Humane endpoint</button>` : ''}
+        ${canNecropsy && !mouse.alive && mouse.death && mouse.death.carcass === 'frozen'
+          ? `<button class="btn btn-primary" id="carcassBtn">❄️ จัดการซาก (ทำลาย / ชันสูตร)</button>` : ''}
         ${canNecropsy && !mouse.alive && mouse.death && mouse.death.disposition === 'necropsy'
           ? `<button class="btn btn-primary" id="necropsyBtn">🔬 ${mouse.necropsy ? 'แก้ไขผลชันสูตร' : 'บันทึกผลชันสูตร'}</button>` : ''}
       </div>
@@ -1678,6 +1810,9 @@ const App = {
     }
     if (canNecropsy && !mouse.alive && mouse.death && mouse.death.disposition === 'necropsy') {
       this.el('necropsyBtn').onclick = () => this.openNecropsyForm(p, cage, mouse);
+    }
+    if (canNecropsy && !mouse.alive && mouse.death && mouse.death.carcass === 'frozen') {
+      this.el('carcassBtn').onclick = () => this.openCarcassForm(p, cage, mouse);
     }
   },
 
@@ -2642,8 +2777,10 @@ const App = {
   },
 
   renderReports() {
-    const p = Data.getProject(this.route.projectId) || DB.projects.find(x => this.hasAccess(x));
-    if (!p || !this.hasAccess(p)) { this.toast('ไม่มีสิทธิ์เข้าถึง'); return this.go('projects'); }
+    const p = Data.getProject(this.route.projectId) || DB.projects.find(x => this.canEnter(x));
+    if (!p || !this.canEnter(p)) { this.toast('ไม่มีสิทธิ์เข้าถึง'); return this.go(this.homeRoute()); }
+    // graphs are the research result — oversight roles (IACUC/QA/Audit/EX) are excluded
+    if (!this.can('viewReports', p)) { this.toast('ตำแหน่งของคุณไม่มีสิทธิ์ดูหน้ากราฟ'); return this.go('dashboard', p.id); }
     // state: mode · groupIds · metrics · groupColor (colour=group) · metricDash (line style=data type)
     if (!this.reportState || this.reportState.projectId !== p.id) {
       this.reportState = {
@@ -2986,7 +3123,7 @@ const App = {
     const mine = DB.projects.filter(p => this.hasAccess(p)).map(p => {
       const roles = this.myProjectRoles(p);
       const tags = roles.length
-        ? roles.map(r => `<span class="role-tag">${r}</span>${ROLES[r] && ROLES[r].nominal ? ' <span class="empty-note">(ในนาม)</span>' : ''}`).join(' ')
+        ? roles.map(r => `<span class="role-tag">${r}</span>`).join(' ')
         : `<span class="empty-note">เข้าถึงตามตำแหน่ง ${this.positionKey()}</span>`;
       return `<tr><td><b>${p.name}</b></td><td>${tags}</td></tr>`;
     }).join('') || `<tr><td colspan="2" class="empty-note">ยังไม่มีโครงการที่เข้าถึงได้</td></tr>`;
@@ -2995,7 +3132,7 @@ const App = {
       `<a data-nav="roles">ข้อมูลผู้ใช้</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>👤 ข้อมูลผู้ใช้ & สิทธิ์</h2><div class="desc">สิทธิ์มี 2 ชั้น — <b>ตำแหน่งระดับระบบ</b> (1 ตำแหน่งต่อบัญชี) และ <b>บทบาทในโครงการ</b> (ทีมวิจัย) · สิทธิ์ที่ใช้จริง = รวมกันทั้งสองชั้น</div></div>
+          <div><h2>👤 ข้อมูลผู้ใช้ & สิทธิ์</h2><div class="desc">สิทธิ์มี 2 ชั้น — <b>ตำแหน่งระดับระบบ</b> (ถือได้มากกว่า 1) และ <b>บทบาทในโครงการ</b> · สิทธิ์ที่ใช้จริง = <b>รวมกันทุกตำแหน่งและทุกบทบาท</b> ไม่มีการหักออก</div></div>
           <button class="btn" id="myPwBtn">🔒 เปลี่ยนรหัสผ่านของฉัน</button>
         </div>
 
@@ -3016,7 +3153,7 @@ const App = {
         <div class="report-canvas" style="padding:0;overflow:auto">
           <table class="data perm-matrix"><thead><tr><th>สิทธิ์ / การกระทำ</th>${prj.head}</tr></thead><tbody>${prj.rows}</tbody></table>
         </div>
-        <p class="empty-note" style="margin-top:10px">Sci / VET / ACT ที่ระบุในโครงการเป็น <b>การแต่งตั้งในนาม</b> เท่านั้น — อำนาจจริงมาจากตำแหน่งระดับระบบของบุคคลนั้น · การจัดสมาชิกทำได้จาก “👥 สมาชิก” ในหน้าโครงการ (PI และผู้ดูแลระบบ)</p>
+        <p class="empty-note" style="margin-top:10px">สิทธิ์ที่ใช้จริง = <b>รวมทุกตำแหน่งระบบ + ทุกบทบาทในโครงการ</b> · Sci / VET / ACT ที่ระบุในโครงการให้สิทธิ์เท่าตำแหน่งระบบชื่อเดียวกัน <b>แต่จำกัดเฉพาะโครงการนั้น</b> (คนที่ถือตำแหน่งระบบอยู่แล้วจึงเท่ากับเป็นการแต่งตั้งในนาม) · การแต่งตั้งสมาชิกทำโดย <b>หัวหน้าสัตวแพทย์ (AV)</b></p>
       </div>`
     );
     this.el('myPwBtn').onclick = () => this.openMyPassword();
@@ -3034,7 +3171,8 @@ const App = {
       return `<tr>
         <td><b>${u.name}</b>${self ? ' <span class="role-tag">คุณ</span>' : ''}</td>
         <td class="mono" style="color:var(--text-muted)">${u.email}</td>
-        <td><span class="audit-act ${u.position === 'ADMIN' ? 'red' : 'gray'}">${u.position}</span> <span style="color:var(--text-muted);font-size:12px">${this.positionLabel(u)}</span></td>
+        <td>${this.positionKeys(u).map(k => `<span class="audit-act ${k === 'ADMIN' ? 'red' : 'gray'}">${k}</span>`).join(' ')}
+            <span style="color:var(--text-muted);font-size:12px">${this.positionLabel(u)}</span></td>
         <td style="white-space:nowrap">
           <button class="mini-btn" data-edit="${u.id}">แก้ไข</button>
           <button class="mini-btn danger" data-del="${u.id}" ${self || lastAdmin ? 'disabled title="ลบไม่ได้"' : ''}>ลบ</button>
@@ -3080,9 +3218,10 @@ const App = {
 
   openUserForm(user) {
     const isNew = !user;
-    const u = user || { firstName: '', lastName: '', email: '', password: '', position: 'SCI' };
+    const u = user || { firstName: '', lastName: '', email: '', password: '', positions: ['SCI'] };
     const self = user && user.id === this.user.id;
-    const lockRole = self && user.position === 'ADMIN';   // admin can't demote self
+    const held = [...(u.positions || [])];
+    const lockRole = self && held.includes('ADMIN');   // admin can't demote self
     // only a full admin may hand out the ADMIN position
     const posChoices = POSITION_ORDER.filter(k => k !== 'ADMIN' || this.isAdmin);
 
@@ -3099,12 +3238,13 @@ const App = {
         <div class="field"><label>อีเมล <span style="color:var(--red)">*</span></label><input id="uEmail" type="email" value="${u.email}"></div>
         <div class="field"><label>รหัสผ่าน ${isNew ? '<span style="color:var(--red)">*</span>' : '<span style="font-weight:400;color:var(--text-muted)">(เว้นว่างหากไม่เปลี่ยน)</span>'}</label>
           <input id="uPass" type="text" value="${isNew ? u.password : ''}" placeholder="${isNew ? 'อย่างน้อย 6 ตัวอักษร' : '••••••'}"></div>
-        <div class="field"><label>ตำแหน่งระดับระบบ <span style="color:var(--red)">*</span></label>
+        <div class="field"><label>ตำแหน่งระดับระบบ <span style="color:var(--red)">*</span>
+            <span style="font-weight:400;color:var(--text-muted)">— เลือกได้มากกว่า 1 สิทธิ์จะรวมกัน</span></label>
           <div class="pos-grid" id="uRole">
-            ${posChoices.map(k => `<button type="button" class="role-sys ${u.position === k ? 'sel' : ''}" data-r="${k}" ${lockRole ? 'disabled' : ''} title="${POSITIONS[k].label}">${k}</button>`).join('')}
+            ${posChoices.map(k => `<button type="button" class="role-sys ${held.includes(k) ? 'sel' : ''}" data-r="${k}" ${lockRole && k === 'ADMIN' ? 'disabled' : ''} title="${POSITIONS[k].label}">${k}</button>`).join('')}
           </div>
-          <p class="empty-note" id="posHint">${POSITIONS[u.position] ? POSITIONS[u.position].label : ''}</p>
-          ${lockRole ? '<p class="empty-note">ผู้ดูแลระบบลดสิทธิ์ตัวเองไม่ได้</p>' : ''}
+          <p class="empty-note" id="posHint">${held.map(k => POSITIONS[k] && POSITIONS[k].label).filter(Boolean).join(' + ') || 'ยังไม่ได้เลือกตำแหน่ง'}</p>
+          ${lockRole ? '<p class="empty-note">ผู้ดูแลระบบถอดตำแหน่ง ADMIN ของตัวเองไม่ได้</p>' : ''}
         </div>
       </div>
       <div class="modal-foot">
@@ -3113,13 +3253,16 @@ const App = {
       </div>
     `);
 
-    let role = u.position;
+    // multi-select: a person may hold several positions and their caps add up
+    const chosen = new Set(held);
     this.el('uRole').querySelectorAll('.role-sys').forEach(b => {
       b.onclick = () => {
         if (b.disabled) return;
-        role = b.dataset.r;
-        this.el('uRole').querySelectorAll('.role-sys').forEach(x => x.classList.toggle('sel', x === b));
-        this.el('posHint').textContent = POSITIONS[role].label;
+        const k = b.dataset.r;
+        if (chosen.has(k)) chosen.delete(k); else chosen.add(k);
+        b.classList.toggle('sel', chosen.has(k));
+        this.el('posHint').textContent =
+          [...chosen].map(x => POSITIONS[x].label).join(' + ') || 'ยังไม่ได้เลือกตำแหน่ง';
       };
     });
     this.el('closeModal').onclick = () => this.closeModal();
@@ -3134,18 +3277,20 @@ const App = {
       if (DB.users.some(x => x.email.toLowerCase() === email.toLowerCase() && (!user || x.id !== user.id))) { this.toast('อีเมลนี้ถูกใช้แล้ว'); return; }
       if (isNew && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
       if (!isNew && pass && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
-      // last-admin safety net (role toggle is already disabled for self-admin)
-      if (user && user.position === 'ADMIN' && role !== 'ADMIN' && this.isLastAdmin(user)) { this.toast('ต้องมีผู้ดูแลระบบอย่างน้อย 1 คน'); return; }
+      const roles = [...chosen];
+      if (!roles.length) { this.toast('ต้องเลือกอย่างน้อย 1 ตำแหน่ง'); return; }
+      // last-admin safety net (the ADMIN button is already disabled for self-admin)
+      if (user && (user.positions || []).includes('ADMIN') && !roles.includes('ADMIN') && this.isLastAdmin(user)) { this.toast('ต้องมีผู้ดูแลระบบอย่างน้อย 1 คน'); return; }
 
       if (isNew) {
-        DB.users.push({ id: 'u_' + Date.now().toString(36), firstName, lastName, email, password: pass, position: role, projectRole: null, name: `${firstName} ${lastName}`.trim() });
-        this.log('เพิ่มผู้ใช้', `${firstName} ${lastName} (${email}) · ${role}`, '');
+        DB.users.push({ id: 'u_' + Date.now().toString(36), firstName, lastName, email, password: pass, positions: roles, projectRole: null, name: `${firstName} ${lastName}`.trim() });
+        this.log('เพิ่มผู้ใช้', `${firstName} ${lastName} (${email}) · ${roles.join(' + ')}`, '');
       } else {
         user.firstName = firstName; user.lastName = lastName; user.email = email;
         user.name = `${firstName} ${lastName}`.trim();
-        user.position = role;
+        user.positions = roles;
         if (pass) user.password = pass;
-        this.log('แก้ไขผู้ใช้', `${user.name} (${email}) · ${role}`, '');
+        this.log('แก้ไขผู้ใช้', `${user.name} (${email}) · ${roles.join(' + ')}`, '');
       }
       this.closeModal();
       this.toast('บันทึกผู้ใช้แล้ว');
@@ -3195,18 +3340,18 @@ const App = {
     const rows = p.members.map(m => {
       const u = DB.users.find(x => x.id === m.userId);
       const chips = ROLE_ORDER.map(rk =>
-        `<button type="button" class="role-chip ${m.roles.includes(rk) ? 'on' : ''} ${ROLES[rk].nominal ? 'nominal' : ''}" data-uid="${m.userId}" data-role="${rk}" title="${ROLES[rk].label}">${rk}</button>`).join('');
+        `<button type="button" class="role-chip ${m.roles.includes(rk) ? 'on' : ''}" data-uid="${m.userId}" data-role="${rk}" title="${ROLES[rk].label}">${rk}</button>`).join('');
       return `<tr>
-        <td><b>${u ? u.name : m.userId}</b> <span style="color:var(--text-muted);font-size:12px">${u ? u.position : ''}</span></td>
+        <td><b>${u ? u.name : m.userId}</b> <span style="color:var(--text-muted);font-size:12px">${u ? this.positionKeys(u).join(' + ') : ''}</span></td>
         <td><div class="role-chips">${chips}</div></td>
         <td><button class="icon-btn" data-remove="${m.userId}" title="เอาออกจากโครงการ">🗑️</button></td>
       </tr>`;
     }).join('');
 
     // admins are system-wide superusers, not assignable as ordinary project members
-    const nonMembers = DB.users.filter(u => u.position !== 'ADMIN' && !p.members.some(m => m.userId === u.id));
+    const nonMembers = DB.users.filter(u => !(u.positions || []).includes('ADMIN') && !p.members.some(m => m.userId === u.id));
     const addOpts = nonMembers.length
-      ? `<select id="addUser">${nonMembers.map(u => `<option value="${u.id}">${u.name} · ${u.position}</option>`).join('')}</select>
+      ? `<select id="addUser">${nonMembers.map(u => `<option value="${u.id}">${u.name} · ${this.positionKeys(u).join(' + ')}</option>`).join('')}</select>
          <button class="btn btn-primary btn-sm" id="addMemberBtn">+ เพิ่มเป็นสมาชิก</button>`
       : `<span class="empty-note">เพิ่มผู้ใช้ครบทุกคนแล้ว</span>`;
 
@@ -3218,7 +3363,7 @@ const App = {
       <div class="modal-body">
         <table class="data"><thead><tr><th>ผู้ใช้</th><th>บทบาทในโครงการ</th><th></th></tr></thead><tbody>${rows}</tbody></table>
         <div class="add-member">${addOpts}</div>
-        <p class="empty-note"><b>ทีมวิจัย</b> — PI=จัดการโครงการ/สมาชิก/สั่ง Stop · CoPI=จัดการกรง/ชั่งน้ำหนัก · AHS=ชั่งน้ำหนัก/แจ้งผิดปกติ (CoPI และ AHS เป็นบุคคลภายนอกได้)<br><b>แต่งตั้งในนาม</b> — Sci / VET / ACT ระบุว่าใครเป็นผู้ดูแลประจำโครงการ ไม่ได้ให้สิทธิ์เพิ่ม เพราะทำงานได้จากตำแหน่งระดับระบบอยู่แล้ว</p>
+        <p class="empty-note"><b>ทีมวิจัย</b> — PI และ CoPI สิทธิ์เท่ากัน (แก้ผังกรง · สั่ง Stop · ดูกราฟ) · AHS ให้สารทดสอบและดูกราฟ<br><b>ผู้ดูแลประจำโครงการ</b> — Sci / VET / ACT ได้สิทธิ์เท่าตำแหน่งระบบชื่อเดียวกัน <b>แต่เฉพาะในโครงการนี้</b> จึงใช้แต่งตั้งบุคคลภายนอกให้ทำงานเฉพาะโครงการได้</p>
       </div>
       <div class="modal-foot"><button class="btn" id="closeMembers">เสร็จสิ้น</button></div>
     `, { wide: true });

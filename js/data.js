@@ -4,103 +4,132 @@
  * ============================================================ */
 
 /* ------------------------------------------------------------------
- * PERMISSION MODEL — two independent tiers
+ * PERMISSION MODEL — two tiers, additive
  *
- *  1) POSITION (ตำแหน่งระดับระบบ) — exactly ONE per user account, stored as
- *     `user.position`. This is the person's job in the facility. Service
- *     positions (AV/VET/ACT/SCI) work across EVERY project because they
- *     physically handle the animals; oversight positions (IACUC/EX/QA/AUDIT/
- *     OCH/GM) see every project read-only. EXTERNAL sees only the projects
- *     they were appointed to.
+ *  1) POSITION (ตำแหน่งระดับระบบ) — a user may hold SEVERAL, in
+ *     `user.positions[]`. This is the person's job in the facility. Service
+ *     positions (AV/VET/SCI/ACT) work across EVERY project because they
+ *     physically handle the animals; oversight positions (IACUC/QA/AUDIT/EX)
+ *     see every project read-only. GM never touches projects at all, and
+ *     EXTERNAL only sees the projects they were appointed to.
  *
- *  2) PROJECT ROLE (บทบาทในโครงการ) — the research team, per project, in
- *     `project.members[] = { userId, roles[] }`. PI/COPI/AHS carry real
- *     capabilities. SCI/VET/ACT may also be listed on a project, but that is
- *     a NOMINAL appointment (ผู้ดูแลประจำโครงการในนามเท่านั้น) — it documents
- *     who is assigned; their actual power still comes from their POSITION.
+ *  2) PROJECT ROLE (บทบาทในโครงการ) — per project, in
+ *     `project.members[] = { userId, roles[] }`. PI/COPI/AHS are the research
+ *     team. SCI/VET/ACT may also be appointed to a single project and then
+ *     carry the SAME caps as the system position of that name — but only
+ *     inside that project. That is how an EXTERNAL vet can work on project A
+ *     without seeing project B. For someone who already holds the system
+ *     position, the appointment adds nothing (they could do it anyway), so it
+ *     reads as a paper appointment — no separate "nominal" flag needed.
  *
- *  Effective capability = POSITION caps  ∪  PROJECT ROLE caps (if a member).
+ *  Effective capability = every POSITION's caps ∪ every PROJECT ROLE's caps.
+ *  Nothing is ever subtracted: if any role grants it, the user has it.
  *  Always gate through App.can(cap, project) — never test a key directly.
+ *
+ *  IMPORTANT: project roles only take effect once the project is APPROVED.
+ *  While it is waiting/rejected the project "does not exist yet": only
+ *  `project.createdBy` may edit and resubmit it (plus AV, to review).
  * ------------------------------------------------------------------ */
 
-// scope: 'all'    = sees every project without being a member
+// scope: 'all'    = sees every project without being appointed to it
 //        'member' = only projects they are appointed to
 const POSITIONS = {
-  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'createProject', 'editProject', 'manageMembers', 'weigh', 'flag', 'treat', 'deathStop', 'stop', 'approve', 'manageUsers', 'viewSupply', 'viewFinance'] },
-  AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'createProject', 'flag', 'treat', 'deathStop', 'approve', 'manageUsers'] },
-  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'createProject', 'flag', 'treat', 'deathStop'] },
-  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'createProject', 'flag', 'weigh', 'deathStop'] },
-  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'createProject', 'flag', 'weigh', 'deathStop'] },
-  IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'createProject', 'flag'] },
-  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewSupply', 'viewFinance'] },
-  OCH:      { key: 'OCH',      label: 'เจ้าหน้าที่ชีวอนามัย',           scope: 'all',    caps: ['view', 'createProject'] },
-  QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'createProject'] },
-  AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'createProject'] },
-  // GM works the stockroom/finance side only — deliberately has no `view`, so
-  // hasAccess() keeps them out of every project and the โครงการ tab is hidden.
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewSupply', 'viewFinance'] },
+  AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
+  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewSupply'] },
+  IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
+  QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
+  AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
+  // EX = QA + GM
+  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'viewSupply', 'viewFinance'] },
+  // OCH inspects on site like a site-safety officer: sees the project cards but
+  // deliberately has NO enterProject — clicking a card opens a safety report form.
+  OCH:      { key: 'OCH',      label: 'เจ้าหน้าที่ชีวอนามัย',           scope: 'all',    caps: ['view', 'createProject', 'ochReport'] },
+  // GM works the stockroom/finance side only — no `view` at all, so hasAccess()
+  // keeps them out of every project and the โครงการ tab stays hidden.
   GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewSupply', 'viewFinance'] },
-  EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'createProject'] },
+  EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'enterProject', 'createProject'] },
 };
-const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'ACT', 'SCI', 'IACUC', 'EX', 'OCH', 'QA', 'AUDIT', 'GM', 'EXTERNAL'];
+const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'SCI', 'ACT', 'IACUC', 'QA', 'AUDIT', 'EX', 'OCH', 'GM', 'EXTERNAL'];
 
-// Project-level roles. `nominal: true` = appointed on paper only; the role
-// grants no power of its own (the holder's POSITION does the work).
+// Project-level roles. PI/COPI/AHS are the research team; SCI/VET/ACT mirror the
+// system position of the same name but are confined to the one project.
 const ROLES = {
-  PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'editProject', 'manageMembers', 'weigh', 'flag', 'stop'] },
-  COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'editProject', 'weigh', 'flag'] },
-  AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'weigh', 'flag'] },
-  SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view'], nominal: true },
-  VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view'], nominal: true },
-  ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view'], nominal: true },
+  PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'enterProject', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
+  COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'enterProject', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
+  AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'enterProject', 'flag', 'reportDeath', 'dosing', 'viewReports'] },
+  SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view', 'enterProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view', 'enterProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view', 'enterProject', 'flag', 'reportDeath', 'cageCare'] },
 };
 const ROLE_ORDER = ['PI', 'COPI', 'AHS', 'SCI', 'VET', 'ACT'];
 
-// capability catalogue (for the permission matrix / gating)
+// capability catalogue (drives gating + the two permission matrices)
 const CAPABILITIES = [
-  { key: 'view',          label: 'ดูข้อมูลโครงการ / กรง / หนู' },
+  { key: 'view',          label: 'เห็นโครงการในรายการ' },
+  { key: 'enterProject',  label: 'เข้าไปดูกรง / หนู / ประวัติ' },
   { key: 'createProject', label: 'ยื่นขอสร้างโครงการ' },
   { key: 'editProject',   label: 'จัดการกรง / แก้ไขผังโครงการ' },
-  { key: 'manageMembers', label: 'จัดการสมาชิก & สิทธิในโครงการ' },
-  { key: 'weigh',         label: 'ชั่งน้ำหนัก (บันทึกประจำวัน)' },
+  { key: 'manageMembers', label: 'แต่งตั้ง / ถอดถอนสมาชิกโครงการ' },
+  { key: 'weigh',         label: 'ชั่งน้ำหนัก + น้ำ/อาหาร + ตรวจสุขภาพเบื้องต้น' },
+  { key: 'dosing',        label: 'ให้สารทดสอบ / หัตถการตามโปรโตคอล' },
+  { key: 'cageCare',      label: 'ดูแลกรง (เปลี่ยน/เติมวัสดุรองนอน)' },
   { key: 'flag',          label: 'แจ้งหนูผิดปกติ (รอสัตวแพทย์ตรวจ)' },
   { key: 'treat',         label: 'ตรวจรักษา / ปิดเคส / Humane endpoint' },
-  { key: 'deathStop',     label: 'บันทึกการตาย / ชันสูตรซาก' },
+  { key: 'reportDeath',   label: 'แจ้งหนูตาย (นำไปแช่แข็ง)' },
+  { key: 'handleCarcass', label: 'จัดการซาก — ทำลาย / ชันสูตร' },
   { key: 'stop',          label: 'สั่ง Stop (ไม่คิดเฉลี่ย)' },
+  { key: 'viewReports',   label: 'ดูหน้ากราฟ / ผลวิเคราะห์' },
   { key: 'approve',       label: 'อนุมัติ / ไม่อนุมัติโครงการ' },
   { key: 'manageUsers',   label: 'จัดการบัญชีผู้ใช้ระบบ' },
+  { key: 'ochReport',     label: 'รายงานความปลอดภัย / ชีวอนามัย' },
   { key: 'viewSupply',    label: 'เข้าถึงงานคลัง' },
   { key: 'viewFinance',   label: 'เข้าถึงการเงิน' },
 ];
 
-// mock user accounts. `position` = the system-level job (POSITIONS key).
+// mock user accounts. `positions` = the system-level jobs held (POSITIONS keys);
+// a person may hold several and their caps add up.
 // `name` is the display name kept in sync with firstName + lastName.
 // `projectRole` (optional) marks a DEMO persona for a PROJECT role: that identity
-// holds the role in EVERY project (see App.myProjectRoles override) so a client can
-// switch and compare views without hunting for a project they belong to. In a real
-// deployment nobody has `projectRole` — membership in project.members drives it.
-function makeUser(id, firstName, lastName, email, password, position, projectRole) {
-  return { id, firstName, lastName, email, password, position, projectRole: projectRole || null, name: `${firstName} ${lastName}`.trim() };
+// holds the role in EVERY approved project (see App.myProjectRoles override) so a
+// client can switch and compare views without hunting for a project they belong to.
+// In a real deployment nobody has `projectRole` — project.members drives it.
+function makeUser(id, firstName, lastName, email, password, positions, projectRole) {
+  return {
+    id, firstName, lastName, email, password,
+    positions: Array.isArray(positions) ? positions : [positions],
+    projectRole: projectRole || null,
+    name: `${firstName} ${lastName}`.trim(),
+  };
 }
 const USERS = [
   // --- one persona per system position -------------------------------------
-  makeUser('u_admin', 'Admin — ผู้ดูแลระบบ', '',            'admin@lab.test', 'admin1234', 'ADMIN'),
-  makeUser('u_av',    'AV — หัวหน้าสัตวแพทย์', '',           'av@lab.test',    'demo1234',  'AV'),
-  makeUser('u_vet',   'VET — สัตวแพทย์', '',                'vet@lab.test',   'demo1234',  'VET'),
-  makeUser('u_act',   'ACT — จนท.ดูแลสัตว์ทดลอง', '',        'act@lab.test',   'demo1234',  'ACT'),
-  makeUser('u_scisys','Sci — นักวิทยาศาสตร์', '',            'sci@lab.test',   'demo1234',  'SCI'),
-  makeUser('u_iacuc', 'IACUC — คณะกรรมการกำกับดูแล', '',     'iacuc@lab.test', 'demo1234',  'IACUC'),
-  makeUser('u_ex',    'Ex — ผู้บริหารหน่วยสัตว์ทดลอง', '',    'ex@lab.test',    'demo1234',  'EX'),
-  makeUser('u_och',   'OCH — จนท.ชีวอนามัย', '',             'och@lab.test',   'demo1234',  'OCH'),
-  makeUser('u_qa',    'QA — หน่วยประกันคุณภาพ', '',           'qa@lab.test',    'demo1234',  'QA'),
-  makeUser('u_audit', 'Audit — ผู้ตรวจสอบ', '',              'audit@lab.test', 'demo1234',  'AUDIT'),
-  makeUser('u_gm',    'GM — จนท.บริหารงานทั่วไป', '',         'gm@lab.test',    'demo1234',  'GM'),
-  makeUser('u_ext',   'External — บุคคลภายนอก', '',          'ext@lab.test',   'demo1234',  'EXTERNAL'),
+  makeUser('u_admin', 'Admin — ผู้ดูแลระบบ', '',            'admin@lab.test', 'admin1234', ['ADMIN']),
+  makeUser('u_av',    'AV — หัวหน้าสัตวแพทย์', '',           'av@lab.test',    'demo1234',  ['AV']),
+  makeUser('u_vet',   'VET — สัตวแพทย์', '',                'vet@lab.test',   'demo1234',  ['VET']),
+  makeUser('u_scisys','Sci — นักวิทยาศาสตร์', '',            'sci@lab.test',   'demo1234',  ['SCI']),
+  makeUser('u_act',   'ACT — จนท.ดูแลสัตว์ทดลอง', '',        'act@lab.test',   'demo1234',  ['ACT']),
+  makeUser('u_iacuc', 'IACUC — คณะกรรมการกำกับดูแล', '',     'iacuc@lab.test', 'demo1234',  ['IACUC']),
+  makeUser('u_qa',    'QA — หน่วยประกันคุณภาพ', '',           'qa@lab.test',    'demo1234',  ['QA']),
+  makeUser('u_audit', 'Audit — ผู้ตรวจสอบ', '',              'audit@lab.test', 'demo1234',  ['AUDIT']),
+  makeUser('u_ex',    'Ex — ผู้บริหารหน่วยสัตว์ทดลอง', '',    'ex@lab.test',    'demo1234',  ['EX']),
+  makeUser('u_och',   'OCH — จนท.ชีวอนามัย', '',             'och@lab.test',   'demo1234',  ['OCH']),
+  makeUser('u_gm',    'GM — จนท.บริหารงานทั่วไป', '',         'gm@lab.test',    'demo1234',  ['GM']),
+  makeUser('u_ext',   'External — บุคคลภายนอก', '',          'ext@lab.test',   'demo1234',  ['EXTERNAL']),
   // --- personas for the project-level roles (research team) ----------------
-  // A PI/AHS is an internal scientist; a CoPI here is external, to show that
-  // CoPI/AHS may be filled by บุคคลภายนอก.
-  makeUser('u_pi',    'PI — นักวิจัย', '',                   'pi@lab.test',    'demo1234',  'SCI',      'PI'),
-  makeUser('u_copi',  'CoPI — นักวิจัยร่วม', '',              'copi@lab.test',  'demo1234',  'EXTERNAL', 'COPI'),
-  makeUser('u_ahs',   'AHS — นักวิจัยปฏิบัติการ', '',         'ahs@lab.test',   'demo1234',  'SCI',      'AHS'),
+  // These deliberately hold only EXTERNAL as their position, so switching to them
+  // shows the PROJECT ROLE's capabilities and nothing else. Give them SCI as well
+  // and they would inherit `weigh` from the position, which would hide the rule
+  // that a PI/AHS cannot weigh unless separately appointed Sci of the project.
+  makeUser('u_pi',    'PI — นักวิจัย', '',                   'pi@lab.test',    'demo1234',  ['EXTERNAL'], 'PI'),
+  makeUser('u_copi',  'CoPI — นักวิจัยร่วม', '',              'copi@lab.test',  'demo1234',  ['EXTERNAL'], 'COPI'),
+  makeUser('u_ahs',   'AHS — นักวิจัยปฏิบัติการ', '',         'ahs@lab.test',   'demo1234',  ['EXTERNAL'], 'AHS'),
+  // a researcher who is ALSO appointed Sci of the project — the only way to weigh
+  makeUser('u_pisci', 'PI + Sci — นักวิจัยที่ชั่งเองได้', '',  'pisci@lab.test', 'demo1234',  ['SCI'],      'PI'),
+  // --- a persona holding TWO positions, to demo additive permissions -------
+  makeUser('u_vetiacuc', 'VET + IACUC — ถือ 2 ตำแหน่ง', '',  'vet.iacuc@lab.test', 'demo1234', ['VET', 'IACUC']),
 ];
 
 // ---- helpers for generating believable weight histories -----
@@ -147,7 +176,12 @@ function makeMouse(code, sex, baseline, trend) {
     treatments: [],            // Sick Case Report entries: { date, time, vet, signs[], support[], diagnosis, treatment, recommend, note }
     excluded: false,           // "stopped": kept out of group-average stats (still eats/drinks)
     alive: true,
-    death: null,               // { type:'natural'|'humane', disposition:'dispose'|'necropsy', note, date, time, reporter }
+    // Death is recorded in TWO stages (see App.openDeathForm / openCarcassForm):
+    //   stage 1 `reportDeath` — anyone who can see the mouse reports it dead; the
+    //     carcass goes to the freezer:  carcass:'frozen', disposition:null
+    //   stage 2 `handleCarcass` — SCI/VET decide per protocol:
+    //     carcass:'done', disposition:'dispose' | 'necropsy' (+ necropsy record)
+    death: null,               // { type:'natural'|'humane', carcass:'frozen'|'done', disposition:null|'dispose'|'necropsy', note, date, time, reporter, handledBy, handledAt }
     careOpen: false,           // vet case currently open (drives the cage "care" colour)
     flagOpen: false,           // "looks abnormal" flag raised by any member → orange !, awaits VET review
     flag: null,                // { by, note, date } — who reported and how it looks abnormal
@@ -304,9 +338,10 @@ for (let si = 0; si < 4; si++) {
   d01.mice[1].alive = false;
   d01.mice[1].excluded = true;
   d01.mice[1].death = {
-    type: 'humane', disposition: 'necropsy',
+    type: 'humane', carcass: 'done', disposition: 'necropsy',
     note: 'น้ำหนักลดต่อเนื่องเกินเกณฑ์ · เก็บตับและไตส่งตรวจ',
     date: isoDaysAgo(2), time: '13:30', reporter: 'สพ.ญ. กมล',
+    handledBy: 'สพ.ญ. กมล', handledAt: isoDaysAgo(2),
   };
   d01.mice[1].necropsy = {
     date: isoDaysAgo(2),
@@ -328,9 +363,21 @@ for (let si = 0; si < 4; si++) {
   c04.mice[1].alive = false;
   c04.mice[1].excluded = true;
   c04.mice[1].death = {
-    type: 'natural', disposition: 'dispose',
+    type: 'natural', carcass: 'done', disposition: 'dispose',
     note: 'พบตายในกรงตอนเช้า ไม่มีอาการนำมาก่อน',
     date: isoDaysAgo(5), time: '08:15', reporter: 'นายสมชาย (AHS)',
+    handledBy: 'Sci — นักวิทยาศาสตร์', handledAt: isoDaysAgo(5),
+  };
+
+  // --- เคสตาย (3/3): เพิ่งแจ้งตาย ยังแช่แข็งรอ SCI/VET ตัดสินใจ ---
+  const a02 = cagesP1.find(c => c.code === 'A-02');
+  a02.mice[1].alive = false;
+  a02.mice[1].excluded = true;
+  a02.mice[1].death = {
+    type: 'natural', carcass: 'frozen', disposition: null,
+    note: 'พบตายในกรงระหว่างเปลี่ยนวัสดุรองนอน',
+    date: isoDaysAgo(0), time: '07:50', reporter: 'ก้อง วัฒนา (AHS)',
+    handledBy: '', handledAt: '',
   };
 })();
 
@@ -363,6 +410,7 @@ const DB = {
   projects: [
     {
       id: 'P1',
+      createdBy: 'u_pi',
       name: 'NAFLD Diet Study',
       description: 'ศึกษาผลของอาหารไขมันสูงและยาต่อภาวะไขมันพอกตับในหนู C57BL/6',
       startDate: '2026-05-12',
@@ -381,6 +429,7 @@ const DB = {
     },
     {
       id: 'P3',
+      createdBy: 'u_pi',
       name: 'Behavioral Pilot',
       description: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
       startDate: '2026-01-08',
@@ -450,6 +499,7 @@ const DB = {
     }
     return {
       id, name, description, startDate: todayISO(), status: 'active',
+      createdBy: creatorId,
       approval, shelves: 1, cagesPerShelf: 2, groups, cages, documents: [],
       members: [{ userId: creatorId, roles: ['PI'] }],
       ...extra,
@@ -469,7 +519,7 @@ const DB = {
 
 // demo: give every project the same team so the members list is consistent when
 // switching personas. PI/CoPI/AHS are the working research team; Sci/VET/ACT are
-// the nominal per-project appointments (their real power comes from POSITION).
+// the per-project appointments of the service positions.
 (function seedTeam() {
   const TEAM = [
     { userId: 'u_pi',     roles: ['PI'] },

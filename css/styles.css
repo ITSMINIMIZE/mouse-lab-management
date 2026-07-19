@@ -870,10 +870,6 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 .role-chip:hover { transform: translateY(-1px); box-shadow: var(--shadow-btn-h); }
 .role-chip:active { transform: translateY(0); box-shadow: var(--shadow-btn-a); }
 .role-chip.on { background: var(--primary); color: #fff; }
-/* nominal appointments (Sci/VET/ACT) read as secondary — they grant no power */
-.role-chip.nominal { border: 1.5px dashed var(--border); box-shadow: none; background: transparent; }
-.role-chip.nominal:hover { box-shadow: none; background: var(--surface); }
-.role-chip.nominal.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary-dark); }
 .add-member { display: flex; gap: 8px; align-items: center; margin-top: 14px; flex-wrap: wrap; }
 .add-member select { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; }
 
