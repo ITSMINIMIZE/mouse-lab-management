@@ -80,27 +80,27 @@ const App = {
 
   // ---- identity: POSITIONS (system, may be several) + PROJECT ROLES -------
   // See the permission-model comment at the top of data.js. Effective
-  // capability = every position's caps ∪ every project role's caps, additive.
+  // capability = the ONE position's caps ∪ every project role's caps, additive.
   // Gate through can() — never test a position or role key directly.
   get user() { return DB.users.find(u => u.id === DB.currentUserId) || DB.users[0]; },
-  positionKeys(u) {
-    const x = u || this.user;
-    return (x.positions && x.positions.length) ? x.positions : ['EXTERNAL'];
-  },
-  get positions() { return this.positionKeys().map(k => POSITIONS[k]).filter(Boolean); },
-  positionLabel(u) {
-    return this.positionKeys(u).map(k => (POSITIONS[k] ? POSITIONS[k].label : k)).join(' + ');
-  },
-  // caps granted by the positions alone (no project involved)
-  hasPositionCap(cap) { return this.positions.some(p => p.caps.includes(cap)); },
-  get isAdmin() { return this.positionKeys().includes('ADMIN'); },
-  get isAV() { return this.positionKeys().includes('AV'); },        // หัวหน้าสัตวแพทย์
-  get canReview() { return this.hasPositionCap('approve'); },       // approve/reject a project
+  // a user holds exactly one system position; positionKeys() returns it as a
+  // one-element array so the many .map/.join/.includes call sites keep working.
+  positionKeys(u) { return [(u || this.user).position || 'EXTERNAL']; },
+  get position() { return POSITIONS[this.user.position] || POSITIONS.EXTERNAL; },
+  get positions() { return [this.position]; },
+  positionLabel(u) { const p = POSITIONS[(u || this.user).position]; return p ? p.label : (u || this.user).position || '—'; },
+  // caps granted by the position alone (no project involved)
+  hasPositionCap(cap) { return this.position.caps.includes(cap); },
+  get isAdmin() { return this.user.position === 'ADMIN'; },
+  get isAV() { return this.user.position === 'AV'; },              // หัวหน้าสัตวแพทย์
+  get canReview() { return this.hasPositionCap('approve') || this.hasPositionCap('reviewAEC'); }, // sees the pipeline
+  get canReviewAEC() { return this.hasPositionCap('reviewAEC'); },  // AEC ethics review (stage 1)
+  get canBuild() { return this.hasPositionCap('approve'); },        // AV builds the project (stage 2)
   get canManageUsers() { return this.hasPositionCap('manageUsers'); },
-  // any position with facility-wide scope lets the user see every project
-  get seesAllProjects() { return this.positions.some(p => p.scope === 'all'); },
+  // a facility-wide position lets the user see every project
+  get seesAllProjects() { return this.position.scope === 'all'; },
   // legacy aliases kept so older call sites keep printing something sensible
-  positionKey(u) { return this.positionKeys(u).join(' + '); },
+  positionKey(u) { return (u || this.user).position || 'EXTERNAL'; },
   sysRoleLabel(u) { return this.positionKey(u); },
 
   // Is this project "live"? Project roles only take effect once AV has approved
@@ -108,6 +108,17 @@ const App = {
   // touch it (see myProjectRoles).
   isApproved(project) { return (project.approval || 'approved') === 'approved'; },
   isCreator(project) { return !!project && project.createdBy === this.user.id; },
+  // where a non-approved project sits in the pipeline
+  approvalStage(project) { return project.approval || 'approved'; },
+  // human label + short status text for any stage
+  stageInfo(project) {
+    switch (this.approvalStage(project)) {
+      case 'requested': return { text: '⏳ รอสำนักเลขาฯ จริยธรรมตรวจ', cls: 'req' };
+      case 'aec_ok':    return { text: '📋 ผ่านจริยธรรม · รอสัตวแพทย์สร้างโครงการ', cls: 'aec' };
+      case 'rejected':  return { text: '✗ ตีกลับให้แก้ไข', cls: 'rej' };
+      default:          return { text: project.status === 'closed' ? 'ปิดแล้ว' : 'กำลังดำเนิน', cls: 'ok' };
+    }
+  },
 
   // project roles the current user holds (array of ROLES keys).
   // A DEMO persona (user.projectRole set) holds that role in every project so a
@@ -131,6 +142,11 @@ const App = {
   // only) out of every project even though their position scope is 'all'.
   hasAccess(project) {
     if (!this.can('view', project)) return false;
+    // A project still in the creation pipeline (requested / aec_ok / rejected) is
+    // "not real yet": only the people who move it forward may even see it —
+    // the creator plus the reviewers (AEC / AV / admin). Everyone else, even a
+    // facility-wide position, sees nothing until it is approved.
+    if (!this.isApproved(project)) return this.isCreator(project) || this.canReview;
     if (this.seesAllProjects) return true;
     return this.myProjectRoles(project).length > 0 || this.isCreator(project);
   },
@@ -150,7 +166,7 @@ const App = {
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
     if (name === 'supply' || name === 'finance') return name;
-    if (['projects', 'dashboard', 'reports', 'create', 'cagecare', 'dosing', 'ochreport'].includes(name)) return 'projects';
+    if (['projects', 'dashboard', 'reports', 'create', 'build', 'cagecare', 'dosing', 'ochreport'].includes(name)) return 'projects';
     return '';
   },
   // where to land after login / when a route is not permitted
@@ -185,6 +201,7 @@ const App = {
       case 'users':    this.go('users'); break;
       case 'supply':   this.go('supply'); break;
       case 'finance':  this.go('finance'); break;
+      case 'build':
       case 'cagecare':
       case 'dosing':
       case 'ochreport': this.go(name, ds.projectId || this.route.projectId); break;
@@ -200,6 +217,7 @@ const App = {
     if (name === 'login') return this.renderLogin();
     if (name === 'projects') return this.renderProjects();
     if (name === 'create') return this.renderCreateProject();
+    if (name === 'build') return this.renderBuildProject();
     if (name === 'dashboard') return this.renderDashboard();
     if (name === 'reports') return this.renderReports();
     if (name === 'audit') return this.renderAudit();
@@ -277,8 +295,8 @@ const App = {
   },
 
   // ---- user account helpers ----
-  adminCount() { return DB.users.filter(u => (u.positions || []).includes('ADMIN')).length; },
-  isLastAdmin(u) { return (u.positions || []).includes('ADMIN') && this.adminCount() <= 1; },
+  adminCount() { return DB.users.filter(u => u.position === 'ADMIN').length; },
+  isLastAdmin(u) { return u.position === 'ADMIN' && this.adminCount() <= 1; },
 
   // ---- audit log (append-only, visible to everyone) ----
   log(action, detail, projectName = '') {
@@ -422,63 +440,65 @@ const App = {
   renderProjects() {
     // positions without `view` (GM) have no โครงการ tab at all
     if (!this.can('view')) { this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้าโครงการ'); return this.go(this.homeRoute()); }
-    // members see their own projects (admin & AV reviewer see all)
-    const visible = DB.projects.filter(p => this.hasAccess(p) || this.canReview);
+    // hasAccess already encodes the rules: approved projects by membership/scope,
+    // pipeline projects only for the creator + reviewers.
+    const visible = DB.projects.filter(p => this.hasAccess(p));
     const cards = visible.map(p => {
-      const approval = p.approval || 'approved';
+      const stage = this.approvalStage(p);
+      const approved = stage === 'approved';
       const closed = p.status === 'closed';
-      const mice = p.cages.reduce((s, c) => s + c.mice.length, 0);
+      const owner = this.isCreator(p) || this.isAdmin;
+      const info = this.stageInfo(p);
+      const mice = approved ? p.cages.reduce((s, c) => s + c.mice.length, 0) : (p.request?.totalMice || 0);
       const roleLabel = this.myRoleLabel(p);
-      const iAmOwner = this.can('editProject', p) || this.can('manageMembers', p);   // PI / admin
 
-      const badge = approval === 'waiting'
-        ? '<span class="pill waiting">⏳ รอตรวจสอบ</span>'
-        : approval === 'rejected'
-        ? '<span class="pill rejected">✗ ไม่อนุมัติ</span>'
-        : `<span class="pill ${closed ? 'closed' : 'active'}">${closed ? 'ปิดแล้ว' : 'กำลังดำเนิน'}</span>`;
+      const pillCls = { req: 'waiting', aec: 'aec', rej: 'rejected', ok: closed ? 'closed' : 'active' }[info.cls];
+      const badge = `<span class="pill ${pillCls}">${info.text}</span>`;
 
-      // top-right actions menu (owner only): ข้อมูลโครงการ / จัดการกรง / จัดการสมาชิก
-      const ownerMenu = iAmOwner ? `
+      // ⋯ menu only on live projects (edit cages / members); AV holds manageMembers
+      const menuItems = [`<button class="cm-item" data-act="info" data-pid="${p.id}">ข้อมูลโครงการ</button>`];
+      if (approved && this.can('editProject', p)) menuItems.push(`<button class="cm-item" data-act="cages" data-pid="${p.id}">จัดการกรง</button>`);
+      if (approved && this.can('manageMembers', p)) menuItems.push(`<button class="cm-item" data-act="members" data-pid="${p.id}">จัดการสมาชิก</button>`);
+      const ownerMenu = menuItems.length > 1 ? `
         <div class="card-menu">
           <button class="card-menu-btn" data-menu="${p.id}" title="การดำเนินการ" aria-label="การดำเนินการ">⋯</button>
-          <div class="card-menu-list" data-menulist="${p.id}">
-            <button class="cm-item" data-act="info" data-pid="${p.id}">ข้อมูลโครงการ</button>
-            <button class="cm-item" data-act="cages" data-pid="${p.id}">จัดการกรง</button>
-            <button class="cm-item" data-act="members" data-pid="${p.id}">จัดการสมาชิก</button>
-          </div>
+          <div class="card-menu-list" data-menulist="${p.id}">${menuItems.join('')}</div>
         </div>` : '';
 
-      // per-state action strip
+      // per-stage action strip
       let strip = '';
-      if (approval === 'waiting' && this.canReview) {
-        strip = `<div class="card-actions"><button class="btn btn-sm btn-primary" data-act="review" data-pid="${p.id}">🔍 ตรวจสอบเพื่ออนุมัติ</button></div>`;
-      } else if (approval === 'waiting') {
-        strip = `<div class="card-note waiting-note">⏳ รอการตรวจสอบจาก AV (สัตวแพทย์ผู้ควบคุม)</div>`;
-      } else if (approval === 'rejected') {
-        strip = `<div class="card-note rejected-note"><b>ไม่อนุมัติ:</b> ${p.rejectReason || '—'}</div>`;
-        if (iAmOwner) strip += `<div class="card-actions">
+      if (stage === 'requested') {
+        if (this.canReviewAEC) strip = `<div class="card-actions"><button class="btn btn-sm btn-primary" data-act="review" data-pid="${p.id}">🔍 ตรวจคำขอ (จริยธรรม)</button></div>`;
+        else if (owner) strip = `<div class="card-note waiting-note">⏳ รอสำนักเลขาฯ จริยธรรมตรวจคำขอ</div><div class="card-actions"><button class="btn btn-sm" data-act="edit" data-pid="${p.id}">✏️ แก้คำขอ</button><button class="btn btn-sm danger" data-act="delete" data-pid="${p.id}">🗑 ลบ</button></div>`;
+        else strip = `<div class="card-note waiting-note">⏳ รอสำนักเลขาฯ จริยธรรมตรวจคำขอ</div>`;
+      } else if (stage === 'aec_ok') {
+        if (this.canBuild) strip = `<div class="card-actions"><button class="btn btn-sm btn-primary" data-act="build" data-pid="${p.id}">🏗️ สร้างโครงการ</button></div>`;
+        else strip = `<div class="card-note aec-note">📋 ผ่านจริยธรรมแล้ว — รอสัตวแพทย์สร้างโครงการ</div>`;
+      } else if (stage === 'rejected') {
+        strip = `<div class="card-note rejected-note"><b>ตีกลับ${p.rejectStage === 'av' ? ' (สัตวแพทย์)' : ' (จริยธรรม)'}:</b> ${p.rejectReason || '—'}</div>`;
+        if (owner) strip += `<div class="card-actions">
             <button class="btn btn-sm" data-act="edit" data-pid="${p.id}">✏️ แก้ไข</button>
-            <button class="btn btn-sm btn-primary" data-act="resubmit" data-pid="${p.id}">↻ ส่งตรวจอีกครั้ง</button>
+            <button class="btn btn-sm btn-primary" data-act="resubmit" data-pid="${p.id}">↻ ยื่นใหม่</button>
             <button class="btn btn-sm danger" data-act="delete" data-pid="${p.id}">🗑 ลบ</button>
           </div>`;
       }
 
       return `
-        <div class="project-card card-open ${closed ? 'closed' : ''} ${approval === 'rejected' ? 'rejected' : ''} ${approval === 'waiting' ? 'waiting' : ''}" data-pid="${p.id}">
+        <div class="project-card card-open ${closed ? 'closed' : ''} ${info.cls === 'rej' ? 'rejected' : ''} ${info.cls === 'req' || info.cls === 'aec' ? 'waiting' : ''}" data-pid="${p.id}">
           <div class="pc-head">
             <h3>${p.name}</h3>
             <div class="pc-right">${badge}${ownerMenu}</div>
           </div>
           <p class="p-desc">${p.description}</p>
           <div class="project-meta">
-            <span>📅 เริ่ม ${p.startDate}</span>
-            <span>📦 ${p.cages.length} กรง</span>
+            <span>📅 ${approved ? 'เริ่ม ' + p.startDate : 'ยื่น ' + (p.requestDate || p.startDate)}</span>
+            <span>📦 ${approved ? p.cages.length + ' กรง' : (p.request?.groups?.length || 0) + ' กลุ่ม'}</span>
             <span>🐭 ${mice} ตัว</span>
             <span class="role-tag">${roleLabel}</span>
           </div>
           ${strip}
         </div>`;
-    }).join('') || `<p class="empty-note">คุณยังไม่มีโครงการที่เข้าถึงได้ — สร้างโครงการใหม่เพื่อเริ่มต้น (คุณจะเป็น PI ของโครงการนั้น)</p>`;
+    }).join('') || `<p class="empty-note">คุณยังไม่มีโครงการที่เข้าถึงได้ — กด “+ สร้างโครงการ” เพื่อยื่นคำขอ (คุณจะเป็น PI ของโครงการนั้น)</p>`;
 
     // what the list is showing depends on the POSITION's scope, not on approval rights
     const who = `เข้าใช้เป็น <b>${this.user.name}</b> (${this.positionKey()})`;
@@ -536,6 +556,7 @@ const App = {
             break;
           case 'members': this.openMembers(p); break;
           case 'edit': this.editProject(p); break;
+          case 'build': this.buildProject(p); break;
           case 'review': this.openProjectInfo(p); break;
           case 'resubmit': this.resubmitProject(p); this.renderProjects(); break;
           case 'delete': this.confirmDeleteProject(p); break;
@@ -550,58 +571,76 @@ const App = {
     document.addEventListener('click', this._cardMenuDocHandler);
   },
 
-  // route a card click by approval state. Waiting/rejected projects are "not real yet":
-  // nobody enters the dashboard — PI edits via the create/edit page, AV reviews via the
-  // popup, everyone else (even members) is blocked.
+  // route a card click by pipeline stage. Non-approved projects are "not real yet":
+  // nobody enters the dashboard. The creator fixes rejected requests; AEC reviews at
+  // stage 1; AV builds at stage 2; other reviewers get the read-only info popup.
   openProject(p) {
     // OCH inspects on site: a card click opens the safety report, never the dashboard
     if (!this.can('enterProject', p) && this.can('ochReport', p)) {
       return this.go('ochreport', p.id);
     }
-    const approval = p.approval || 'approved';
-    if (approval === 'waiting' || approval === 'rejected') {
-      // nobody is appointed yet — only the creator may edit and resubmit
-      if (this.isCreator(p) || this.isAdmin) this.editProject(p);
-      else if (this.canReview) this.openProjectInfo(p);           // AV → review popup
-      else this.toast('โครงการนี้ยังไม่ได้รับอนุมัติ — ยังเข้าใช้งานไม่ได้');
+    const stage = this.approvalStage(p);
+    if (stage !== 'approved') {
+      const owner = this.isCreator(p) || this.isAdmin;
+      if (stage === 'requested') {
+        if (owner) this.editProject(p);                 // still editable while pending
+        else if (this.canReviewAEC) this.openProjectInfo(p);   // AEC → review + approve
+        else this.openProjectInfo(p);                   // others → read-only detail
+      } else if (stage === 'aec_ok') {
+        if (this.canBuild) this.buildProject(p);        // AV → build form
+        else this.openProjectInfo(p);                   // creator/others → read-only detail
+      } else { // rejected
+        if (owner) this.editProject(p);                 // creator fixes & resubmits
+        else this.openProjectInfo(p);
+      }
       return;
     }
-    if (this.canEnter(p)) this.go('dashboard', p.id);             // approved (incl. closed) → dashboard
+    if (this.canEnter(p)) this.go('dashboard', p.id);   // approved (incl. closed) → dashboard
     else if (this.canReview) this.openProjectInfo(p);
     else this.toast('คุณไม่มีสิทธิ์เข้าไปในโครงการนี้');
   },
 
   // load an existing (non-approved) project into the create wizard for editing
+  // load an existing pipeline project's REQUEST back into the request form for editing
   editProject(p) {
-    const idx = {};
-    const groups = p.groups.map((g, i) => { idx[g.id] = i; return { name: g.name, color: g.color, isControl: g.isControl, desc: g.desc || '' }; });
-    const cells = {};
-    p.cages.forEach(c => { cells[`${c.shelf}_${c.position}`] = { g: idx[c.groupId] ?? 0, mice: c.mice.length, sex: (c.mice[0] && c.mice[0].sex) || 'M' }; });
+    const req = p.request || {};
     this.draft = {
       editId: p.id,
-      meta: { name: p.name, desc: p.description === '—' ? '' : p.description, date: p.startDate },
-      groups,
-      layout: { shelves: p.shelves, cols: p.cagesPerShelf },
-      cells,
+      meta: { name: p.name, objective: req.objective || '' },
+      totalMice: req.totalMice || '',
+      groups: (req.groups && req.groups.length ? req.groups : [
+        { name: 'Control', isControl: true, plannedMice: '' },
+        { name: 'Treatment-1', isControl: false, plannedMice: '' },
+      ]).map((g, i) => ({ name: g.name, isControl: g.isControl, plannedMice: g.plannedMice ?? '', color: g.color || this.GROUP_PALETTE[i % this.GROUP_PALETTE.length] })),
+      diagram: req.diagram || null,
+      aup: req.aup || null,
+      approvalDoc: req.approvalDoc || null,
+      appointments: (req.appointments || []).map(a => ({ ...a })),
     };
     this.go('create');
   },
 
-  // ---- project approval workflow --------------------------------------
-  approveProject(p) {
-    p.approval = 'approved'; p.rejectReason = ''; p.reviewedBy = this.user.name; p.reviewedAt = todayISO();
-    this.log('อนุมัติโครงการ', p.name, p.name);
-    this.toast(`อนุมัติโครงการ "${p.name}" แล้ว`);
+  // ---- project pipeline: requested → aec_ok → approved ----------------
+  // stage 1 — AEC approves the ethics request → hands off to AV to build
+  aecApprove(p) {
+    p.approval = 'aec_ok'; p.rejectReason = '';
+    p.aecReview = { by: this.user.name, at: todayISO() };
+    this.log('อนุมัติคำขอ (จริยธรรม)', p.name, p.name);
+    this.toast(`ผ่านการตรวจจริยธรรม — ส่งต่อสัตวแพทย์เพื่อสร้างโครงการ`);
   },
-  rejectProject(p, reason) {
-    p.approval = 'rejected'; p.rejectReason = reason; p.reviewedBy = this.user.name; p.reviewedAt = todayISO();
-    this.log('ไม่อนุมัติโครงการ', `${p.name} · ${reason}`, p.name);
-    this.toast(`ส่งกลับให้แก้ไข: ${p.name}`);
+  // either reviewer sends it back; `stage` records who bounced it
+  rejectProject(p, reason, stage) {
+    p.approval = 'rejected'; p.rejectReason = reason; p.rejectStage = stage;
+    p.reviewedBy = this.user.name; p.reviewedAt = todayISO();
+    this.log('ตีกลับโครงการ', `${p.name} · ${reason}`, p.name);
+    this.toast(`ตีกลับให้แก้ไข: ${p.name}`);
   },
+  // the creator fixes a rejected request → back to the AEC queue
   resubmitProject(p) {
-    p.approval = 'waiting'; p.rejectReason = '';
-    this.log('ส่งโครงการตรวจสอบอีกครั้ง', p.name, p.name);
-    this.toast('ส่งโครงการเพื่อรอตรวจสอบอีกครั้ง');
+    p.approval = 'requested'; p.rejectReason = ''; p.rejectStage = null;
+    p.requestDate = todayISO();
+    this.log('ยื่นคำขออีกครั้ง', p.name, p.name);
+    this.toast('ส่งคำขอให้สำนักเลขาฯ จริยธรรมตรวจอีกครั้ง');
   },
   confirmDeleteProject(p) {
     this.openModal(`
@@ -624,80 +663,88 @@ const App = {
     };
   },
 
-  // project info modal — read-only detail + review (AV/admin) + fix (PI on rejected)
+  // project info modal — request detail + review actions per pipeline stage
   openProjectInfo(p) {
-    const approval = p.approval || 'approved';
-    const mice = p.cages.reduce((s, c) => s + c.mice.length, 0);
-    const canReview = this.canReview && (approval === 'waiting' || approval === 'rejected');
-    const ownerFix = this.can('editProject', p) && approval === 'rejected';
-    const statusText = approval === 'waiting' ? '⏳ รอตรวจสอบ'
-      : approval === 'rejected' ? '✗ ไม่อนุมัติ'
-      : (p.status === 'closed' ? 'ปิดแล้ว' : 'อนุมัติแล้ว · กำลังดำเนิน');
+    const stage = this.approvalStage(p);
+    const approved = stage === 'approved';
+    const info = this.stageInfo(p);
+    const req = p.request || {};
+    const aecCanReview = stage === 'requested' && this.canReviewAEC;   // AEC approves the request
+    const avCanBuild = stage === 'aec_ok' && this.canBuild;            // AV proceeds to build
 
-    const groups = p.groups.map(gr => `<div class="pi-grp"><i class="sw" style="background:${gr.color}"></i><b>${gr.name}</b>${gr.isControl ? ' <span class="muted">(control)</span>' : ''}${gr.desc ? ` — ${gr.desc}` : ''}</div>`).join('');
-    const members = (p.members || []).map(m => {
+    // request detail (groups w/ planned mice, attachments, requested appointments)
+    const reqGroups = (req.groups || []).map(g => `<div class="pi-grp"><i class="sw" style="background:${g.color || '#94a3b8'}"></i><b>${g.name}</b>${g.isControl ? ' <span class="muted">(control)</span>' : ''} <span class="muted">· ${g.plannedMice} ตัว</span></div>`).join('') || '<span class="muted">—</span>';
+    const fileLine = (f, label) => f
+      ? `<div class="pi-doc"><span>📎 ${label}: ${f.name}</span>${f.url ? `<button class="mini-btn pifile-open" data-url="${f.url}">เปิด</button>` : '<span class="muted">ตัวอย่าง</span>'}</div>`
+      : `<div class="pi-doc"><span class="muted">📎 ${label}: ไม่ได้แนบ</span></div>`;
+    // the experiment diagram is an image → show it inline for the reviewer
+    const diagramPreview = req.diagram && req.diagram.url
+      ? `<a class="pi-diagram" href="${req.diagram.url}" target="_blank" title="เปิดภาพเต็ม"><img src="${req.diagram.url}" alt="แผนภาพการทดลอง"></a>`
+      : (req.diagram ? '<div class="pi-diagram empty">🖼️ แผนภาพการทดลอง (ตัวอย่าง — ไม่มีไฟล์จริงในโปรโตไทป์)</div>' : '');
+    const reqAppoint = (req.appointments || []).length
+      ? (req.appointments || []).map(a => {
+          const u = a.userId !== '__new__' ? DB.users.find(x => x.id === a.userId) : null;
+          const email = a.userId === '__new__' ? a.email : (u ? u.email : '');
+          return `<div class="pi-mem"><span class="role-tag">${a.role}</span> <b>${a.name}</b> <span class="muted">· ${email || '—'}${a.userId === '__new__' ? ' · ยังไม่มีบัญชี (รอ AV เปิดให้)' : ''}</span></div>`;
+        }).join('')
+      : '<span class="muted">— ไม่ได้ร้องขอ —</span>';
+
+    // approved projects also show the live team + facility
+    const members = approved ? ((p.members || []).map(m => {
       const u = DB.users.find(x => x.id === m.userId);
-      return `<div class="pi-mem"><b>${u ? u.name : m.userId}</b> ${(m.roles || []).map(r => `<span class="role-tag">${this.roleKeyLabel(r)}</span>`).join(' ')}</div>`;
-    }).join('') || '<span class="muted">—</span>';
-    const docs = (p.documents || []).length
-      ? p.documents.map(d => `<div class="pi-doc"><span>📄 ${d.name} <span class="muted">· ${this.fileSize(d.size)} · ${d.category}</span></span><button class="mini-btn pidoc-open" data-id="${d.id}">เปิด</button></div>`).join('')
-      : '<span class="muted">ไม่มีเอกสารแนบ</span>';
+      return `<div class="pi-mem"><b>${u ? u.name : m.userId}</b> ${(m.roles || []).map(r => `<span class="role-tag">${r}</span>`).join(' ')}</div>`;
+    }).join('') || '<span class="muted">—</span>') : '';
 
-    const head = ownerFix
-      ? `<div class="field"><label>ชื่อโครงการ</label><input id="piName" value="${p.name}"></div>
-         <div class="field"><label>รายละเอียด</label><textarea id="piDesc" rows="2">${p.description}</textarea></div>`
-      : `<h4 class="pi-name">${p.name}</h4><p class="pi-descread">${p.description}</p>`;
+    const body = approved
+      ? `<div class="pi-grid">
+          <div><span class="pi-k">วันที่เริ่ม</span> ${p.startDate}</div>
+          <div><span class="pi-k">ห้องปฏิบัติการ</span> ${p.facility?.roomNo || '—'}</div>
+          <div><span class="pi-k">ผังกรง</span> ${p.shelves} ชั้น × ${p.cagesPerShelf} กรง</div>
+          <div><span class="pi-k">รวม</span> ${p.cages.length} กรง · ${p.cages.reduce((s, c) => s + c.mice.length, 0)} ตัว</div>
+        </div>
+        <div class="section-title">กลุ่มทดลอง</div>${p.groups.map(gr => `<div class="pi-grp"><i class="sw" style="background:${gr.color}"></i><b>${gr.name}</b>${gr.isControl ? ' <span class="muted">(control)</span>' : ''}</div>`).join('')}
+        <div class="section-title">สมาชิก</div>${members}`
+      : `<div class="pi-grid">
+          <div><span class="pi-k">วันที่ยื่นคำขอ</span> ${p.requestDate || '—'}</div>
+          <div><span class="pi-k">ผู้ยื่น (PI)</span> ${DB.users.find(u => u.id === p.createdBy)?.name || '—'}</div>
+          <div><span class="pi-k">จำนวนหนูรวม</span> ${req.totalMice || '—'} ตัว</div>
+          <div><span class="pi-k">จำนวนกลุ่ม</span> ${(req.groups || []).length} กลุ่ม</div>
+        </div>
+        ${req.objective ? `<div class="section-title">วัตถุประสงค์</div><p class="pi-descread">${req.objective}</p>` : ''}
+        <div class="section-title">กลุ่มการทดลอง</div>${reqGroups}
+        <div class="section-title">แผนภาพการทดลอง</div>${diagramPreview || '<span class="muted">ไม่ได้แนบ</span>'}
+        <div class="section-title">เอกสารแนบ</div><div class="pi-docs">${fileLine(req.aup, 'AUP')}${fileLine(req.approvalDoc, 'ใบอนุมัติจริยธรรม')}</div>
+        <div class="section-title">ร้องขอแต่งตั้ง</div>${reqAppoint}
+        ${stage === 'aec_ok' && p.aecReview ? `<p class="empty-note" style="margin-top:10px">✓ ผ่านการตรวจจริยธรรมโดย ${p.aecReview.by} · ${p.aecReview.at}</p>` : ''}`;
 
     this.openModal(`
-      <div class="modal-head"><div><h3>ข้อมูลโครงการ</h3><div class="sub">${statusText}</div></div>
+      <div class="modal-head"><div><h3>${approved ? 'ข้อมูลโครงการ' : 'คำขอสร้างโครงการ'}</h3><div class="sub">${info.text}</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
       <div class="modal-body">
-        ${approval === 'rejected' ? `<div class="reject-banner"><b>ไม่อนุมัติ</b> — ${p.rejectReason || '—'}<div class="muted" style="font-size:12px;margin-top:3px">โดย ${p.reviewedBy || '—'} · ${p.reviewedAt || ''}</div></div>` : ''}
-        ${head}
-        <div class="pi-grid">
-          <div><span class="pi-k">วันที่เริ่ม</span> ${p.startDate}</div>
-          <div><span class="pi-k">สถานะ</span> ${statusText}</div>
-          <div><span class="pi-k">ผังกรง</span> ${p.shelves} ชั้น × ${p.cagesPerShelf} กรง</div>
-          <div><span class="pi-k">รวม</span> ${p.cages.length} กรง · ${mice} ตัว</div>
-        </div>
-        <div class="section-title">กลุ่มทดลอง</div>${groups || '<span class="muted">—</span>'}
-        <div class="section-title">สมาชิก</div>${members}
-        <div class="section-title">เอกสารแนบ</div><div class="pi-docs">${docs}</div>
-        ${canReview ? `<div class="field reject-box" id="rejectBox" style="display:none"><label>เหตุผลที่ไม่อนุมัติ <span style="color:var(--red)">*</span></label><textarea id="rejectReason" rows="3" placeholder="ระบุสิ่งที่ต้องแก้ไข"></textarea></div>` : ''}
+        ${stage === 'rejected' ? `<div class="reject-banner"><b>ตีกลับ${p.rejectStage === 'av' ? ' (สัตวแพทย์)' : ' (จริยธรรม)'}</b> — ${p.rejectReason || '—'}<div class="muted" style="font-size:12px;margin-top:3px">โดย ${p.reviewedBy || '—'} · ${p.reviewedAt || ''}</div></div>` : ''}
+        <h4 class="pi-name">${p.name}</h4>
+        ${body}
+        ${aecCanReview ? `<div class="field reject-box" id="rejectBox" style="display:none"><label>เหตุผลที่ตีกลับ <span class="req-star">*</span></label><textarea id="rejectReason" rows="3" placeholder="ระบุสิ่งที่ผู้วิจัยต้องแก้ไข"></textarea></div>` : ''}
       </div>
       <div class="modal-foot">
         <button class="btn" id="piClose">ปิด</button>
-        ${this.can('editProject', p) ? `<button class="btn" id="piDocs">📎 จัดการเอกสาร</button>` : ''}
         <span class="spacer" style="flex:1"></span>
-        ${ownerFix ? `<button class="btn btn-danger" id="piDelete">🗑 ลบ</button><button class="btn btn-primary" id="piResubmit">↻ บันทึก & ส่งตรวจอีกครั้ง</button>` : ''}
-        ${canReview ? `<button class="btn btn-danger" id="piReject">✗ ไม่อนุมัติ</button><button class="btn btn-green" id="piApprove">✓ อนุมัติ</button>` : ''}
+        ${avCanBuild ? `<button class="btn btn-primary" id="piBuild">🏗️ สร้างโครงการต่อ</button>` : ''}
+        ${aecCanReview ? `<button class="btn btn-danger" id="piReject">✗ ตีกลับ</button><button class="btn btn-green" id="piApprove">✓ อนุมัติคำขอ</button>` : ''}
       </div>`);
-    if (this.can('editProject', p)) this.el('piDocs').onclick = () => this.openDocuments(p);
 
-    document.querySelectorAll('.pidoc-open').forEach(b => b.onclick = () => {
-      const d = (p.documents || []).find(x => x.id === b.dataset.id);
-      if (d && d.url) window.open(d.url, '_blank'); else this.toast('ไฟล์ตัวอย่าง (เมตาดาต้า)');
-    });
+    document.querySelectorAll('.pifile-open').forEach(b => b.onclick = () => window.open(b.dataset.url, '_blank'));
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('piClose').onclick = () => this.closeModal();
-
-    if (ownerFix) {
-      this.el('piDelete').onclick = () => { this.closeModal(); this.confirmDeleteProject(p); };
-      this.el('piResubmit').onclick = () => {
-        p.name = this.el('piName').value.trim() || p.name;
-        p.description = this.el('piDesc').value.trim() || p.description;
-        this.resubmitProject(p);
-        this.closeModal(); this.renderProjects();
-      };
-    }
-    if (canReview) {
+    if (avCanBuild) this.el('piBuild').onclick = () => { this.closeModal(); this.buildProject(p); };
+    if (aecCanReview) {
       const rb = this.el('rejectBox');
-      this.el('piApprove').onclick = () => { this.approveProject(p); this.closeModal(); this.renderProjects(); };
+      this.el('piApprove').onclick = () => { this.aecApprove(p); this.closeModal(); this.renderProjects(); };
       this.el('piReject').onclick = () => {
-        if (rb.style.display === 'none') { rb.style.display = ''; this.el('rejectReason').focus(); this.toast('ระบุเหตุผล แล้วกด "ไม่อนุมัติ" อีกครั้ง'); return; }
+        if (rb.style.display === 'none') { rb.style.display = ''; this.el('rejectReason').focus(); this.toast('ระบุเหตุผล แล้วกด "ตีกลับ" อีกครั้ง'); return; }
         const reason = this.el('rejectReason').value.trim();
         if (!reason) { this.el('rejectReason').focus(); return; }
-        this.rejectProject(p, reason); this.closeModal(); this.renderProjects();
+        this.rejectProject(p, reason, 'aec'); this.closeModal(); this.renderProjects();
       };
     }
   },
@@ -709,147 +756,243 @@ const App = {
 
   SHELF_LETTERS: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'],
 
+  // STAGE 1 — the PI's project REQUEST form. No cages here: the PI only declares
+  // what the study needs; AV lays out the real cages later when building.
   renderCreateProject() {
-    if (!this.draft) {
+    if (!this.draft || this.draft.mode === 'build') {
       this.draft = {
+        mode: 'request', editId: null,
+        meta: { name: '', objective: '' },
+        totalMice: '',
         groups: [
-          { name: 'Control', color: '#64748b', isControl: true, desc: 'กลุ่มควบคุม — อาหารปกติ' },
-          { name: 'Treatment-1', color: '#2563eb', isControl: false, desc: '' },
+          { name: 'Control', color: '#64748b', isControl: true, plannedMice: '' },
+          { name: 'Treatment-1', color: '#2563eb', isControl: false, plannedMice: '' },
         ],
-        layout: { shelves: 3, cols: 6 },
-        cells: {},        // "shelf_pos" -> { g: groupIndex, mice: count }
+        diagram: null, aup: null, approvalDoc: null,
+        appointments: [],
       };
     }
-    const isEdit = !!this.draft.editId;
-    const meta = this.draft.meta || {};
+    const d = this.draft, isEdit = !!d.editId, meta = d.meta || {};
+    const fileRow = (key, label, hint, accept, isImage) => {
+      const f = d[key];
+      const preview = isImage && f && f.url ? `<img class="rf-thumb" src="${f.url}" alt="${label}">` : '';
+      return `<div class="req-file ${preview ? 'has-thumb' : ''}" data-key="${key}">
+        ${preview}
+        <div class="rf-info"><b>${label}</b><span class="empty-note">${hint}</span></div>
+        <div class="rf-slot">${f ? `<span class="rf-name">📎 ${f.name}</span><button class="mini-btn danger" data-clear="${key}">ลบ</button>`
+          : `<label class="btn btn-sm rf-pick">แนบไฟล์<input type="file" accept="${accept}" data-file="${key}" hidden></label>`}</div>
+      </div>`;
+    };
 
     this.shell(
-      `<a data-nav="create">${isEdit ? 'แก้ไขโครงการ' : 'สร้างโครงการ'}</a>`,
+      `<a data-nav="create">${isEdit ? 'แก้ไขคำขอ' : 'ขอสร้างโครงการ'}</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>${isEdit ? 'แก้ไขโครงการ' : 'สร้างโครงการใหม่'}</h2><div class="desc">กำหนดข้อมูล กลุ่มทดลอง แล้วจัดผังกรงและหนูในหน้านี้ (แก้ไขภายหลังได้)</div></div>
+          <div><h2>${isEdit ? 'แก้ไขคำขอสร้างโครงการ' : 'คำขอสร้างโครงการ'}</h2>
+            <div class="desc">กรอกรายละเอียดการทดลองเพื่อยื่นให้ <b>สำนักเลขาฯ คณะกรรมการจริยธรรมการใช้สัตว์ทดลอง (AEC)</b> ตรวจสอบ เมื่อผ่านแล้ว <b>สัตวแพทย์ (AV)</b> จะดำเนินการสร้างโครงการในระบบต่อไป</div></div>
         </div>
-        <div class="create-wrap">
-          <div class="create-grid">
-            <div class="create-col">
-              <div class="form-card">
-                <div class="form-card-title">ข้อมูลโครงการ</div>
-                <div class="field"><label>ชื่อโครงการ <span style="color:var(--red)">*</span></label>
-                  <input id="cpName" placeholder="เช่น NAFLD Diet Study" value="${(meta.name || '').replace(/"/g, '&quot;')}"></div>
-                <div class="field"><label>รายละเอียด</label>
-                  <textarea id="cpDesc" rows="2" placeholder="วัตถุประสงค์ / คำอธิบายโครงการ">${meta.desc || ''}</textarea></div>
-                <div class="field"><label>วันที่เริ่ม</label><input id="cpDate" type="date" value="${meta.date || todayISO()}"></div>
-                <p class="empty-note" style="margin:2px 0 0">${isEdit ? 'บันทึกแล้วโครงการจะกลับไปสถานะ <b>รอตรวจสอบ</b> เพื่อให้ AV อนุมัติอีกครั้ง' : 'เมื่อสร้างแล้ว โครงการจะอยู่สถานะ <b>รอตรวจสอบ</b> เพื่อให้ AV (สัตวแพทย์ผู้ควบคุม) อนุมัติก่อนเริ่มใช้งาน'}</p>
-              </div>
-            </div>
 
-            <div class="create-col">
-              <div class="form-card">
-                <div class="form-card-title">กลุ่มทดลอง
-                  <button class="btn btn-ghost btn-sm" id="cpAddGroup" style="margin-left:auto">+ เพิ่มกลุ่ม</button>
-                </div>
-                <div id="cpGroups"></div>
-                <p class="empty-note">เลือกได้ 1 กลุ่มเป็นกลุ่มควบคุม (Control)</p>
-              </div>
-            </div>
+        <div class="create-flow">
+          <span class="cf-step on">1 · ผู้วิจัยยื่นคำขอ</span><span class="cf-arrow">→</span>
+          <span class="cf-step">2 · จริยธรรมตรวจ</span><span class="cf-arrow">→</span>
+          <span class="cf-step">3 · สัตวแพทย์สร้างโครงการ</span>
+        </div>
+
+        <div class="create-wrap">
+          <div class="form-card">
+            <div class="form-card-title">ข้อมูลโครงการ</div>
+            <div class="field"><label>ชื่อโครงการ <span class="req-star">*</span></label>
+              <input id="cpName" placeholder="เช่น NAFLD Diet Study" value="${(meta.name || '').replace(/"/g, '&quot;')}"></div>
+            <div class="field"><label>วัตถุประสงค์ / รายละเอียดโดยย่อ</label>
+              <textarea id="cpObjective" rows="2" placeholder="อธิบายวัตถุประสงค์ของการทดลอง">${meta.objective || ''}</textarea></div>
+            <div class="field" style="max-width:260px"><label>จำนวนหนูที่จะใช้ทั้งหมด <span class="req-star">*</span></label>
+              <input id="cpTotalMice" type="number" min="1" max="9999" value="${d.totalMice}" placeholder="เช่น 48"></div>
           </div>
 
           <div class="form-card">
-            <div class="form-card-title">ผังกรง & ตั้งค่ากรง/หนู</div>
-            <div class="layout-controls">
-              <div class="field"><label>จำนวนชั้น</label><input id="cpShelves" type="number" min="1" max="10" value="${this.draft.layout.shelves}"></div>
-              <div class="field"><label>กรงต่อชั้น</label><input id="cpCols" type="number" min="1" max="12" value="${this.draft.layout.cols}"></div>
+            <div class="form-card-title">กลุ่มการทดลอง
+              <button class="btn btn-ghost btn-sm" id="cpAddGroup" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มกลุ่ม</button>
             </div>
-            <label class="preview-label">คลิกกรงเพื่อกำหนดกลุ่มและจำนวนหนู (กรงว่างเว้นไว้ได้)</label>
-            <div id="cpGrid" class="cage-editor"></div>
+            <p class="empty-note" style="margin-top:0">ระบุกลุ่มการทดลองและจำนวนหนูต่อกลุ่ม · เลือก 1 กลุ่มเป็นกลุ่มควบคุม (Control)</p>
+            <div id="cpGroups"></div>
+            <div class="req-sum" id="cpGroupSum"></div>
+          </div>
+
+          <div class="form-card">
+            <div class="form-card-title">เอกสารแนบ</div>
+            ${fileRow('diagram', 'แผนภาพการทดลอง', 'รูปภาพ (PNG / JPG)', 'image/*', true)}
+            ${fileRow('aup', 'AUP — Animal Use Protocol', 'ไฟล์ PDF', 'application/pdf')}
+            ${fileRow('approvalDoc', 'ใบอนุมัติจริยธรรม', 'ไฟล์ PDF', 'application/pdf')}
+            <p class="empty-note">โปรโตไทป์นี้เก็บไฟล์ไว้ในหน่วยความจำชั่วคราวเท่านั้น (รีเฟรชแล้วหาย)</p>
+          </div>
+
+          <div class="form-card">
+            <div class="form-card-title">ร้องขอแต่งตั้งเจ้าหน้าที่ประจำโครงการ
+              <button class="btn btn-ghost btn-sm" id="cpAddPerson" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มรายชื่อ</button>
+            </div>
+            <p class="empty-note" style="margin-top:0">ร้องขอแต่งตั้ง <b>CoPI (นักวิจัยร่วม)</b> และ <b>AHS (นักวิจัยปฏิบัติการ)</b> แต่ละตำแหน่งมีได้มากกว่า 1 คน · หากยังไม่มีบัญชี สัตวแพทย์จะเป็นผู้เปิดบัญชีและแต่งตั้งให้ภายหลัง</p>
+            <div id="cpPeople"></div>
           </div>
 
           <div class="create-actions">
+            <span class="empty-note" style="flex:1">${isEdit ? '' : `วันที่ยื่นคำขอ: <b>${todayISO()}</b> (ระบบบันทึกอัตโนมัติ)`}</span>
             <button class="btn" data-nav="projects">ยกเลิก</button>
-            <button class="btn btn-primary" id="cpCreate">${isEdit ? '💾 บันทึก & ส่งตรวจอีกครั้ง' : 'สร้างโครงการ'}</button>
+            <button class="btn btn-primary" id="cpCreate">${isEdit ? '↻ บันทึก & ยื่นใหม่' : '📨 ยื่นคำขอ'}</button>
           </div>
         </div>
       </div>`
     );
 
-    this.renderDraftGroups();
-    this.renderCageEditor();
-
-    const onLayout = () => {
-      this.draft.layout.shelves = Math.max(1, Math.min(10, +this.el('cpShelves').value || 1));
-      this.draft.layout.cols = Math.max(1, Math.min(12, +this.el('cpCols').value || 1));
-      // drop cells that fall outside the new grid
-      Object.keys(this.draft.cells).forEach(k => {
-        const [s, p] = k.split('_').map(Number);
-        if (s > this.draft.layout.shelves || p > this.draft.layout.cols) delete this.draft.cells[k];
-      });
-      this.renderCageEditor();
-    };
-    this.el('cpShelves').addEventListener('input', onLayout);
-    this.el('cpCols').addEventListener('input', onLayout);
-
+    this.renderReqGroups();
+    this.renderReqPeople();
     this.el('cpAddGroup').onclick = () => {
-      this.captureDraftGroups();
+      this.captureReqGroups();
       const i = this.draft.groups.length;
-      this.draft.groups.push({ name: `Treatment-${i}`, color: this.GROUP_PALETTE[i % this.GROUP_PALETTE.length], isControl: false, desc: '' });
-      this.renderDraftGroups();
+      this.draft.groups.push({ name: `Treatment-${i}`, color: this.GROUP_PALETTE[i % this.GROUP_PALETTE.length], isControl: false, plannedMice: '' });
+      this.renderReqGroups();
     };
+    this.el('cpAddPerson').onclick = () => { this.captureReqPeople(); this.draft.appointments.push({ role: 'COPI', userId: '', name: '' }); this.renderReqPeople(); };
+
+    // file pickers + clears
+    this.el('root').querySelectorAll('[data-file]').forEach(inp => {
+      inp.onchange = (e) => {
+        const f = e.target.files[0]; if (!f) return;
+        this.draft[e.target.dataset.file] = { name: f.name, url: URL.createObjectURL(f), size: f.size };
+        this.captureReqGroups(); this.captureReqPeople(); this.renderCreateProject();
+      };
+    });
+    this.el('root').querySelectorAll('[data-clear]').forEach(b => {
+      b.onclick = () => { this.draft[b.dataset.clear] = null; this.captureReqGroups(); this.captureReqPeople(); this.renderCreateProject(); };
+    });
+    this.el('cpTotalMice').addEventListener('input', () => this.updateGroupSum());
     this.el('cpCreate').onclick = () => this.submitCreateProject();
   },
 
-  renderDraftGroups() {
+  renderReqGroups() {
     const rows = this.draft.groups.map((g, i) => `
       <div class="group-item">
         <div class="group-row">
           <input type="color" class="g-color" value="${g.color}" data-i="${i}">
           <input class="g-name" value="${g.name}" placeholder="ชื่อกลุ่ม" data-i="${i}">
+          <input class="g-mice" type="number" min="0" max="9999" value="${g.plannedMice}" placeholder="จำนวน" data-i="${i}">
           <label class="g-ctrl"><input type="radio" name="cpControl" ${g.isControl ? 'checked' : ''} data-i="${i}"> Control</label>
           <button class="icon-btn g-del" data-i="${i}" title="ลบกลุ่ม" ${this.draft.groups.length <= 1 ? 'disabled' : ''}>🗑️</button>
         </div>
-        <input class="g-desc" value="${g.desc || ''}" placeholder="คำอธิบายกลุ่ม เช่น อาหารไขมันสูง + ยา" data-i="${i}">
       </div>`).join('');
     this.el('cpGroups').innerHTML = rows;
     this.el('cpGroups').querySelectorAll('.g-del').forEach(btn => {
       btn.onclick = () => {
-        this.captureDraftGroups();
+        this.captureReqGroups();
         this.draft.groups.splice(+btn.dataset.i, 1);
         if (!this.draft.groups.some(g => g.isControl) && this.draft.groups.length) this.draft.groups[0].isControl = true;
-        this.draft.cells = {};             // group indices shifted → clear assigned cages
-        this.renderDraftGroups();
-        this.renderCageEditor();
+        this.renderReqGroups();
       };
     });
-    // keep colour/name in sync with the cage grid live
-    this.el('cpGroups').querySelectorAll('.g-color, .g-name').forEach(inp => {
-      inp.addEventListener('input', () => { this.captureDraftGroups(); this.renderCageEditor(); });
-    });
-    this.el('cpGroups').querySelectorAll('input[name="cpControl"]').forEach(r => {
-      r.onchange = () => { this.captureDraftGroups(); };
-    });
+    this.el('cpGroups').querySelectorAll('.g-mice').forEach(inp => inp.addEventListener('input', () => this.updateGroupSum()));
+    this.updateGroupSum();
   },
 
-  // read the editable group rows back into the draft (before any re-render)
-  captureDraftGroups() {
-    const container = this.el('cpGroups');
-    if (!container) return;
-    container.querySelectorAll('.group-item').forEach((row, i) => {
+  captureReqGroups() {
+    const c = this.el('cpGroups');
+    if (!c) return;
+    c.querySelectorAll('.group-item').forEach((row, i) => {
       if (!this.draft.groups[i]) return;
       this.draft.groups[i].name = row.querySelector('.g-name').value;
       this.draft.groups[i].color = row.querySelector('.g-color').value;
-      this.draft.groups[i].desc = row.querySelector('.g-desc').value;
+      this.draft.groups[i].plannedMice = row.querySelector('.g-mice').value;
       this.draft.groups[i].isControl = row.querySelector('input[name="cpControl"]').checked;
     });
   },
 
+  // live "sum of groups vs declared total" hint
+  updateGroupSum() {
+    const el = this.el('cpGroupSum'); if (!el) return;
+    const c = this.el('cpGroups');
+    let sum = 0;
+    c.querySelectorAll('.g-mice').forEach(i => { sum += +i.value || 0; });
+    const total = +this.el('cpTotalMice').value || 0;
+    const ok = total && sum === total;
+    el.className = `req-sum ${total ? (ok ? 'ok' : 'warn') : ''}`;
+    el.innerHTML = total
+      ? `รวมหนูในกลุ่ม <b>${sum}</b> / ${total} ตัว ${ok ? '✓' : (sum > total ? '· เกินจำนวนที่ระบุ' : '· ยังไม่ครบ')}`
+      : `รวมหนูในกลุ่ม <b>${sum}</b> ตัว`;
+  },
+
+  renderReqPeople() {
+    const staff = DB.users.filter(u => u.position !== 'ADMIN');
+    const esc = v => (v || '').replace(/"/g, '&quot;');
+    const rows = this.draft.appointments.map((a, i) => {
+      const isNew = a.userId === '__new__';
+      // for a person without an account, collect the FULL account structure
+      // (first/last/email) — AV only needs to set a password when confirming.
+      const newFields = isNew ? `
+        <div class="rp-new">
+          <div class="rp-new-hd">ข้อมูลบัญชีใหม่ — สัตวแพทย์จะตั้งรหัสผ่านให้ตอนสร้างโครงการ</div>
+          <div class="rp-new-grid">
+            <input class="rp-first" data-i="${i}" placeholder="ชื่อ *" value="${esc(a.firstName)}">
+            <input class="rp-last" data-i="${i}" placeholder="สกุล" value="${esc(a.lastName)}">
+            <input class="rp-email" data-i="${i}" type="email" placeholder="อีเมล *" value="${esc(a.email)}">
+          </div>
+        </div>` : '';
+      return `
+      <div class="req-person ${isNew ? 'has-new' : ''}" data-i="${i}">
+        <div class="rp-row">
+          <select class="rp-role" data-i="${i}">
+            <option value="COPI" ${a.role === 'COPI' ? 'selected' : ''}>CoPI — นักวิจัยร่วม</option>
+            <option value="AHS" ${a.role === 'AHS' ? 'selected' : ''}>AHS — นักวิจัยปฏิบัติการ</option>
+          </select>
+          <select class="rp-user" data-i="${i}">
+            <option value="">— เลือกบุคลากรที่มีบัญชีแล้ว —</option>
+            ${staff.map(u => `<option value="${u.id}" ${a.userId === u.id ? 'selected' : ''}>${u.name} · ${u.email}</option>`).join('')}
+            <option value="__new__" ${isNew ? 'selected' : ''}>➕ ยังไม่มีบัญชี — กรอกข้อมูลใหม่</option>
+          </select>
+          <button class="icon-btn rp-del" data-i="${i}" title="ลบ">🗑️</button>
+        </div>
+        ${newFields}
+      </div>`;
+    }).join('') || '<p class="empty-note">ยังไม่ได้ร้องขอแต่งตั้งใคร</p>';
+    this.el('cpPeople').innerHTML = rows;
+    this.el('cpPeople').querySelectorAll('.rp-role').forEach(s => s.onchange = () => { this.captureReqPeople(); });
+    this.el('cpPeople').querySelectorAll('.rp-user').forEach(s => s.onchange = () => { this.captureReqPeople(); this.renderReqPeople(); });
+    this.el('cpPeople').querySelectorAll('.rp-del').forEach(b => b.onclick = () => { this.captureReqPeople(); this.draft.appointments.splice(+b.dataset.i, 1); this.renderReqPeople(); });
+  },
+
+  captureReqPeople() {
+    const c = this.el('cpPeople'); if (!c) return;
+    c.querySelectorAll('.req-person').forEach((row, i) => {
+      const a = this.draft.appointments[i]; if (!a) return;
+      a.role = row.querySelector('.rp-role').value;
+      a.userId = row.querySelector('.rp-user').value;
+      if (a.userId === '__new__') {
+        // the new-account inputs may not be rendered yet (this capture runs right
+        // after the dropdown changes to __new__, before the re-render) — keep any
+        // existing values in that case so the fields aren't wiped.
+        const first = row.querySelector('.rp-first'), last = row.querySelector('.rp-last'), email = row.querySelector('.rp-email');
+        if (first) a.firstName = first.value.trim();
+        if (last) a.lastName = last.value.trim();
+        if (email) a.email = email.value.trim();
+        a.name = `${a.firstName || ''} ${a.lastName || ''}`.trim();
+      } else {
+        a.name = DB.users.find(u => u.id === a.userId)?.name || '';
+      }
+    });
+  },
+
+  // default cage code (A-01) and the custom-name helpers the AV build editor uses
+  cageDefaultCode(s, p) { return `${this.SHELF_LETTERS[s - 1]}-${String(p).padStart(2, '0')}`; },
+  shelfLabel(s) { const L = (this.draft && this.draft.shelfLabels) || {}; return (L[s] != null && L[s] !== '') ? L[s] : `ชั้น ${s}`; },
+  cellCode(s, p) { const c = this.draft.cells[`${s}_${p}`]; return (c && c.code) ? c.code : this.cageDefaultCode(s, p); },
+
   renderCageEditor() {
     const { shelves, cols } = this.draft.layout;
+    if (!this.draft.shelfLabels) this.draft.shelfLabels = {};
     let assigned = 0, mice = 0;
     let html = '';
     for (let s = 1; s <= shelves; s++) {
       let cells = '';
       for (let p = 1; p <= cols; p++) {
         const cell = this.draft.cells[`${s}_${p}`];
-        const code = `${this.SHELF_LETTERS[s - 1]}-${String(p).padStart(2, '0')}`;
+        const code = this.cellCode(s, p);
         if (cell) {
           assigned++; mice += cell.mice;
           const g = this.draft.groups[cell.g];
@@ -867,7 +1010,10 @@ const App = {
         }
       }
       html += `<div class="ce-shelf">
-        <div class="ce-shelf-head"><span>ชั้น ${s}</span><button class="btn btn-ghost btn-sm" data-shelf="${s}">ทั้งชั้น</button></div>
+        <div class="ce-shelf-head">
+          <input class="ce-shelf-name" data-shelf="${s}" value="${(this.draft.shelfLabels[s] || '').replace(/"/g, '&quot;')}" placeholder="ชั้น ${s}" title="ตั้งชื่อชั้น">
+          <button class="btn btn-ghost btn-sm" data-shelf="${s}">ตั้งค่าทั้งชั้น</button>
+        </div>
         <div class="ce-row" style="grid-template-columns:repeat(${cols},1fr)">${cells}</div>
       </div>`;
     }
@@ -877,8 +1023,13 @@ const App = {
     this.el('cpGrid').querySelectorAll('[data-cell]').forEach(c => {
       c.onclick = () => this.openCageConfig({ cell: c.dataset.cell });
     });
-    this.el('cpGrid').querySelectorAll('[data-shelf]').forEach(b => {
+    // "ตั้งค่าทั้งชั้น" button (not the shelf-name input)
+    this.el('cpGrid').querySelectorAll('button[data-shelf]').forEach(b => {
       b.onclick = () => this.openCageConfig({ shelf: +b.dataset.shelf });
+    });
+    // editable shelf names — update the draft live without a re-render (keeps focus)
+    this.el('cpGrid').querySelectorAll('.ce-shelf-name').forEach(inp => {
+      inp.oninput = () => { this.draft.shelfLabels[inp.dataset.shelf] = inp.value; };
     });
   },
 
@@ -886,9 +1037,12 @@ const App = {
   openCageConfig(target) {
     const isShelf = target.shelf != null;
     const current = isShelf ? null : this.draft.cells[target.cell];
+    const cellS = isShelf ? null : +target.cell.split('_')[0];
+    const cellP = isShelf ? null : +target.cell.split('_')[1];
+    const defCode = isShelf ? '' : this.cellCode(cellS, cellP);
     const label = isShelf
-      ? `ตั้งค่าทั้งชั้น ${target.shelf}`
-      : `ตั้งค่ากรง ${this.SHELF_LETTERS[(+target.cell.split('_')[0]) - 1]}-${String(+target.cell.split('_')[1]).padStart(2, '0')}`;
+      ? `ตั้งค่าทั้ง${this.shelfLabel(target.shelf)}`
+      : `ตั้งค่ากรง ${defCode}`;
     let selG = current ? current.g : (isShelf ? null : 0);
     let selSex = current ? current.sex : 'M';
     const curMice = current ? current.mice : null;
@@ -909,6 +1063,7 @@ const App = {
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
       </div>
       <div class="modal-body">
+        ${isShelf ? '' : `<div class="field"><label>รหัสกรง</label><input id="cageCode" value="${defCode.replace(/"/g, '&quot;')}" placeholder="เช่น A-01"></div>`}
         <div class="field"><label>1. กลุ่มทดลอง</label><div class="choice-row wrap" id="cageGrp">${groupChoices}</div></div>
         <div class="field"><label>2. เพศ (ทั้งกรง)</label>
           <div class="sex-row" id="cageSex">
@@ -933,11 +1088,15 @@ const App = {
 
     const commit = (mice) => {
       if (selG == null) { this.toast('กรุณาเลือกกลุ่มก่อน'); return; }
-      const cell = { g: selG, mice, sex: selSex };
       if (isShelf) {
-        for (let p = 1; p <= this.draft.layout.cols; p++) this.draft.cells[`${target.shelf}_${p}`] = { ...cell };
+        // whole shelf: each cage keeps its own (default) code
+        for (let p = 1; p <= this.draft.layout.cols; p++) {
+          const prev = this.draft.cells[`${target.shelf}_${p}`];
+          this.draft.cells[`${target.shelf}_${p}`] = { g: selG, mice, sex: selSex, code: prev && prev.code };
+        }
       } else {
-        this.draft.cells[target.cell] = cell;
+        const code = (this.el('cageCode').value || '').trim() || this.cageDefaultCode(cellS, cellP);
+        this.draft.cells[target.cell] = { g: selG, mice, sex: selSex, code };
       }
       this.closeModal(); this.renderCageEditor();
     };
@@ -989,69 +1148,385 @@ const App = {
     };
   },
 
+  // submit (or resubmit) the PI request → project enters the AEC queue
   submitCreateProject() {
-    this.captureDraftGroups();
+    this.captureReqGroups();
+    this.captureReqPeople();
+    const d = this.draft;
     const name = this.el('cpName').value.trim();
+    const objective = this.el('cpObjective').value.trim();
+    const totalMice = +this.el('cpTotalMice').value || 0;
     if (!name) { this.el('cpName').focus(); this.toast('กรุณากรอกชื่อโครงการ'); return; }
-    if (this.draft.groups.some(g => !g.name.trim())) { this.toast('กรุณาตั้งชื่อให้ครบทุกกลุ่ม'); return; }
-    if (!this.draft.groups.some(g => g.isControl)) this.draft.groups[0].isControl = true;
+    if (!totalMice) { this.el('cpTotalMice').focus(); this.toast('กรุณาระบุจำนวนหนูที่จะใช้'); return; }
+    if (d.groups.some(g => !g.name.trim())) { this.toast('กรุณาตั้งชื่อให้ครบทุกกลุ่ม'); return; }
+    if (!d.groups.some(g => g.isControl)) d.groups[0].isControl = true;
+    // validate requested appointments — an existing user must be picked, or a new
+    // account must have a full name + a valid, unique email (AV adds the password)
+    for (const a of d.appointments) {
+      if (!a.userId) { this.toast('กรุณาเลือกบุคลากรหรือกรอกข้อมูลบัญชีใหม่ให้ครบ'); return; }
+      if (a.userId === '__new__') {
+        if (!a.firstName) { this.toast('กรุณากรอกชื่อผู้ที่ขอแต่งตั้ง'); return; }
+        if (!/^\S+@\S+\.\S+$/.test(a.email || '')) { this.toast(`อีเมลของ "${a.firstName}" ไม่ถูกต้อง`); return; }
+        const dup = DB.users.some(u => u.email.toLowerCase() === a.email.toLowerCase())
+          || d.appointments.filter(x => x.userId === '__new__').some((x, idx, arr) => x.email.toLowerCase() === a.email.toLowerCase() && arr.indexOf(x) !== idx);
+        if (dup) { this.toast(`อีเมล ${a.email} ถูกใช้แล้ว`); return; }
+      }
+    }
 
-    const editId = this.draft.editId;
-    const pid = editId || ('P' + Date.now());
-    const groups = this.draft.groups.map((g, i) => ({ id: `${pid}-G${i + 1}`, name: g.name.trim(), isControl: g.isControl, color: g.color, desc: (g.desc || '').trim() }));
+    const request = {
+      totalMice, objective,
+      groups: d.groups.map(g => ({ name: g.name.trim(), isControl: g.isControl, color: g.color, plannedMice: +g.plannedMice || 0 })),
+      diagram: d.diagram, aup: d.aup, approvalDoc: d.approvalDoc,
+      appointments: d.appointments.map(a => a.userId === '__new__'
+        ? { role: a.role, userId: '__new__', firstName: a.firstName, lastName: a.lastName || '', email: a.email, name: `${a.firstName} ${a.lastName || ''}`.trim() }
+        : { role: a.role, userId: a.userId, name: DB.users.find(u => u.id === a.userId)?.name || a.name }),
+    };
 
-    // build cages from painted cells
+    if (d.editId) {
+      const p = Data.getProject(d.editId);
+      Object.assign(p, { name, description: objective || '—', request });
+      this.resubmitProject(p);
+      this.draft = null;
+      return this.go('projects');
+    }
+
+    const pid = 'P' + Date.now();
+    DB.projects.push({
+      id: pid, name, description: objective || '—', startDate: todayISO(),
+      status: 'active', createdBy: this.user.id, approval: 'requested',
+      requestDate: todayISO(), request, facility: null,
+      shelves: 0, cagesPerShelf: 0, groups: [], cages: [], documents: [],
+      members: [{ userId: this.user.id, roles: ['PI'] }],
+    });
+    this.log('ยื่นคำขอสร้างโครงการ', `${name} · ${totalMice} ตัว · ${request.groups.length} กลุ่ม`, name);
+    this.draft = null;
+    this.toast(`ยื่นคำขอ "${name}" แล้ว — รอสำนักเลขาฯ จริยธรรมตรวจสอบ`);
+    this.go('projects');
+  },
+
+  // ---------------------------------------------------------
+  // STAGE 3 — AV builds the approved request into a real project (cages, facility)
+  // ---------------------------------------------------------
+  buildProject(p) {
+    const req = p.request || { groups: [] };
+    // seed the build draft from the request; groups keep their planned colours
+    this.draft = {
+      mode: 'build', buildId: p.id,
+      facility: { roomNo: '', quarantineDate: '', moveInDate: todayISO(), ...(p.facility || {}) },
+      groups: (req.groups || []).map((g, i) => ({ name: g.name, color: g.color || this.GROUP_PALETTE[i % this.GROUP_PALETTE.length], isControl: g.isControl, desc: '' })),
+      layout: { shelves: 4, cols: 6 },
+      cells: {},
+      shelfLabels: {},    // custom shelf names, keyed by shelf number (blank = "ชั้น N")
+      appointments: [],   // VET / SCI / ACT appointed from internal staff
+      // password AV sets for each requested new-account person, keyed by email
+      newPasswords: {},
+    };
+    this.go('build', p.id);
+  },
+
+  renderBuildProject() {
+    const p = Data.getProject(this.route.projectId);
+    if (!p) return this.go('projects');
+    if (!this.canBuild) { this.toast('เฉพาะสัตวแพทย์ (AV) เท่านั้น'); return this.go('projects'); }
+    if (this.approvalStage(p) !== 'aec_ok' && this.approvalStage(p) !== 'approved') {
+      this.toast('โครงการนี้ยังไม่ผ่านการตรวจจริยธรรม'); return this.go('projects');
+    }
+    if (!this.draft || this.draft.mode !== 'build' || this.draft.buildId !== p.id) this.buildProject(p);
+    const d = this.draft, req = p.request || {};
+    const f = d.facility;
+    const plannedSummary = (req.groups || []).map(g => `${g.name} ${g.plannedMice}`).join(' · ');
+
+    this.shell(
+      `<a data-nav="build" data-project-id="${p.id}">สร้างโครงการ</a>`,
+      `<div class="page">
+        <div class="page-head">
+          <div><h2>สร้างโครงการ — ${p.name}</h2>
+            <div class="desc">คำขอผ่านการตรวจจริยธรรมแล้ว — กรอกข้อมูลสถานที่ จัดผังกรง และแต่งตั้งเจ้าหน้าที่ประจำโครงการ</div></div>
+        </div>
+
+        <div class="create-flow">
+          <span class="cf-step done">1 · ผู้วิจัยยื่นคำขอ</span><span class="cf-arrow">→</span>
+          <span class="cf-step done">2 · จริยธรรมตรวจ</span><span class="cf-arrow">→</span>
+          <span class="cf-step on">3 · สัตวแพทย์สร้างโครงการ</span>
+        </div>
+
+        <div class="req-recap">📋 คำขอ: หนู <b>${req.totalMice || '—'}</b> ตัว · ${req.groups ? req.groups.length : 0} กลุ่ม (${plannedSummary || '—'})
+          <button class="btn btn-sm" id="bpViewReq" style="margin-left:auto">ดูรายละเอียดคำขอ</button></div>
+
+        <div class="create-wrap">
+          <div class="form-card">
+            <div class="form-card-title">ข้อมูลสถานที่และการรับสัตว์</div>
+            <div class="form-row3">
+              <div class="field"><label>เลขห้องปฏิบัติการ</label><input id="bpRoom" value="${(f.roomNo || '').replace(/"/g, '&quot;')}" placeholder="เช่น LA-204"></div>
+              <div class="field"><label>วันที่รับเข้ากักกันโรค</label><input id="bpQuar" type="date" value="${f.quarantineDate || ''}"></div>
+              <div class="field"><label>วันที่ย้ายเข้าห้องทดลอง</label><input id="bpMove" type="date" value="${f.moveInDate || ''}"></div>
+            </div>
+          </div>
+
+          <div class="form-card">
+            <div class="form-card-title">กลุ่มทดลอง
+              <button class="btn btn-ghost btn-sm" id="bpAddGroup" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มกลุ่ม</button>
+            </div>
+            <div id="cpGroups"></div>
+            <p class="empty-note">ปรับกลุ่ม สี และคำอธิบายได้ตามจริง (ตั้งต้นจากคำขอของผู้วิจัย)</p>
+          </div>
+
+          <div class="form-card">
+            <div class="form-card-title">ผังกรง & จำนวนหนู</div>
+            <div class="layout-controls">
+              <div class="field"><label>จำนวนชั้น</label><input id="cpShelves" type="number" min="1" max="10" value="${d.layout.shelves}"></div>
+              <div class="field"><label>กรงต่อชั้น</label><input id="cpCols" type="number" min="1" max="12" value="${d.layout.cols}"></div>
+            </div>
+            <label class="preview-label">คลิกกรงเพื่อกำหนดกลุ่ม เพศ และจำนวนหนู (เลขชั้น/เลขกรงปรับได้ภายหลังในหน้าจัดการกรง)</label>
+            <div id="cpGrid" class="cage-editor"></div>
+          </div>
+
+          <div class="form-card">
+            <div class="form-card-title">ทีมวิจัยตามคำขอ (CoPI / AHS)</div>
+            <p class="empty-note" style="margin-top:0">ผู้ที่มีบัญชีแล้วจะถูกแต่งตั้งอัตโนมัติ · สำหรับผู้ที่ <b>ยังไม่มีบัญชี</b> กรุณาตั้งรหัสผ่านเพื่อเปิดบัญชีและยืนยัน</p>
+            <div id="bpRequested"></div>
+          </div>
+
+          <div class="form-card">
+            <div class="form-card-title">แต่งตั้งเจ้าหน้าที่ประจำโครงการ
+              <button class="btn btn-ghost btn-sm" id="bpAddStaff" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่ม</button>
+            </div>
+            <p class="empty-note" style="margin-top:0">แต่งตั้ง <b>VET · Sci · ACT</b> ประจำโครงการ เลือกจากบุคลากรภายในของแต่ละตำแหน่ง</p>
+            <div id="bpStaff"></div>
+          </div>
+
+          <div class="create-actions">
+            <button class="btn" id="bpPrint">🏷️ ปริ้นใบติดหน้ากรง</button>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn btn-danger" id="bpReject">✗ ตีกลับ</button>
+            <button class="btn" data-nav="projects">ยกเลิก</button>
+            <button class="btn btn-primary" id="bpCreate">✓ สร้างโครงการ</button>
+          </div>
+        </div>
+      </div>`
+    );
+
+    this.renderBuildGroups();
+    this.renderCageEditor();
+    this.renderRequestedTeam(p);
+    this.renderBuildStaff();
+
+    const onLayout = () => {
+      d.layout.shelves = Math.max(1, Math.min(10, +this.el('cpShelves').value || 1));
+      d.layout.cols = Math.max(1, Math.min(12, +this.el('cpCols').value || 1));
+      Object.keys(d.cells).forEach(k => { const [s, pos] = k.split('_').map(Number); if (s > d.layout.shelves || pos > d.layout.cols) delete d.cells[k]; });
+      this.renderCageEditor();
+    };
+    this.el('cpShelves').addEventListener('input', onLayout);
+    this.el('cpCols').addEventListener('input', onLayout);
+    this.el('bpAddGroup').onclick = () => { this.captureBuildGroups(); const i = d.groups.length; d.groups.push({ name: `Treatment-${i}`, color: this.GROUP_PALETTE[i % this.GROUP_PALETTE.length], isControl: false, desc: '' }); this.renderBuildGroups(); this.renderCageEditor(); };
+    this.el('bpAddStaff').onclick = () => { this.captureBuildStaff(); d.appointments.push({ role: 'VET', userId: '' }); this.renderBuildStaff(); };
+    this.el('bpViewReq').onclick = () => this.openProjectInfo(p);
+    this.el('bpPrint').onclick = () => this.printCageLabels(p, d);
+    this.el('bpReject').onclick = () => this.promptReject(p, 'av');
+    this.el('bpCreate').onclick = () => this.submitBuildProject(p);
+  },
+
+  renderBuildGroups() {
+    const rows = this.draft.groups.map((g, i) => `
+      <div class="group-item">
+        <div class="group-row">
+          <input type="color" class="g-color" value="${g.color}" data-i="${i}">
+          <input class="g-name" value="${g.name}" placeholder="ชื่อกลุ่ม" data-i="${i}">
+          <label class="g-ctrl"><input type="radio" name="cpControl" ${g.isControl ? 'checked' : ''} data-i="${i}"> Control</label>
+          <button class="icon-btn g-del" data-i="${i}" title="ลบกลุ่ม" ${this.draft.groups.length <= 1 ? 'disabled' : ''}>🗑️</button>
+        </div>
+        <input class="g-desc" value="${g.desc || ''}" placeholder="คำอธิบายกลุ่ม" data-i="${i}">
+      </div>`).join('');
+    this.el('cpGroups').innerHTML = rows;
+    this.el('cpGroups').querySelectorAll('.g-del').forEach(btn => btn.onclick = () => {
+      this.captureBuildGroups(); this.draft.groups.splice(+btn.dataset.i, 1);
+      if (!this.draft.groups.some(g => g.isControl) && this.draft.groups.length) this.draft.groups[0].isControl = true;
+      this.draft.cells = {}; this.renderBuildGroups(); this.renderCageEditor();
+    });
+    this.el('cpGroups').querySelectorAll('.g-color, .g-name').forEach(inp => inp.addEventListener('input', () => { this.captureBuildGroups(); this.renderCageEditor(); }));
+    this.el('cpGroups').querySelectorAll('input[name="cpControl"]').forEach(r => r.onchange = () => this.captureBuildGroups());
+  },
+
+  captureBuildGroups() {
+    const c = this.el('cpGroups'); if (!c) return;
+    c.querySelectorAll('.group-item').forEach((row, i) => {
+      if (!this.draft.groups[i]) return;
+      this.draft.groups[i].name = row.querySelector('.g-name').value;
+      this.draft.groups[i].color = row.querySelector('.g-color').value;
+      this.draft.groups[i].desc = row.querySelector('.g-desc').value;
+      this.draft.groups[i].isControl = row.querySelector('input[name="cpControl"]').checked;
+    });
+  },
+
+  renderBuildStaff() {
+    const byRole = { VET: 'VET', SCI: 'SCI', ACT: 'ACT' };
+    const pool = r => DB.users.filter(u => u.position === byRole[r]);
+    const rows = this.draft.appointments.map((a, i) => `
+      <div class="req-person" data-i="${i}">
+        <select class="bs-role" data-i="${i}">
+          <option value="VET" ${a.role === 'VET' ? 'selected' : ''}>VET — สัตวแพทย์</option>
+          <option value="SCI" ${a.role === 'SCI' ? 'selected' : ''}>Sci — นักวิทยาศาสตร์</option>
+          <option value="ACT" ${a.role === 'ACT' ? 'selected' : ''}>ACT — จนท.ดูแลสัตว์</option>
+        </select>
+        <select class="bs-user" data-i="${i}">
+          <option value="">— เลือกบุคลากร ${a.role} —</option>
+          ${pool(a.role).map(u => `<option value="${u.id}" ${a.userId === u.id ? 'selected' : ''}>${u.name}</option>`).join('')}
+        </select>
+        <button class="icon-btn bs-del" data-i="${i}" title="ลบ">🗑️</button>
+      </div>`).join('') || '<p class="empty-note">ยังไม่ได้แต่งตั้งเจ้าหน้าที่ประจำโครงการ</p>';
+    this.el('bpStaff').innerHTML = rows;
+    this.el('bpStaff').querySelectorAll('.bs-role').forEach(s => s.onchange = () => { this.captureBuildStaff(); this.renderBuildStaff(); });
+    this.el('bpStaff').querySelectorAll('.bs-user').forEach(s => s.onchange = () => this.captureBuildStaff());
+    this.el('bpStaff').querySelectorAll('.bs-del').forEach(b => b.onclick = () => { this.captureBuildStaff(); this.draft.appointments.splice(+b.dataset.i, 1); this.renderBuildStaff(); });
+  },
+
+  captureBuildStaff() {
+    const c = this.el('bpStaff'); if (!c) return;
+    c.querySelectorAll('.req-person').forEach((row, i) => {
+      const a = this.draft.appointments[i]; if (!a) return;
+      a.role = row.querySelector('.bs-role').value;
+      a.userId = row.querySelector('.bs-user').value;
+    });
+  },
+
+  // the CoPI/AHS the PI requested: existing users are auto-appointed; a person
+  // with no account yet gets a password field so AV can open the account here.
+  renderRequestedTeam(p) {
+    const reqs = (p.request?.appointments || []);
+    if (!reqs.length) { this.el('bpRequested').innerHTML = '<p class="empty-note">คำขอนี้ไม่ได้ร้องขอแต่งตั้งใคร</p>'; return; }
+    const rows = reqs.map((a, i) => {
+      if (a.userId === '__new__') {
+        return `<div class="bp-req new" data-email="${a.email}">
+          <div class="bp-req-main"><span class="role-tag">${a.role}</span> <b>${a.name}</b> <span class="empty-note">· ${a.email} · ยังไม่มีบัญชี</span></div>
+          <div class="bp-req-pw"><input type="text" class="bp-pw" data-email="${a.email}" placeholder="ตั้งรหัสผ่าน (≥6)" value="${this.draft.newPasswords[a.email] || ''}"></div>
+        </div>`;
+      }
+      const u = DB.users.find(x => x.id === a.userId);
+      return `<div class="bp-req"><div class="bp-req-main"><span class="role-tag">${a.role}</span> <b>${u ? u.name : a.name}</b> <span class="empty-note">· ${u ? u.email : ''} · แต่งตั้งอัตโนมัติ ✓</span></div></div>`;
+    }).join('');
+    this.el('bpRequested').innerHTML = rows;
+    this.el('bpRequested').querySelectorAll('.bp-pw').forEach(inp => {
+      inp.oninput = () => { this.draft.newPasswords[inp.dataset.email] = inp.value; };
+    });
+  },
+
+  submitBuildProject(p) {
+    this.captureBuildGroups();
+    this.captureBuildStaff();
+    const d = this.draft;
+    const cellKeys = Object.keys(d.cells);
+    if (!cellKeys.length) { this.toast('กรุณาจัดผังกรงอย่างน้อย 1 กรง'); return; }
+    if (d.appointments.some(a => !a.userId)) { this.toast('กรุณาเลือกบุคลากรให้ครบทุกรายการที่แต่งตั้ง'); return; }
+
+    // open the accounts the PI requested for people who had none — AV sets the
+    // password here; each new account is EXTERNAL and keeps its requested role.
+    const requested = (p.request?.appointments || []);
+    const newOnes = requested.filter(a => a.userId === '__new__');
+    for (const a of newOnes) {
+      const pw = (d.newPasswords[a.email] || '').trim();
+      if (pw.length < 6) { this.toast(`ตั้งรหัสผ่านให้ "${a.name}" อย่างน้อย 6 ตัวอักษร`); return; }
+    }
+    // create them (email uniqueness was checked at request time)
+    newOnes.forEach(a => {
+      const nu = { id: 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+        firstName: a.firstName, lastName: a.lastName || '', email: a.email,
+        password: d.newPasswords[a.email].trim(), position: 'EXTERNAL', projectRole: null,
+        name: a.name };
+      DB.users.push(nu);
+      a._createdId = nu.id;   // so we can appoint the fresh account below
+      this.log('เปิดบัญชีผู้ใช้ (จากคำขอโครงการ)', `${nu.name} (${nu.email}) · EXTERNAL`, p.name);
+    });
+
+    const groups = d.groups.map((g, i) => ({ id: `${p.id}-G${i + 1}`, name: g.name.trim(), isControl: g.isControl, color: g.color, desc: (g.desc || '').trim() }));
     const cages = [];
-    let cageSeq = 0;
-    for (let s = 1; s <= this.draft.layout.shelves; s++) {
-      for (let p = 1; p <= this.draft.layout.cols; p++) {
-        const cell = this.draft.cells[`${s}_${p}`];
-        if (!cell) continue;
-        const code = `${this.SHELF_LETTERS[s - 1]}-${String(p).padStart(2, '0')}`;
+    let seq = 0;
+    for (let s = 1; s <= d.layout.shelves; s++) {
+      for (let pos = 1; pos <= d.layout.cols; pos++) {
+        const cell = d.cells[`${s}_${pos}`]; if (!cell) continue;
+        const code = (cell.code && cell.code.trim()) || this.cageDefaultCode(s, pos);
         const mice = Array.from({ length: cell.mice }, (_, k) => this.freshMouse(`${code}-${k + 1}`, cell.sex || 'M'));
         cages.push({
-          id: `${pid}-C${++cageSeq}`, code, groupId: groups[cell.g].id, shelf: s, position: p, mice,
-          water: { remaining: 300, added: null, consumed: 0 },
-          food: { remaining: 100, added: null, consumed: 0 },
+          id: `${p.id}-C${++seq}`, code, shelfLabel: this.shelfLabel(s), groupId: groups[cell.g].id, shelf: s, position: pos, mice,
+          water: { remaining: 300, added: null, consumed: 0 }, food: { remaining: 100, added: null, consumed: 0 },
           status: 'pending', lastRecordDate: todayISO(),
         });
       }
     }
 
-    const desc = this.el('cpDesc').value.trim() || '—';
-    const startDate = this.el('cpDate').value || todayISO();
+    // members = creator (PI) + requested CoPI/AHS + AV-appointed VET/Sci/ACT
+    const members = [{ userId: p.createdBy, roles: ['PI'] }];
+    const add = (userId, role) => {
+      if (!userId || userId === '__new__') return;
+      let m = members.find(x => x.userId === userId);
+      if (!m) { m = { userId, roles: [] }; members.push(m); }
+      if (!m.roles.includes(role)) m.roles.push(role);
+    };
+    requested.forEach(a => add(a.userId === '__new__' ? a._createdId : a.userId, a.role));
+    d.appointments.forEach(a => add(a.userId, a.role));
 
-    // editing an existing (non-approved) project → update in place + resubmit for review
-    if (editId) {
-      const p = Data.getProject(editId);
-      Object.assign(p, {
-        name, description: desc, startDate,
-        shelves: this.draft.layout.shelves, cagesPerShelf: this.draft.layout.cols,
-        groups, cages, approval: 'waiting', rejectReason: '',
-      });
-      this.log('แก้ไขโครงการ', `${name} · ${cages.length} กรง · ส่งตรวจอีกครั้ง`, name);
-      this.draft = null;
-      this.toast(`บันทึกการแก้ไข "${name}" แล้ว — ส่งให้ AV ตรวจสอบอีกครั้ง`);
-      return this.go('projects');
-    }
-
-    DB.projects.push({
-      id: pid, name,
-      description: desc,
-      startDate,
-      status: 'active',      // operational status; approval gate below governs go-live
-      shelves: this.draft.layout.shelves,
-      cagesPerShelf: this.draft.layout.cols,
-      groups, cages,
-      documents: [],
-      approval: 'waiting',   // must be reviewed by AV before it goes live
-      // creator becomes PI of the new project (admins are superusers regardless)
-      members: [{ userId: this.user.id, roles: ['PI'] }],
+    // keep the custom shelf names so the dashboard can label shelves
+    const shelfNames = {};
+    for (let s = 1; s <= d.layout.shelves; s++) shelfNames[s] = this.shelfLabel(s);
+    Object.assign(p, {
+      approval: 'approved', startDate: d.facility.moveInDate || todayISO(),
+      facility: { roomNo: this.el('bpRoom').value.trim(), quarantineDate: this.el('bpQuar').value, moveInDate: this.el('bpMove').value },
+      shelves: d.layout.shelves, cagesPerShelf: d.layout.cols, shelfNames,
+      groups, cages, members,
     });
-    this.log('สร้างโครงการ', `${name} · ${this.draft.layout.shelves}×${this.draft.layout.cols} · ${cages.length} กรง · รอตรวจสอบ`, name);
+    this.log('สร้างโครงการ (สัตวแพทย์)', `${p.name} · ${cages.length} กรง · ${cages.reduce((s, c) => s + c.mice.length, 0)} ตัว`, p.name);
     this.draft = null;
-    this.toast(`สร้างโครงการ "${name}" แล้ว — ส่งให้ AV ตรวจสอบเพื่ออนุมัติ`);
+    this.toast(`สร้างโครงการ "${p.name}" เรียบร้อย — เริ่มใช้งานได้`);
     this.go('projects');
+  },
+
+  // print a simple cage-label sheet (one card per painted cage)
+  printCageLabels(p, d) {
+    const rows = [];
+    for (let s = 1; s <= d.layout.shelves; s++) {
+      for (let pos = 1; pos <= d.layout.cols; pos++) {
+        const cell = d.cells[`${s}_${pos}`]; if (!cell) continue;
+        const code = (cell.code && cell.code.trim()) || this.cageDefaultCode(s, pos);
+        const g = d.groups[cell.g] || {};
+        rows.push(`<div class="cage-label">
+          <div class="cl-code">${code}</div>
+          <div class="cl-proj">${p.name}</div>
+          <div class="cl-grp"><span class="cl-dot" style="background:${g.color || '#888'}"></span>${g.name || ''}</div>
+          <div class="cl-meta">${cell.sex === 'F' ? '♀ เพศเมีย' : '♂ เพศผู้'} · ${cell.mice} ตัว</div>
+          <div class="cl-room">ห้อง: ${this.el('bpRoom') ? this.el('bpRoom').value : (p.facility?.roomNo || '')}</div>
+        </div>`);
+      }
+    }
+    if (!rows.length) { this.toast('ยังไม่มีกรงให้พิมพ์ — จัดผังกรงก่อน'); return; }
+    const css = `.labels{display:grid;grid-template-columns:repeat(2,1fr);gap:8mm;padding:6mm}
+      .cage-label{border:1.5px solid #111;border-radius:6px;padding:6mm;page-break-inside:avoid}
+      .cl-code{font-size:22pt;font-weight:700;letter-spacing:1px}
+      .cl-proj{font-size:11pt;margin:2mm 0}
+      .cl-grp{display:flex;align-items:center;gap:5px;font-weight:600;font-size:12pt}
+      .cl-dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+      .cl-meta{font-size:11pt;margin-top:1mm}.cl-room{font-size:10pt;color:#444;margin-top:2mm}
+      @media print{@page{size:A4;margin:8mm}}`;
+    this.printDocument(`CageLabels_${p.name}`, `<style>${css}</style><div class="labels">${rows.join('')}</div>`);
+  },
+
+  // shared reject prompt for the AV build screen
+  promptReject(p, stage) {
+    this.openModal(`
+      <div class="modal-head"><div><h3>ตีกลับโครงการ</h3><div class="sub">${p.name}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body"><div class="field"><label>เหตุผลที่ตีกลับ <span class="req-star">*</span></label>
+        <textarea id="rjReason" rows="3" placeholder="ระบุสิ่งที่ผู้วิจัยต้องแก้ไข"></textarea></div></div>
+      <div class="modal-foot"><button class="btn" id="rjCancel">ยกเลิก</button>
+        <button class="btn btn-danger" id="rjOk">✗ ตีกลับ</button></div>`);
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('rjCancel').onclick = () => this.closeModal();
+    this.el('rjOk').onclick = () => {
+      const reason = this.el('rjReason').value.trim();
+      if (!reason) { this.el('rjReason').focus(); return; }
+      this.rejectProject(p, reason, stage);
+      this.draft = null;
+      this.closeModal(); this.go('projects');
+    };
   },
 
   // ---------------------------------------------------------
@@ -1092,7 +1567,7 @@ const App = {
       }
       shelves.push(`
         <div class="shelf">
-          <div class="shelf-label">ชั้นที่ ${s}</div>
+          <div class="shelf-label">${(p.shelfNames && p.shelfNames[s]) || 'ชั้นที่ ' + s}</div>
           <div class="cage-row" style="--cols:${p.cagesPerShelf}">${cells.join('')}</div>
         </div>`);
     }
@@ -3132,7 +3607,7 @@ const App = {
       `<a data-nav="roles">ข้อมูลผู้ใช้</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>👤 ข้อมูลผู้ใช้ & สิทธิ์</h2><div class="desc">สิทธิ์มี 2 ชั้น — <b>ตำแหน่งระดับระบบ</b> (ถือได้มากกว่า 1) และ <b>บทบาทในโครงการ</b> · สิทธิ์ที่ใช้จริง = <b>รวมกันทุกตำแหน่งและทุกบทบาท</b> ไม่มีการหักออก</div></div>
+          <div><h2>👤 ข้อมูลผู้ใช้ & สิทธิ์</h2><div class="desc">สิทธิ์มี 2 ชั้น — <b>ตำแหน่งระดับระบบ</b> (1 ตำแหน่งต่อบัญชี) และ <b>บทบาทในโครงการ</b> · สิทธิ์ที่ใช้จริง = <b>ตำแหน่ง + ทุกบทบาทในโครงการ</b> รวมกัน ไม่มีการหักออก</div></div>
           <button class="btn" id="myPwBtn">🔒 เปลี่ยนรหัสผ่านของฉัน</button>
         </div>
 
@@ -3218,10 +3693,10 @@ const App = {
 
   openUserForm(user) {
     const isNew = !user;
-    const u = user || { firstName: '', lastName: '', email: '', password: '', positions: ['SCI'] };
+    const u = user || { firstName: '', lastName: '', email: '', password: '', position: 'SCI' };
     const self = user && user.id === this.user.id;
-    const held = [...(u.positions || [])];
-    const lockRole = self && held.includes('ADMIN');   // admin can't demote self
+    const held = u.position;                    // exactly one system position
+    const lockRole = self && held === 'ADMIN';  // admin can't demote self
     // only a full admin may hand out the ADMIN position
     const posChoices = POSITION_ORDER.filter(k => k !== 'ADMIN' || this.isAdmin);
 
@@ -3239,12 +3714,12 @@ const App = {
         <div class="field"><label>รหัสผ่าน ${isNew ? '<span style="color:var(--red)">*</span>' : '<span style="font-weight:400;color:var(--text-muted)">(เว้นว่างหากไม่เปลี่ยน)</span>'}</label>
           <input id="uPass" type="text" value="${isNew ? u.password : ''}" placeholder="${isNew ? 'อย่างน้อย 6 ตัวอักษร' : '••••••'}"></div>
         <div class="field"><label>ตำแหน่งระดับระบบ <span style="color:var(--red)">*</span>
-            <span style="font-weight:400;color:var(--text-muted)">— เลือกได้มากกว่า 1 สิทธิ์จะรวมกัน</span></label>
+            <span style="font-weight:400;color:var(--text-muted)">— เลือก 1 ตำแหน่งต่อบัญชี</span></label>
           <div class="pos-grid" id="uRole">
-            ${posChoices.map(k => `<button type="button" class="role-sys ${held.includes(k) ? 'sel' : ''}" data-r="${k}" ${lockRole && k === 'ADMIN' ? 'disabled' : ''} title="${POSITIONS[k].label}">${k}</button>`).join('')}
+            ${posChoices.map(k => `<button type="button" class="role-sys ${held === k ? 'sel' : ''}" data-r="${k}" ${lockRole && k !== 'ADMIN' ? 'disabled' : ''} title="${POSITIONS[k].label}">${k}</button>`).join('')}
           </div>
-          <p class="empty-note" id="posHint">${held.map(k => POSITIONS[k] && POSITIONS[k].label).filter(Boolean).join(' + ') || 'ยังไม่ได้เลือกตำแหน่ง'}</p>
-          ${lockRole ? '<p class="empty-note">ผู้ดูแลระบบถอดตำแหน่ง ADMIN ของตัวเองไม่ได้</p>' : ''}
+          <p class="empty-note" id="posHint">${POSITIONS[held] ? POSITIONS[held].label : 'ยังไม่ได้เลือกตำแหน่ง'}</p>
+          ${lockRole ? '<p class="empty-note">ผู้ดูแลระบบเปลี่ยนตำแหน่งของตัวเองไม่ได้</p>' : ''}
         </div>
       </div>
       <div class="modal-foot">
@@ -3253,16 +3728,15 @@ const App = {
       </div>
     `);
 
-    // multi-select: a person may hold several positions and their caps add up
-    const chosen = new Set(held);
+    // single-select: exactly one system position
+    let chosen = held;
     this.el('uRole').querySelectorAll('.role-sys').forEach(b => {
       b.onclick = () => {
         if (b.disabled) return;
-        const k = b.dataset.r;
-        if (chosen.has(k)) chosen.delete(k); else chosen.add(k);
-        b.classList.toggle('sel', chosen.has(k));
-        this.el('posHint').textContent =
-          [...chosen].map(x => POSITIONS[x].label).join(' + ') || 'ยังไม่ได้เลือกตำแหน่ง';
+        if (lockRole) return;   // self-admin can't switch
+        chosen = b.dataset.r;
+        this.el('uRole').querySelectorAll('.role-sys').forEach(x => x.classList.toggle('sel', x === b));
+        this.el('posHint').textContent = POSITIONS[chosen] ? POSITIONS[chosen].label : '';
       };
     });
     this.el('closeModal').onclick = () => this.closeModal();
@@ -3277,20 +3751,19 @@ const App = {
       if (DB.users.some(x => x.email.toLowerCase() === email.toLowerCase() && (!user || x.id !== user.id))) { this.toast('อีเมลนี้ถูกใช้แล้ว'); return; }
       if (isNew && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
       if (!isNew && pass && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
-      const roles = [...chosen];
-      if (!roles.length) { this.toast('ต้องเลือกอย่างน้อย 1 ตำแหน่ง'); return; }
-      // last-admin safety net (the ADMIN button is already disabled for self-admin)
-      if (user && (user.positions || []).includes('ADMIN') && !roles.includes('ADMIN') && this.isLastAdmin(user)) { this.toast('ต้องมีผู้ดูแลระบบอย่างน้อย 1 คน'); return; }
+      if (!chosen) { this.toast('กรุณาเลือกตำแหน่ง'); return; }
+      // last-admin safety net (the position is locked for a self-admin anyway)
+      if (user && user.position === 'ADMIN' && chosen !== 'ADMIN' && this.isLastAdmin(user)) { this.toast('ต้องมีผู้ดูแลระบบอย่างน้อย 1 คน'); return; }
 
       if (isNew) {
-        DB.users.push({ id: 'u_' + Date.now().toString(36), firstName, lastName, email, password: pass, positions: roles, projectRole: null, name: `${firstName} ${lastName}`.trim() });
-        this.log('เพิ่มผู้ใช้', `${firstName} ${lastName} (${email}) · ${roles.join(' + ')}`, '');
+        DB.users.push({ id: 'u_' + Date.now().toString(36), firstName, lastName, email, password: pass, position: chosen, projectRole: null, name: `${firstName} ${lastName}`.trim() });
+        this.log('เพิ่มผู้ใช้', `${firstName} ${lastName} (${email}) · ${chosen}`, '');
       } else {
         user.firstName = firstName; user.lastName = lastName; user.email = email;
         user.name = `${firstName} ${lastName}`.trim();
-        user.positions = roles;
+        user.position = chosen;
         if (pass) user.password = pass;
-        this.log('แก้ไขผู้ใช้', `${user.name} (${email}) · ${roles.join(' + ')}`, '');
+        this.log('แก้ไขผู้ใช้', `${user.name} (${email}) · ${chosen}`, '');
       }
       this.closeModal();
       this.toast('บันทึกผู้ใช้แล้ว');
@@ -3349,7 +3822,7 @@ const App = {
     }).join('');
 
     // admins are system-wide superusers, not assignable as ordinary project members
-    const nonMembers = DB.users.filter(u => !(u.positions || []).includes('ADMIN') && !p.members.some(m => m.userId === u.id));
+    const nonMembers = DB.users.filter(u => u.position !== 'ADMIN' && !p.members.some(m => m.userId === u.id));
     const addOpts = nonMembers.length
       ? `<select id="addUser">${nonMembers.map(u => `<option value="${u.id}">${u.name} · ${this.positionKeys(u).join(' + ')}</option>`).join('')}</select>
          <button class="btn btn-primary btn-sm" id="addMemberBtn">+ เพิ่มเป็นสมาชิก</button>`

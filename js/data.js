@@ -6,25 +6,27 @@
 /* ------------------------------------------------------------------
  * PERMISSION MODEL — two tiers, additive
  *
- *  1) POSITION (ตำแหน่งระดับระบบ) — a user may hold SEVERAL, in
- *     `user.positions[]`. This is the person's job in the facility. Service
- *     positions (AV/VET/SCI/ACT) work across EVERY project because they
- *     physically handle the animals; oversight positions (IACUC/QA/AUDIT/EX)
- *     see every project read-only. GM never touches projects at all, and
- *     EXTERNAL only sees the projects they were appointed to.
+ *  1) POSITION (ตำแหน่งระดับระบบ) — EXACTLY ONE per account, in
+ *     `user.position`. This is the person's job in the facility; nobody holds
+ *     two system positions. Service positions (AV/VET/SCI/ACT) work across
+ *     EVERY project because they physically handle the animals; oversight
+ *     positions (AEC/IACUC/QA/AUDIT/EX) see every project read-only. GM never
+ *     touches projects at all, and EXTERNAL only sees projects it was appointed to.
  *
  *  2) PROJECT ROLE (บทบาทในโครงการ) — per project, in
  *     `project.members[] = { userId, roles[] }`. PI/COPI/AHS are the research
  *     team. SCI/VET/ACT may also be appointed to a single project and then
- *     carry the SAME caps as the system position of that name — but only
- *     inside that project. That is how an EXTERNAL vet can work on project A
- *     without seeing project B. For someone who already holds the system
- *     position, the appointment adds nothing (they could do it anyway), so it
- *     reads as a paper appointment — no separate "nominal" flag needed.
+ *     carry the SAME caps as the system position of that name — but only inside
+ *     that project. That is how an EXTERNAL vet can work on project A without
+ *     seeing project B. A person's "second role" ONLY ever comes from a project
+ *     role — e.g. an internal Sci who wants to run a study becomes PI of that
+ *     project (keeping their Sci powers). An outsider is only ever EXTERNAL: a
+ *     real-life vet with no system VET position gets no vet powers, just PI/CoPI
+ *     of the project they were appointed to.
  *
- *  Effective capability = every POSITION's caps ∪ every PROJECT ROLE's caps.
- *  Nothing is ever subtracted: if any role grants it, the user has it.
- *  Always gate through App.can(cap, project) — never test a key directly.
+ *  Effective capability = the ONE position's caps ∪ every project role's caps.
+ *  Nothing is ever subtracted: if the position or any project role grants it,
+ *  the user has it. Always gate through App.can(cap, project) — never a key.
  *
  *  IMPORTANT: project roles only take effect once the project is APPROVED.
  *  While it is waiting/rejected the project "does not exist yet": only
@@ -39,6 +41,9 @@ const POSITIONS = {
   VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
   SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
   ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewSupply'] },
+  // AEC = สำนักเลขานุการคณะกรรมการจริยธรรมการใช้สัตว์ทดลอง — like IACUC (read-only
+  // across projects) but can approve/reject a PI's project REQUEST at stage 1.
+  AEC:      { key: 'AEC',      label: 'สำนักเลขาฯ คกก.จริยธรรมการใช้สัตว์ทดลอง', scope: 'all', caps: ['view', 'enterProject', 'createProject', 'reviewAEC'] },
   IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
   QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
   AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
@@ -52,7 +57,7 @@ const POSITIONS = {
   GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewSupply', 'viewFinance'] },
   EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'enterProject', 'createProject'] },
 };
-const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'SCI', 'ACT', 'IACUC', 'QA', 'AUDIT', 'EX', 'OCH', 'GM', 'EXTERNAL'];
+const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'SCI', 'ACT', 'AEC', 'IACUC', 'QA', 'AUDIT', 'EX', 'OCH', 'GM', 'EXTERNAL'];
 
 // Project-level roles. PI/COPI/AHS are the research team; SCI/VET/ACT mirror the
 // system position of the same name but are confined to the one project.
@@ -82,54 +87,54 @@ const CAPABILITIES = [
   { key: 'handleCarcass', label: 'จัดการซาก — ทำลาย / ชันสูตร' },
   { key: 'stop',          label: 'สั่ง Stop (ไม่คิดเฉลี่ย)' },
   { key: 'viewReports',   label: 'ดูหน้ากราฟ / ผลวิเคราะห์' },
-  { key: 'approve',       label: 'อนุมัติ / ไม่อนุมัติโครงการ' },
+  { key: 'reviewAEC',     label: 'ตรวจ/อนุมัติคำขอสร้างโครงการ (จริยธรรม)' },
+  { key: 'approve',       label: 'สร้างโครงการจริง / ตีกลับ (สัตวแพทย์)' },
   { key: 'manageUsers',   label: 'จัดการบัญชีผู้ใช้ระบบ' },
   { key: 'ochReport',     label: 'รายงานความปลอดภัย / ชีวอนามัย' },
   { key: 'viewSupply',    label: 'เข้าถึงงานคลัง' },
   { key: 'viewFinance',   label: 'เข้าถึงการเงิน' },
 ];
 
-// mock user accounts. `positions` = the system-level jobs held (POSITIONS keys);
-// a person may hold several and their caps add up.
+// mock user accounts. `position` = the ONE system-level job (a POSITIONS key).
 // `name` is the display name kept in sync with firstName + lastName.
 // `projectRole` (optional) marks a DEMO persona for a PROJECT role: that identity
 // holds the role in EVERY approved project (see App.myProjectRoles override) so a
 // client can switch and compare views without hunting for a project they belong to.
 // In a real deployment nobody has `projectRole` — project.members drives it.
-function makeUser(id, firstName, lastName, email, password, positions, projectRole) {
+function makeUser(id, firstName, lastName, email, password, position, projectRole) {
   return {
     id, firstName, lastName, email, password,
-    positions: Array.isArray(positions) ? positions : [positions],
+    position: Array.isArray(position) ? position[0] : position,
     projectRole: projectRole || null,
     name: `${firstName} ${lastName}`.trim(),
   };
 }
 const USERS = [
   // --- one persona per system position -------------------------------------
-  makeUser('u_admin', 'Admin — ผู้ดูแลระบบ', '',            'admin@lab.test', 'admin1234', ['ADMIN']),
-  makeUser('u_av',    'AV — หัวหน้าสัตวแพทย์', '',           'av@lab.test',    'demo1234',  ['AV']),
-  makeUser('u_vet',   'VET — สัตวแพทย์', '',                'vet@lab.test',   'demo1234',  ['VET']),
-  makeUser('u_scisys','Sci — นักวิทยาศาสตร์', '',            'sci@lab.test',   'demo1234',  ['SCI']),
-  makeUser('u_act',   'ACT — จนท.ดูแลสัตว์ทดลอง', '',        'act@lab.test',   'demo1234',  ['ACT']),
-  makeUser('u_iacuc', 'IACUC — คณะกรรมการกำกับดูแล', '',     'iacuc@lab.test', 'demo1234',  ['IACUC']),
-  makeUser('u_qa',    'QA — หน่วยประกันคุณภาพ', '',           'qa@lab.test',    'demo1234',  ['QA']),
-  makeUser('u_audit', 'Audit — ผู้ตรวจสอบ', '',              'audit@lab.test', 'demo1234',  ['AUDIT']),
-  makeUser('u_ex',    'Ex — ผู้บริหารหน่วยสัตว์ทดลอง', '',    'ex@lab.test',    'demo1234',  ['EX']),
-  makeUser('u_och',   'OCH — จนท.ชีวอนามัย', '',             'och@lab.test',   'demo1234',  ['OCH']),
-  makeUser('u_gm',    'GM — จนท.บริหารงานทั่วไป', '',         'gm@lab.test',    'demo1234',  ['GM']),
-  makeUser('u_ext',   'External — บุคคลภายนอก', '',          'ext@lab.test',   'demo1234',  ['EXTERNAL']),
+  makeUser('u_admin', 'Admin — ผู้ดูแลระบบ', '',            'admin@lab.test', 'admin1234', 'ADMIN'),
+  makeUser('u_av',    'AV — หัวหน้าสัตวแพทย์', '',           'av@lab.test',    'demo1234',  'AV'),
+  makeUser('u_vet',   'VET — สัตวแพทย์', '',                'vet@lab.test',   'demo1234',  'VET'),
+  makeUser('u_scisys','Sci — นักวิทยาศาสตร์', '',            'sci@lab.test',   'demo1234',  'SCI'),
+  makeUser('u_act',   'ACT — จนท.ดูแลสัตว์ทดลอง', '',        'act@lab.test',   'demo1234',  'ACT'),
+  makeUser('u_aec',   'AEC — สำนักเลขาฯ จริยธรรม', '',        'aec@lab.test',   'demo1234',  'AEC'),
+  makeUser('u_iacuc', 'IACUC — คณะกรรมการกำกับดูแล', '',     'iacuc@lab.test', 'demo1234',  'IACUC'),
+  makeUser('u_qa',    'QA — หน่วยประกันคุณภาพ', '',           'qa@lab.test',    'demo1234',  'QA'),
+  makeUser('u_audit', 'Audit — ผู้ตรวจสอบ', '',              'audit@lab.test', 'demo1234',  'AUDIT'),
+  makeUser('u_ex',    'Ex — ผู้บริหารหน่วยสัตว์ทดลอง', '',    'ex@lab.test',    'demo1234',  'EX'),
+  makeUser('u_och',   'OCH — จนท.ชีวอนามัย', '',             'och@lab.test',   'demo1234',  'OCH'),
+  makeUser('u_gm',    'GM — จนท.บริหารงานทั่วไป', '',         'gm@lab.test',    'demo1234',  'GM'),
+  makeUser('u_ext',   'External — บุคคลภายนอก', '',          'ext@lab.test',   'demo1234',  'EXTERNAL'),
   // --- personas for the project-level roles (research team) ----------------
   // These deliberately hold only EXTERNAL as their position, so switching to them
   // shows the PROJECT ROLE's capabilities and nothing else. Give them SCI as well
   // and they would inherit `weigh` from the position, which would hide the rule
   // that a PI/AHS cannot weigh unless separately appointed Sci of the project.
-  makeUser('u_pi',    'PI — นักวิจัย', '',                   'pi@lab.test',    'demo1234',  ['EXTERNAL'], 'PI'),
-  makeUser('u_copi',  'CoPI — นักวิจัยร่วม', '',              'copi@lab.test',  'demo1234',  ['EXTERNAL'], 'COPI'),
-  makeUser('u_ahs',   'AHS — นักวิจัยปฏิบัติการ', '',         'ahs@lab.test',   'demo1234',  ['EXTERNAL'], 'AHS'),
-  // a researcher who is ALSO appointed Sci of the project — the only way to weigh
-  makeUser('u_pisci', 'PI + Sci — นักวิจัยที่ชั่งเองได้', '',  'pisci@lab.test', 'demo1234',  ['SCI'],      'PI'),
-  // --- a persona holding TWO positions, to demo additive permissions -------
-  makeUser('u_vetiacuc', 'VET + IACUC — ถือ 2 ตำแหน่ง', '',  'vet.iacuc@lab.test', 'demo1234', ['VET', 'IACUC']),
+  makeUser('u_pi',    'PI — นักวิจัย', '',                   'pi@lab.test',    'demo1234',  'EXTERNAL', 'PI'),
+  makeUser('u_copi',  'CoPI — นักวิจัยร่วม', '',              'copi@lab.test',  'demo1234',  'EXTERNAL', 'COPI'),
+  makeUser('u_ahs',   'AHS — นักวิจัยปฏิบัติการ', '',         'ahs@lab.test',   'demo1234',  'EXTERNAL', 'AHS'),
+  // an internal Sci who is ALSO PI of a project — the intended "two roles" case:
+  // system position (Sci, can weigh) + project role (PI, can stop/edit).
+  makeUser('u_pisci', 'Sci + PI — นักวิทย์ที่เป็นหัวหน้าโครงการ', '', 'pisci@lab.test', 'demo1234', 'SCI', 'PI'),
 ];
 
 // ---- helpers for generating believable weight histories -----
@@ -479,41 +484,67 @@ const DB = {
 // project approval workflow: every project has an `approval` state
 //   'waiting'  → newly created, awaiting AV (Attending Veterinarian) review
 //   'approved' → AV approved → project is live
-//   'rejected' → AV sent back with a reason (shown red; creator edits/deletes)
+//   'rejected'  → sent back with a reason (shown red; only the creator fixes it)
+//
+// Project creation is a THREE-stage pipeline:
+//   PI submits a request  → 'requested'  (waiting for AEC ethics review)
+//   AEC approves          → 'aec_ok'     (waiting for AV to build it in the facility)
+//   AV builds & finalises → 'approved'   (live). AV or AEC can 'rejected' instead.
+// A project before 'approved' has NO real cages yet — it only carries a `request`
+// blob (what the PI declared). AV lays out the actual cages when building.
 (function seedApproval() {
   DB.projects.forEach(p => { if (!p.approval) p.approval = 'approved'; });
 
-  // a small helper to build a tiny demo project
-  function tinyProject(id, name, description, creatorId, approval, extra = {}) {
-    const groups = [
-      { id: id + 'G1', name: 'Control', isControl: true, color: '#64748b' },
-      { id: id + 'G2', name: 'Treatment', isControl: false, color: '#2563eb' },
-    ];
-    const cages = [];
-    let seq = 0;
-    for (let pos = 1; pos <= 2; pos++) {
-      const code = `A-${String(pos).padStart(2, '0')}`;
-      const mice = [makeMouse(`${id}-${code}-1`, 'M', 27 + rand(-1, 1), 0.2),
-                    makeMouse(`${id}-${code}-2`, 'F', 26 + rand(-1, 1), 0.2)];
-      cages.push(makeCage(`${id}-C${++seq}`, code, groups[pos - 1].id, 1, pos, mice));
-    }
+  // a project still in the request pipeline (no cages, no facility yet)
+  function requestProject(id, name, creatorId, approval, req, extra = {}) {
     return {
-      id, name, description, startDate: todayISO(), status: 'active',
-      createdBy: creatorId,
-      approval, shelves: 1, cagesPerShelf: 2, groups, cages, documents: [],
+      id, name, description: req.objective || '—', startDate: todayISO(),
+      status: 'active', createdBy: creatorId, approval,
+      requestDate: req.requestDate || todayISO(),
+      request: {
+        totalMice: req.totalMice,
+        groups: req.groups,                    // [{name,isControl,plannedMice}]
+        objective: req.objective || '',
+        diagram: req.diagram || null,          // experiment diagram (image)
+        aup: req.aup || null,                  // Animal Use Protocol (pdf)
+        approvalDoc: req.approvalDoc || null,  // ethics approval (pdf)
+        appointments: req.appointments || [],  // [{role:'COPI'|'AHS', userId, name}]
+      },
+      facility: null,                          // filled by AV at build time
+      shelves: 0, cagesPerShelf: 0, groups: [], cages: [], documents: [],
       members: [{ userId: creatorId, roles: ['PI'] }],
       ...extra,
     };
   }
 
-  // the two remaining demo states — status is shown by the card badge, so the
-  // project names stay clean (no "(รออนุมัติ)" suffix)
+  const demoReq = {
+    totalMice: 24, objective: 'ประเมินความปลอดภัยต่อระบบหัวใจของสารทดสอบในหนูทดลอง',
+    groups: [
+      { name: 'Control', isControl: true, plannedMice: 8 },
+      { name: 'Low dose', isControl: false, plannedMice: 8 },
+      { name: 'High dose', isControl: false, plannedMice: 8 },
+    ],
+    diagram: { name: 'experimental-design.png', url: null },
+    aup: { name: 'AUP_Cardio_2026.pdf', url: null },
+    approvalDoc: { name: 'AEC-Approval_2026-014.pdf', url: null },
+    appointments: [
+      { role: 'COPI', userId: 'u_copi', name: 'CoPI — นักวิจัยร่วม' },
+      { role: 'AHS', userId: 'u_ahs', name: 'AHS — นักวิจัยปฏิบัติการ' },
+    ],
+    requestDate: isoDaysAgo(3),
+  };
+
   DB.projects.push(
-    tinyProject('P5', 'Cardio Safety Study',
-      'ประเมินความปลอดภัยต่อระบบหัวใจของสารทดสอบ', 'u_pi', 'waiting'),
-    tinyProject('P6', 'Metabolic Screen',
-      'คัดกรองผลต่อเมแทบอลิซึมในหนูทดลอง', 'u_pi', 'rejected',
-      { rejectReason: 'ยังไม่แนบใบอนุมัติ EC และจำนวนสัตว์ต่อกลุ่มไม่สอดคล้องกับการคำนวณทางสถิติ', reviewedBy: 'สพ.ญ. อรุณ ทองดี (AV)', reviewedAt: isoDaysAgo(1) }),
+    // stage 1 — PI submitted, waiting for AEC
+    requestProject('P5', 'Cardio Safety Study', 'u_pi', 'requested', demoReq),
+    // stage 2 — AEC approved, waiting for AV to build
+    requestProject('P7', 'Hepatic Clearance Assay', 'u_pi', 'aec_ok',
+      { ...demoReq, objective: 'ศึกษาการกำจัดสารผ่านตับในหนูทดลอง', totalMice: 16,
+        groups: [ { name: 'Control', isControl: true, plannedMice: 8 }, { name: 'Treatment', isControl: false, plannedMice: 8 } ] },
+      { aecReview: { by: 'AEC — สำนักเลขาฯ จริยธรรม', at: isoDaysAgo(1) } }),
+    // rejected at the AEC stage
+    requestProject('P6', 'Metabolic Screen', 'u_pi', 'rejected', demoReq,
+      { rejectStage: 'aec', rejectReason: 'จำนวนสัตว์ต่อกลุ่มยังไม่สอดคล้องกับการคำนวณทางสถิติ และแผนภาพการทดลองไม่ครบถ้วน', reviewedBy: 'AEC — สำนักเลขาฯ จริยธรรม', reviewedAt: isoDaysAgo(1) }),
   );
 })();
 
@@ -529,7 +560,11 @@ const DB = {
     { userId: 'u_vet',    roles: ['VET'] },
     { userId: 'u_act',    roles: ['ACT'] },
   ];
-  DB.projects.forEach(p => { p.members = TEAM.map(m => ({ userId: m.userId, roles: [...m.roles] })); });
+  // only APPROVED projects have a real team; pipeline projects keep just their
+  // creator (nobody is appointed until AV builds the project).
+  DB.projects.forEach(p => {
+    if ((p.approval || 'approved') === 'approved') p.members = TEAM.map(m => ({ userId: m.userId, roles: [...m.roles] }));
+  });
 })();
 
 // ---- derived helpers used across the app --------------------
