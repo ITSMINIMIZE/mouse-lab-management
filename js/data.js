@@ -170,12 +170,28 @@ function buildWeightSeries(baseline, trendPerDay, days = 14) {
 // ------------------------------------------------------------
 let _mouseSeq = 0;
 
-function makeMouse(code, sex, baseline, trend) {
+// The mouse IDENTITY code = โครงการ-กลุ่มทดลอง-ลำดับในกลุ่ม-ลำดับในกรง.
+// It is PERMANENT and travels with the animal. Physical location (room / rack /
+// shelf / cage) is the mouse's CURRENT status — derived from whichever cage
+// currently holds it, NOT baked into the code — so a future "move cage" just
+// re-parents the mouse object (its sex / weights / treatments come along for free).
+// IDENTITY (permanent, set when Sci first weighs the mouse into a cage):
+//     <projectId>-<cageCode>-<cageNo>      e.g. P1-A01-3
+// The experiment grouping is NOT part of it — mice enter the project before any
+// group exists. Once the PI assigns the cage a diet and a treatment group, a TAG
+// is appended for display:  P1-A01-3 (ไขมันสูง-DrugA-7)   ← อาหาร-กลุ่ม-ลำดับในกลุ่ม
+function mouseCode(projId, cageCode, cageNo) {
+  return `${projId}-${cageCode}-${cageNo}`;
+}
+
+function makeMouse(code, sex, baseline, trend, groupNo = null, cageNo = null) {
   _mouseSeq++;
   return {
     id: 'M' + _mouseSeq,
     code,
-    sex,                       // 'M' | 'F'
+    sex,                       // 'M' | 'F' — bound to the animal (follows it across cages)
+    groupNo,                   // ลำดับในกลุ่มสารทดสอบ — null until the PI assigns the cage a group (part of the TAG, not the code)
+    cageNo,                    // ลำดับในกรง 1…5 (part of the permanent code)
     weights: buildWeightSeries(baseline, trend),
     remark: '',
     treatments: [],            // Sick Case Report entries: { date, time, vet, signs[], support[], diagnosis, treatment, recommend, note }
@@ -196,12 +212,17 @@ function makeMouse(code, sex, baseline, trend) {
   };
 }
 
-// Generate a cage with N mice
+// Generate a cage with N mice.
+// A cage carries the experiment grouping in TWO independent layers, both assigned
+// by the PI *after* the mice are already in the cage, and never at the same time:
+//   dietId  — ชนิดอาหาร (layer 1). null ⇒ อาหารทั่วไป (the project's default diet)
+//   groupId — สารทดสอบ (layer 2). null ⇒ ยังไม่ถูกจัดเข้ากลุ่มการทดลอง
 function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
   return {
     id,
     code,
     groupId,
+    dietId: opts.dietId ?? null,
     shelf,
     position,
     mice,
@@ -226,11 +247,20 @@ function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
 // Layout: 4 shelves × 6 cages × 2 mice = 48 mice, 4 groups (control + 3 doses),
 // one group per shelf. Every clinical case the app supports is seeded here.
 // ------------------------------------------------------------
+// LAYER 1 — ชนิดอาหาร. `isDefault` is the diet a cage falls back to while the PI
+// has not assigned one (อาหารทั่วไป). Exactly one diet per project carries it.
+const dietsP1 = [
+  { id: 'D1', name: 'อาหารทั่วไป',  isDefault: true,  color: '#94a3b8', capacity: 24 },
+  { id: 'D2', name: 'ไขมันสูง',     isDefault: false, color: '#d97706', capacity: 24 },
+];
+
+// LAYER 2 — สารทดสอบ. `capacity` = จำนวนหนูสูงสุดต่อกลุ่มที่สัตวแพทย์อนุมัติ.
+// แต่ละกลุ่มมี 6 กรง × 2 ตัว = 12 ตัว — ตั้ง 14 ไว้ให้เหลือโควตา
 const groupsP1 = [
-  { id: 'G1', name: 'Control',      isControl: true,  color: '#64748b' },
-  { id: 'G2', name: 'Treatment-1',  isControl: false, color: '#2563eb' },
-  { id: 'G3', name: 'Treatment-2',  isControl: false, color: '#7c3aed' },
-  { id: 'G4', name: 'Treatment-3',  isControl: false, color: '#dc2626' },
+  { id: 'G1', name: 'Control',      isControl: true,  color: '#64748b', capacity: 14 },
+  { id: 'G2', name: 'Treatment-1',  isControl: false, color: '#2563eb', capacity: 14 },
+  { id: 'G3', name: 'Treatment-2',  isControl: false, color: '#7c3aed', capacity: 14 },
+  { id: 'G4', name: 'Treatment-3',  isControl: false, color: '#dc2626', capacity: 14 },
 ];
 
 // per-group weight profile (baseline weight + average daily gain)
@@ -244,23 +274,29 @@ const groupProfile = {
 let _cageSeq = 0;
 function nextCageId() { _cageSeq++; return 'C' + _cageSeq; }
 
-// Layout: 4 shelves × 6 cages, 2 mice per cage (♂ + ♀). One group per shelf.
+// Layout: 4 shelves × 6 cages, 2 mice per cage (♂ + ♀). One treatment group per
+// shelf. Shelf A stays on the default diet; the other three are on the high-fat
+// diet — i.e. the PI has already assigned both layers on this (running) project.
 const shelfLetters = ['A', 'B', 'C', 'D'];
 const cagesP1 = [];
 for (let si = 0; si < 4; si++) {
-  const groupId = groupsP1[si].id;
+  const group = groupsP1[si];
+  const groupId = group.id;
   const prof = groupProfile[groupId];
   const letter = shelfLetters[si];
+  const dietId = si === 0 ? 'D1' : 'D2';
+  let gno = 0;                                   // running number within this treatment group
   for (let pos = 1; pos <= 6; pos++) {
-    const code = `${letter}-${String(pos).padStart(2, '0')}`;
+    const code = `${letter}-${String(pos).padStart(2, '0')}`;   // CAGE code (location)
     const mice = [];
     for (let k = 1; k <= 2; k++) {
-      mice.push(makeMouse(`${code}-${k}`, k === 1 ? 'M' : 'F',
+      gno++;
+      mice.push(makeMouse(mouseCode('P1', code, k), k === 1 ? 'M' : 'F',
         prof.baseline + rand(-1.2, 1.2),
-        prof.trend + rand(-0.05, 0.05)));
+        prof.trend + rand(-0.05, 0.05), gno, k));
     }
     cagesP1.push(makeCage(nextCageId(), code, groupId, si + 1, pos, mice, {
-      lastRecordDate: isoDaysAgo(1),
+      dietId, lastRecordDate: isoDaysAgo(1),
     }));
   }
 }
@@ -389,20 +425,27 @@ for (let si = 0; si < 4; si++) {
 // ------------------------------------------------------------
 // Project 4 : the finished (closed) demo project — small, view-only.
 // ------------------------------------------------------------
+// โครงการปิดแล้ว — โควตาเท่ากับจำนวนที่ใช้จริง (3 กรง × 2 ตัว) ตามแผนที่ดำเนินการจบ
+const dietsDone = [
+  { id: 'DD1', name: 'อาหารทั่วไป', isDefault: true,  color: '#94a3b8', capacity: 12 },
+];
 const groupsDone = [
-  { id: 'GD1', name: 'Control',   isControl: true,  color: '#64748b' },
-  { id: 'GD2', name: 'Treatment', isControl: false, color: '#2563eb' },
+  { id: 'GD1', name: 'Control',   isControl: true,  color: '#64748b', capacity: 6 },
+  { id: 'GD2', name: 'Treatment', isControl: false, color: '#2563eb', capacity: 6 },
 ];
 const cagesDone = [];
 for (let si = 0; si < 2; si++) {
-  const groupId = groupsDone[si].id;
+  const group = groupsDone[si];
+  const groupId = group.id;
   const letter = shelfLetters[si];
+  let gno = 0;
   for (let pos = 1; pos <= 3; pos++) {
     const code = `${letter}-${String(pos).padStart(2, '0')}`;
+    const g1 = ++gno, g2 = ++gno;
     cagesDone.push(makeCage(nextCageId(), code, groupId, si + 1, pos, [
-      makeMouse(`${code}-1`, 'M', 26.5 + rand(-1, 1), si === 0 ? 0.28 : 0.16),
-      makeMouse(`${code}-2`, 'F', 25.5 + rand(-1, 1), si === 0 ? 0.26 : 0.15),
-    ], { lastRecordDate: isoDaysAgo(96) }));
+      makeMouse(mouseCode('P3', code, 1), 'M', 26.5 + rand(-1, 1), si === 0 ? 0.28 : 0.16, g1, 1),
+      makeMouse(mouseCode('P3', code, 2), 'F', 25.5 + rand(-1, 1), si === 0 ? 0.26 : 0.15, g2, 2),
+    ], { dietId: 'DD1', lastRecordDate: isoDaysAgo(96) }));
   }
 }
 
@@ -420,8 +463,12 @@ const DB = {
       description: 'ศึกษาผลของอาหารไขมันสูงและยาต่อภาวะไขมันพอกตับในหนู C57BL/6',
       startDate: '2026-05-12',
       status: 'active',
+      // ตำแหน่งที่สัตวแพทย์จัดสรร — เป็น "สถานะปัจจุบัน" ของหนูในโครงการนี้
+      facility: { roomNo: 'AR02', rackNo: 'R3', quarantineDate: '2026-05-05', moveInDate: '2026-05-12' },
       shelves: 4,
       cagesPerShelf: 6,
+      shelfNames: { 1: 'A', 2: 'B', 3: 'C', 4: 'D' },
+      diets: dietsP1,
       groups: groupsP1,
       cages: cagesP1,
       // (seedTeam below replaces these with the standard demo team)
@@ -439,8 +486,11 @@ const DB = {
       description: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
       startDate: '2026-01-08',
       status: 'closed',
+      facility: { roomNo: 'AR01', rackNo: 'R1', quarantineDate: '2026-01-02', moveInDate: '2026-01-08' },
       shelves: 2,
       cagesPerShelf: 3,
+      shelfNames: { 1: 'A', 2: 'B' },
+      diets: dietsDone,
       groups: groupsDone,
       cages: cagesDone,
       members: [{ userId: 'u_pi', roles: ['PI'] }],
@@ -486,12 +536,18 @@ const DB = {
 //   'approved' → AV approved → project is live
 //   'rejected'  → sent back with a reason (shown red; only the creator fixes it)
 //
-// Project creation is a THREE-stage pipeline:
+// Project creation is a THREE-stage pipeline — it ENDS at AV:
 //   PI submits a request  → 'requested'  (waiting for AEC ethics review)
-//   AEC approves          → 'aec_ok'     (waiting for AV to build it in the facility)
-//   AV builds & finalises → 'approved'   (live). AV or AEC can 'rejected' instead.
-// A project before 'approved' has NO real cages yet — it only carries a `request`
-// blob (what the PI declared). AV lays out the actual cages when building.
+//   AEC approves          → 'aec_ok'     (waiting for AV to lay out the facility)
+//   AV builds facility    → 'approved'   (LIVE — rooms/racks/shelves/EMPTY cages and
+//                                         both group layers exist). AV or AEC can
+//                                         'rejected' instead.
+// A project before 'approved' has NO cages — it only carries a `request` blob.
+//
+// Mice arrive AFTER the project is live: Sci weighs each mouse and places it into a
+// cage (first weighing). At that moment a cage has no treatment group and falls back
+// to the default diet; the PI assigns ชนิดอาหาร and สารทดสอบ later, as two separate
+// actions, from the จัดการกรง page.
 (function seedApproval() {
   DB.projects.forEach(p => { if (!p.approval) p.approval = 'approved'; });
 
@@ -503,7 +559,9 @@ const DB = {
       requestDate: req.requestDate || todayISO(),
       request: {
         totalMice: req.totalMice,
-        groups: req.groups,                    // [{name,isControl,plannedMice}]
+        // การทดลองมี 2 ชั้น — PI เสนอรายการมาในคำขอ แล้ว AV ยืนยันตอนสร้าง
+        diets: req.diets || [],                // ชั้น 1: ชนิดอาหาร [{name,isDefault,plannedMice}]
+        groups: req.groups,                    // ชั้น 2: สารทดสอบ [{name,isControl,plannedMice}]
         objective: req.objective || '',
         diagram: req.diagram || null,          // experiment diagram (image)
         aup: req.aup || null,                  // Animal Use Protocol (pdf)
@@ -511,7 +569,7 @@ const DB = {
         appointments: req.appointments || [],  // [{role:'COPI'|'AHS', userId, name}]
       },
       facility: null,                          // filled by AV at build time
-      shelves: 0, cagesPerShelf: 0, groups: [], cages: [], documents: [],
+      shelves: 0, cagesPerShelf: 0, diets: [], groups: [], cages: [], documents: [],
       members: [{ userId: creatorId, roles: ['PI'] }],
       ...extra,
     };
@@ -519,6 +577,10 @@ const DB = {
 
   const demoReq = {
     totalMice: 24, objective: 'ประเมินความปลอดภัยต่อระบบหัวใจของสารทดสอบในหนูทดลอง',
+    diets: [
+      { name: 'อาหารทั่วไป', isDefault: true, plannedMice: 12 },
+      { name: 'ไขมันสูง', isDefault: false, plannedMice: 12 },
+    ],
     groups: [
       { name: 'Control', isControl: true, plannedMice: 8 },
       { name: 'Low dose', isControl: false, plannedMice: 8 },
@@ -546,6 +608,69 @@ const DB = {
     requestProject('P6', 'Metabolic Screen', 'u_pi', 'rejected', demoReq,
       { rejectStage: 'aec', rejectReason: 'จำนวนสัตว์ต่อกลุ่มยังไม่สอดคล้องกับการคำนวณทางสถิติ และแผนภาพการทดลองไม่ครบถ้วน', reviewedBy: 'AEC — สำนักเลขาฯ จริยธรรม', reviewedAt: isoDaysAgo(1) }),
   );
+
+  // AV has finished — the project EXISTS and is live, with empty cages waiting for
+  // Sci to weigh the mice in. No group is assigned to any cage yet.
+  DB.projects.push(builtProject());
+
+  // an AV-built project that is already live but still empty: shelves may hold
+  // UNEQUAL numbers of cages, every cage has no mice, no diet and no treatment group.
+  function builtProject() {
+    const id = 'P8';
+    const diets = [
+      { id: `${id}-D1`, name: 'อาหารทั่วไป', isDefault: true,  color: '#94a3b8', desc: 'อาหารมาตรฐาน', capacity: 10 },
+      { id: `${id}-D2`, name: 'ไขมันสูง',    isDefault: false, color: '#d97706', desc: 'อาหารไขมันสูง', capacity: 6 },
+    ];
+    const groups = [
+      { id: `${id}-G1`, name: 'Control',   isControl: true,  color: '#64748b', desc: 'กลุ่มควบคุม', capacity: 4 },
+      { id: `${id}-G2`, name: 'Treatment', isControl: false, color: '#2563eb', desc: 'กลุ่มได้รับสารทดสอบ', capacity: 6 },
+    ];
+    // shelf 1 has 3 cages, shelf 2 has 2 cages (deliberately unequal)
+    const layout = [
+      { shelf: 1, no: 'A', cages: ['A-01', 'A-02', 'A-03'] },
+      { shelf: 2, no: 'B', cages: ['B-01', 'B-02'] },
+    ];
+    const shelfNames = {};
+    const cages = [];
+    let seq = 0;
+    layout.forEach(row => {
+      shelfNames[row.shelf] = row.no;
+      row.cages.forEach((code, i) => {
+        cages.push({
+          id: `${id}-C${++seq}`, code, shelfLabel: row.no, groupId: null, dietId: null,
+          shelf: row.shelf, position: i + 1, mice: [],
+          water: { remaining: 300, added: null, consumed: 0 },
+          food:  { remaining: 100, added: null, consumed: 0 },
+          status: 'pending', lastRecordDate: todayISO(),
+        });
+      });
+    });
+    return {
+      id, name: 'Renal Function Study',
+      description: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
+      startDate: todayISO(), status: 'active', createdBy: 'u_pi', approval: 'approved',
+      requestDate: isoDaysAgo(6),
+      request: {
+        totalMice: 10, objective: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
+        diets: [ { name: 'อาหารทั่วไป', isDefault: true, plannedMice: 10 }, { name: 'ไขมันสูง', isDefault: false, plannedMice: 6 } ],
+        groups: [ { name: 'Control', isControl: true, plannedMice: 4 }, { name: 'Treatment', isControl: false, plannedMice: 6 } ],
+        diagram: null, aup: null, approvalDoc: null,
+        appointments: [ { role: 'COPI', userId: 'u_copi', name: 'CoPI — นักวิจัยร่วม' } ],
+      },
+      aecReview: { by: 'AEC — สำนักเลขาฯ จริยธรรม', at: isoDaysAgo(4) },
+      builtBy: { by: 'AV — สัตวแพทย์ประจำหน่วย', at: isoDaysAgo(1) },
+      facility: { roomNo: 'AR01', rackNo: 'R1', quarantineDate: isoDaysAgo(5), moveInDate: isoDaysAgo(1) },
+      shelves: layout.length, cagesPerShelf: 3, shelfNames,
+      diets, groups, cages, documents: [],
+      members: [
+        { userId: 'u_pi',     roles: ['PI'] },
+        { userId: 'u_copi',   roles: ['COPI'] },
+        { userId: 'u_scisys', roles: ['SCI'] },
+        { userId: 'u_vet',    roles: ['VET'] },
+        { userId: 'u_act',    roles: ['ACT'] },
+      ],
+    };
+  }
 })();
 
 // demo: give every project the same team so the members list is consistent when

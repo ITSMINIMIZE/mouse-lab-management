@@ -76,6 +76,45 @@ const App = {
       const t = e.target.closest('[data-nav]');
       if (t) { e.preventDefault(); this.handleNav(t.dataset.nav, t.dataset); }
     });
+    // ONE global key handler for every modal (installed once — no per-render leaks).
+    // It works by clicking the dialog's own controls, so each dialog keeps its
+    // existing semantics (e.g. cancelling the wizard-exit restores the step).
+    document.addEventListener('keydown', (e) => this.handleKey(e));
+  },
+
+  // Escape closes/cancels the top dialog · the populate number pad accepts typing
+  handleKey(e) {
+    const overlay = this.el('overlay');
+    if (!overlay) return;
+    const click = (sel) => { const b = overlay.querySelector(sel); if (b) { b.click(); return true; } return false; };
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      // Prefer a "ยกเลิก" button over the ✕: cancel is the reversible action and, in
+      // multi-step dialogs, steps back one level (e.g. the number pad returns to the
+      // cage list) instead of throwing away the whole dialog.
+      if (click('.modal-foot [id$="Cancel"], .modal-foot [id^="cancel"]')) return;
+      if (click('#wizClose')) return;      // weighing wizard: asks before discarding
+      if (click('#closeModal')) return;    // standard ✕
+      if (!this.wizard) this.closeModal();
+      return;
+    }
+
+    // ---- number-pad wizard (PI populate): type instead of tapping -------------
+    // The pad's buttons already hold all the logic, so we just click them.
+    if (!overlay.querySelector('.num-cards')) return;
+    if (e.key >= '0' && e.key <= '9') { e.preventDefault(); click(`.kp-key[data-key="${e.key}"]`); return; }
+    if (e.key === '.' || e.key === ',') { e.preventDefault(); click('.kp-key[data-key="dot"]'); return; }
+    if (e.key === 'Backspace') { e.preventDefault(); click('.kp-key[data-key="back"]'); return; }
+    if (e.key === 'Delete') { e.preventDefault(); click('.kp-key[data-key="clear"]'); return; }
+    if (e.key === 'Enter') { e.preventDefault(); click('#kpOk'); return; }
+    if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const cards = [...overlay.querySelectorAll('.num-card')];
+      const cur = cards.findIndex(c => c.classList.contains('active'));
+      const next = cards[(cur + 1) % cards.length];
+      if (next) next.click();
+    }
   },
 
   // ---- identity: POSITIONS (system, may be several) + PROJECT ROLES -------
@@ -99,24 +138,63 @@ const App = {
   get canManageUsers() { return this.hasPositionCap('manageUsers'); },
   // a facility-wide position lets the user see every project
   get seesAllProjects() { return this.position.scope === 'all'; },
-  // legacy aliases kept so older call sites keep printing something sensible
   positionKey(u) { return (u || this.user).position || 'EXTERNAL'; },
-  sysRoleLabel(u) { return this.positionKey(u); },
 
   // Is this project "live"? Project roles only take effect once AV has approved
   // it — before that the project does not exist yet and only its creator may
   // touch it (see myProjectRoles).
   isApproved(project) { return (project.approval || 'approved') === 'approved'; },
+  // live project that has no mice yet — Sci has not done the first weighing/intake
+  isEmptyProject(project) {
+    return this.isApproved(project) && !(project.cages || []).some(c => c.mice.length);
+  },
+  // ---- two-layer experiment grouping ------------------------------------
+  // layer 1 = ชนิดอาหาร (a cage with no dietId falls back to the default diet)
+  // layer 2 = สารทดสอบ (a cage with no groupId is not in any treatment group yet)
+  diets(p) { return p.diets || []; },
+  defaultDiet(p) { return this.diets(p).find(d => d.isDefault) || this.diets(p)[0] || null; },
+  cageDiet(p, cage) {
+    const d = this.diets(p).find(x => x.id === cage.dietId);
+    return d || this.defaultDiet(p);          // ยังไม่กำหนด ⇒ อาหารทั่วไป
+  },
+  cageGroup(p, cage) { return (p.groups || []).find(g => g.id === cage.groupId) || null; },
+  // display TAG appended to the permanent code once the PI has grouped the cage:
+  //   อาหาร-กลุ่ม-ลำดับในกลุ่ม   e.g. ไขมันสูง-DrugA-7
+  mouseTag(p, cage, mouse) {
+    const g = this.cageGroup(p, cage);
+    if (!g || mouse.groupNo == null) return '';
+    const d = this.cageDiet(p, cage);
+    return `${d ? d.name : '—'}-${g.name}-${mouse.groupNo}`;
+  },
+  // full label: permanent identity + tag (when grouped)
+  mouseLabel(p, cage, mouse) {
+    const tag = this.mouseTag(p, cage, mouse);
+    return tag ? `${mouse.code} (${tag})` : mouse.code;
+  },
+  // the tag as a coloured chip for on-screen lists (empty string when ungrouped)
+  tagChip(p, cage, mouse) {
+    const tag = this.mouseTag(p, cage, mouse);
+    if (!tag) return '<span class="tag-chip none">ยังไม่จัดกลุ่ม</span>';
+    const g = this.cageGroup(p, cage);
+    return `<span class="tag-chip" style="--tc:${g ? g.color : '#64748b'}">${tag}</span>`;
+  },
+  // "real" = the project physically exists (has cages + members): built OR approved
+  isReal(project) { return this.approvalStage(project) === 'approved'; },
   isCreator(project) { return !!project && project.createdBy === this.user.id; },
-  // where a non-approved project sits in the pipeline
+  // where a project sits in the creation pipeline
   approvalStage(project) { return project.approval || 'approved'; },
   // human label + short status text for any stage
   stageInfo(project) {
     switch (this.approvalStage(project)) {
       case 'requested': return { text: '⏳ รอสำนักเลขาฯ จริยธรรมตรวจ', cls: 'req' };
-      case 'aec_ok':    return { text: '📋 ผ่านจริยธรรม · รอสัตวแพทย์สร้างโครงการ', cls: 'aec' };
+      case 'aec_ok':    return { text: '📋 ผ่านจริยธรรม · รอสัตวแพทย์จัดสรรพื้นที่', cls: 'aec' };
       case 'rejected':  return { text: '✗ ตีกลับให้แก้ไข', cls: 'rej' };
-      default:          return { text: project.status === 'closed' ? 'ปิดแล้ว' : 'กำลังดำเนิน', cls: 'ok' };
+      default:
+        if (project.status === 'closed') return { text: 'ปิดแล้ว', cls: 'ok' };
+        // live but no mice yet — Sci still has to weigh them in
+        return this.isEmptyProject(project)
+          ? { text: '🐭 รอนำหนูเข้ากรง (ชั่งครั้งแรก)', cls: 'empty' }
+          : { text: 'กำลังดำเนิน', cls: 'ok' };
     }
   },
 
@@ -125,8 +203,10 @@ const App = {
   // client can compare views. Real deployment: project.members drives it.
   myProjectRoles(project) {
     if (!project) return [];
-    // waiting / rejected: nobody is appointed yet — only the creator acts, as PI
-    if (!this.isApproved(project)) return this.isCreator(project) ? ['PI'] : [];
+    // requested / aec_ok / rejected: nobody is appointed yet — only the creator
+    // acts, as PI. Once AV has built it ('built') the members exist, so membership
+    // drives roles from there on (built + approved).
+    if (!this.isReal(project)) return this.isCreator(project) ? ['PI'] : [];
     if (this.user.projectRole) return [this.user.projectRole];
     const m = (project.members || []).find(x => x.userId === this.user.id);
     return m ? m.roles : [];
@@ -145,8 +225,9 @@ const App = {
     // A project still in the creation pipeline (requested / aec_ok / rejected) is
     // "not real yet": only the people who move it forward may even see it —
     // the creator plus the reviewers (AEC / AV / admin). Everyone else, even a
-    // facility-wide position, sees nothing until it is approved.
-    if (!this.isApproved(project)) return this.isCreator(project) || this.canReview;
+    // facility-wide position, sees nothing until AV has built it. Once built the
+    // cages + members exist, so normal membership/scope visibility applies.
+    if (!this.isReal(project)) return this.isCreator(project) || this.canReview;
     if (this.seesAllProjects) return true;
     return this.myProjectRoles(project).length > 0 || this.isCreator(project);
   },
@@ -174,7 +255,6 @@ const App = {
     const t = this.visibleTabs()[0];
     return t ? t.key : 'roles';
   },
-  roleKeyLabel(k) { return k; },
   // what to show as "my role here": project role if any, else the position
   myRoleLabel(project) {
     const roles = this.myProjectRoles(project);
@@ -446,13 +526,14 @@ const App = {
     const cards = visible.map(p => {
       const stage = this.approvalStage(p);
       const approved = stage === 'approved';
+      const real = approved;                                     // cages physically exist
       const closed = p.status === 'closed';
       const owner = this.isCreator(p) || this.isAdmin;
       const info = this.stageInfo(p);
-      const mice = approved ? p.cages.reduce((s, c) => s + c.mice.length, 0) : (p.request?.totalMice || 0);
+      const mice = real ? p.cages.reduce((s, c) => s + c.mice.length, 0) : (p.request?.totalMice || 0);
       const roleLabel = this.myRoleLabel(p);
 
-      const pillCls = { req: 'waiting', aec: 'aec', rej: 'rejected', ok: closed ? 'closed' : 'active' }[info.cls];
+      const pillCls = { req: 'waiting', aec: 'aec', empty: 'built', rej: 'rejected', ok: closed ? 'closed' : 'active' }[info.cls];
       const badge = `<span class="pill ${pillCls}">${info.text}</span>`;
 
       // ⋯ menu only on live projects (edit cages / members); AV holds manageMembers
@@ -472,8 +553,12 @@ const App = {
         else if (owner) strip = `<div class="card-note waiting-note">⏳ รอสำนักเลขาฯ จริยธรรมตรวจคำขอ</div><div class="card-actions"><button class="btn btn-sm" data-act="edit" data-pid="${p.id}">✏️ แก้คำขอ</button><button class="btn btn-sm danger" data-act="delete" data-pid="${p.id}">🗑 ลบ</button></div>`;
         else strip = `<div class="card-note waiting-note">⏳ รอสำนักเลขาฯ จริยธรรมตรวจคำขอ</div>`;
       } else if (stage === 'aec_ok') {
-        if (this.canBuild) strip = `<div class="card-actions"><button class="btn btn-sm btn-primary" data-act="build" data-pid="${p.id}">🏗️ สร้างโครงการ</button></div>`;
-        else strip = `<div class="card-note aec-note">📋 ผ่านจริยธรรมแล้ว — รอสัตวแพทย์สร้างโครงการ</div>`;
+        if (this.canBuild) strip = `<div class="card-actions"><button class="btn btn-sm btn-primary" data-act="build" data-pid="${p.id}">🏗️ จัดสรรพื้นที่ & สร้างกรง</button></div>`;
+        else strip = `<div class="card-note aec-note">📋 ผ่านจริยธรรมแล้ว — รอสัตวแพทย์จัดสรรพื้นที่</div>`;
+      } else if (approved && this.isEmptyProject(p) && !closed) {
+        strip = this.can('weigh', p)
+          ? `<div class="card-note built-note">🐭 โครงการพร้อมแล้ว — ชั่งน้ำหนักครั้งแรกเพื่อนำหนูเข้ากรง</div>`
+          : `<div class="card-note built-note">🐭 โครงการพร้อมแล้ว — รอนักวิทยาศาสตร์ (Sci) ชั่งหนูเข้ากรง</div>`;
       } else if (stage === 'rejected') {
         strip = `<div class="card-note rejected-note"><b>ตีกลับ${p.rejectStage === 'av' ? ' (สัตวแพทย์)' : ' (จริยธรรม)'}:</b> ${p.rejectReason || '—'}</div>`;
         if (owner) strip += `<div class="card-actions">
@@ -491,8 +576,8 @@ const App = {
           </div>
           <p class="p-desc">${p.description}</p>
           <div class="project-meta">
-            <span>📅 ${approved ? 'เริ่ม ' + p.startDate : 'ยื่น ' + (p.requestDate || p.startDate)}</span>
-            <span>📦 ${approved ? p.cages.length + ' กรง' : (p.request?.groups?.length || 0) + ' กลุ่ม'}</span>
+            <span>📅 ${real ? 'เริ่ม ' + p.startDate : 'ยื่น ' + (p.requestDate || p.startDate)}</span>
+            <span>📦 ${real ? p.cages.length + ' กรง' : (p.request?.groups?.length || 0) + ' กลุ่ม'}</span>
             <span>🐭 ${mice} ตัว</span>
             <span class="role-tag">${roleLabel}</span>
           </div>
@@ -573,7 +658,8 @@ const App = {
 
   // route a card click by pipeline stage. Non-approved projects are "not real yet":
   // nobody enters the dashboard. The creator fixes rejected requests; AEC reviews at
-  // stage 1; AV builds at stage 2; other reviewers get the read-only info popup.
+  // stage 1; AV builds at stage 2 (which makes the project LIVE); other reviewers
+  // get the read-only info popup.
   openProject(p) {
     // OCH inspects on site: a card click opens the safety report, never the dashboard
     if (!this.can('enterProject', p) && this.can('ochReport', p)) {
@@ -667,12 +753,15 @@ const App = {
   openProjectInfo(p) {
     const stage = this.approvalStage(p);
     const approved = stage === 'approved';
+    const real = approved;                                             // cages physically exist
+    const empty = approved && this.isEmptyProject(p);                  // live but no mice yet
     const info = this.stageInfo(p);
     const req = p.request || {};
     const aecCanReview = stage === 'requested' && this.canReviewAEC;   // AEC approves the request
     const avCanBuild = stage === 'aec_ok' && this.canBuild;            // AV proceeds to build
 
-    // request detail (groups w/ planned mice, attachments, requested appointments)
+    // request detail (both group layers w/ planned mice, attachments, appointments)
+    const reqDiets = (req.diets || []).map(x => `<div class="pi-grp"><i class="sw" style="background:${x.color || '#94a3b8'}"></i><b>${x.name}</b>${x.isDefault ? ' <span class="muted">(ค่าเริ่มต้น)</span>' : ''} <span class="muted">· ${x.plannedMice} ตัว</span></div>`).join('') || '<span class="muted">—</span>';
     const reqGroups = (req.groups || []).map(g => `<div class="pi-grp"><i class="sw" style="background:${g.color || '#94a3b8'}"></i><b>${g.name}</b>${g.isControl ? ' <span class="muted">(control)</span>' : ''} <span class="muted">· ${g.plannedMice} ตัว</span></div>`).join('') || '<span class="muted">—</span>';
     const fileLine = (f, label) => f
       ? `<div class="pi-doc"><span>📎 ${label}: ${f.name}</span>${f.url ? `<button class="mini-btn pifile-open" data-url="${f.url}">เปิด</button>` : '<span class="muted">ตัวอย่าง</span>'}</div>`
@@ -689,36 +778,39 @@ const App = {
         }).join('')
       : '<span class="muted">— ไม่ได้ร้องขอ —</span>';
 
-    // approved projects also show the live team + facility
-    const members = approved ? ((p.members || []).map(m => {
+    // live projects also show the team + facility
+    const members = real ? ((p.members || []).map(m => {
       const u = DB.users.find(x => x.id === m.userId);
       return `<div class="pi-mem"><b>${u ? u.name : m.userId}</b> ${(m.roles || []).map(r => `<span class="role-tag">${r}</span>`).join(' ')}</div>`;
     }).join('') || '<span class="muted">—</span>') : '';
 
-    const body = approved
-      ? `<div class="pi-grid">
-          <div><span class="pi-k">วันที่เริ่ม</span> ${p.startDate}</div>
-          <div><span class="pi-k">ห้องปฏิบัติการ</span> ${p.facility?.roomNo || '—'}</div>
-          <div><span class="pi-k">ผังกรง</span> ${p.shelves} ชั้น × ${p.cagesPerShelf} กรง</div>
-          <div><span class="pi-k">รวม</span> ${p.cages.length} กรง · ${p.cages.reduce((s, c) => s + c.mice.length, 0)} ตัว</div>
+    const body = real
+      ? `${empty ? '<div class="reject-banner built"><b>🐭 โครงการเริ่มแล้ว — ยังไม่มีหนู</b> — รอนักวิทยาศาสตร์ (Sci) ชั่งน้ำหนักครั้งแรกเพื่อนำหนูเข้ากรง</div>' : ''}
+        <div class="pi-grid">
+          <div><span class="pi-k">วันที่เริ่ม</span> ${p.startDate || '—'}</div>
+          <div><span class="pi-k">ห้อง / แร็ค</span> ${p.facility?.roomNo || '—'}${p.facility?.rackNo ? ' · ' + p.facility.rackNo : ''}</div>
+          <div><span class="pi-k">ผังกรง</span> ${p.shelves} ชั้น · ${p.cages.length} กรง</div>
+          <div><span class="pi-k">หนู</span> ${p.cages.reduce((s, c) => s + c.mice.length, 0)} ตัว</div>
         </div>
-        <div class="section-title">กลุ่มทดลอง</div>${p.groups.map(gr => `<div class="pi-grp"><i class="sw" style="background:${gr.color}"></i><b>${gr.name}</b>${gr.isControl ? ' <span class="muted">(control)</span>' : ''}</div>`).join('')}
+        <div class="section-title">ชั้นที่ 1 · ชนิดอาหาร</div>${(p.diets || []).map(x => `<div class="pi-grp"><i class="sw" style="background:${x.color}"></i><b>${x.name}</b>${x.isDefault ? ' <span class="muted">(ค่าเริ่มต้น)</span>' : ''}${x.capacity != null ? ` <span class="muted">· ${this.dietCountLive(p, x.id)}/${x.capacity} ตัว</span>` : ''}</div>`).join('') || '<span class="muted">—</span>'}
+        <div class="section-title">ชั้นที่ 2 · สารทดสอบ</div>${p.groups.map(gr => `<div class="pi-grp"><i class="sw" style="background:${gr.color}"></i><b>${gr.name}</b>${gr.isControl ? ' <span class="muted">(control)</span>' : ''}${gr.capacity != null ? ` <span class="muted">· ${this.popGroupCountLive(p, gr.id)}/${gr.capacity} ตัว</span>` : ''}</div>`).join('')}
         <div class="section-title">สมาชิก</div>${members}`
       : `<div class="pi-grid">
           <div><span class="pi-k">วันที่ยื่นคำขอ</span> ${p.requestDate || '—'}</div>
           <div><span class="pi-k">ผู้ยื่น (PI)</span> ${DB.users.find(u => u.id === p.createdBy)?.name || '—'}</div>
           <div><span class="pi-k">จำนวนหนูรวม</span> ${req.totalMice || '—'} ตัว</div>
-          <div><span class="pi-k">จำนวนกลุ่ม</span> ${(req.groups || []).length} กลุ่ม</div>
+          <div><span class="pi-k">กลุ่มทดลอง</span> ${(req.diets || []).length} อาหาร × ${(req.groups || []).length} สาร</div>
         </div>
         ${req.objective ? `<div class="section-title">วัตถุประสงค์</div><p class="pi-descread">${req.objective}</p>` : ''}
-        <div class="section-title">กลุ่มการทดลอง</div>${reqGroups}
+        <div class="section-title">ชั้นที่ 1 · ชนิดอาหาร</div>${reqDiets}
+        <div class="section-title">ชั้นที่ 2 · สารทดสอบ</div>${reqGroups}
         <div class="section-title">แผนภาพการทดลอง</div>${diagramPreview || '<span class="muted">ไม่ได้แนบ</span>'}
         <div class="section-title">เอกสารแนบ</div><div class="pi-docs">${fileLine(req.aup, 'AUP')}${fileLine(req.approvalDoc, 'ใบอนุมัติจริยธรรม')}</div>
         <div class="section-title">ร้องขอแต่งตั้ง</div>${reqAppoint}
         ${stage === 'aec_ok' && p.aecReview ? `<p class="empty-note" style="margin-top:10px">✓ ผ่านการตรวจจริยธรรมโดย ${p.aecReview.by} · ${p.aecReview.at}</p>` : ''}`;
 
     this.openModal(`
-      <div class="modal-head"><div><h3>${approved ? 'ข้อมูลโครงการ' : 'คำขอสร้างโครงการ'}</h3><div class="sub">${info.text}</div></div>
+      <div class="modal-head"><div><h3>${real ? 'ข้อมูลโครงการ' : 'คำขอสร้างโครงการ'}</h3><div class="sub">${info.text}</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
       <div class="modal-body">
         ${stage === 'rejected' ? `<div class="reject-banner"><b>ตีกลับ${p.rejectStage === 'av' ? ' (สัตวแพทย์)' : ' (จริยธรรม)'}</b> — ${p.rejectReason || '—'}<div class="muted" style="font-size:12px;margin-top:3px">โดย ${p.reviewedBy || '—'} · ${p.reviewedAt || ''}</div></div>` : ''}
@@ -729,7 +821,7 @@ const App = {
       <div class="modal-foot">
         <button class="btn" id="piClose">ปิด</button>
         <span class="spacer" style="flex:1"></span>
-        ${avCanBuild ? `<button class="btn btn-primary" id="piBuild">🏗️ สร้างโครงการต่อ</button>` : ''}
+        ${avCanBuild ? `<button class="btn btn-primary" id="piBuild">🏗️ จัดสรรพื้นที่ต่อ</button>` : ''}
         ${aecCanReview ? `<button class="btn btn-danger" id="piReject">✗ ตีกลับ</button><button class="btn btn-green" id="piApprove">✓ อนุมัติคำขอ</button>` : ''}
       </div>`);
 
@@ -753,8 +845,8 @@ const App = {
   // 2b. CREATE PROJECT
   // ---------------------------------------------------------
   GROUP_PALETTE: ['#64748b', '#2563eb', '#7c3aed', '#16a34a', '#dc2626', '#d97706', '#0891b2', '#db2777'],
-
-  SHELF_LETTERS: ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'],
+  // ชนิดอาหาร (layer 1) — warm tones so the two layers never look alike on screen
+  DIET_PALETTE: ['#94a3b8', '#d97706', '#b45309', '#a16207', '#9a3412', '#7c2d12'],
 
   // STAGE 1 — the PI's project REQUEST form. No cages here: the PI only declares
   // what the study needs; AV lays out the real cages later when building.
@@ -978,173 +1070,22 @@ const App = {
     });
   },
 
-  // default cage code (A-01) and the custom-name helpers the AV build editor uses
-  cageDefaultCode(s, p) { return `${this.SHELF_LETTERS[s - 1]}-${String(p).padStart(2, '0')}`; },
-  shelfLabel(s) { const L = (this.draft && this.draft.shelfLabels) || {}; return (L[s] != null && L[s] !== '') ? L[s] : `ชั้น ${s}`; },
-  cellCode(s, p) { const c = this.draft.cells[`${s}_${p}`]; return (c && c.code) ? c.code : this.cageDefaultCode(s, p); },
-
-  renderCageEditor() {
-    const { shelves, cols } = this.draft.layout;
-    if (!this.draft.shelfLabels) this.draft.shelfLabels = {};
-    let assigned = 0, mice = 0;
-    let html = '';
-    for (let s = 1; s <= shelves; s++) {
-      let cells = '';
-      for (let p = 1; p <= cols; p++) {
-        const cell = this.draft.cells[`${s}_${p}`];
-        const code = this.cellCode(s, p);
-        if (cell) {
-          assigned++; mice += cell.mice;
-          const g = this.draft.groups[cell.g];
-          const color = g ? g.color : '#94a3b8';
-          const sexIcon = cell.sex === 'F'
-            ? '<span class="ce-sex female">♀</span>'
-            : '<span class="ce-sex male">♂</span>';
-          cells += `<button class="ce-cell filled" data-cell="${s}_${p}" style="border-left-color:${color}">
-              <span class="ce-code">${code} ${sexIcon}</span>
-              <span class="ce-grp" style="color:${color}">${g ? g.name : ''}</span>
-              <span class="ce-mice">🐭 ${cell.mice}</span>
-            </button>`;
-        } else {
-          cells += `<button class="ce-cell empty" data-cell="${s}_${p}"><span class="ce-code">${code}</span><span class="ce-add">+</span></button>`;
-        }
-      }
-      html += `<div class="ce-shelf">
-        <div class="ce-shelf-head">
-          <input class="ce-shelf-name" data-shelf="${s}" value="${(this.draft.shelfLabels[s] || '').replace(/"/g, '&quot;')}" placeholder="ชั้น ${s}" title="ตั้งชื่อชั้น">
-          <button class="btn btn-ghost btn-sm" data-shelf="${s}">ตั้งค่าทั้งชั้น</button>
-        </div>
-        <div class="ce-row" style="grid-template-columns:repeat(${cols},1fr)">${cells}</div>
-      </div>`;
-    }
-    html += `<div class="cpv-total">กำหนดแล้ว ${assigned}/${shelves * cols} กรง · รวม ${mice} ตัว</div>`;
-    this.el('cpGrid').innerHTML = html;
-
-    this.el('cpGrid').querySelectorAll('[data-cell]').forEach(c => {
-      c.onclick = () => this.openCageConfig({ cell: c.dataset.cell });
-    });
-    // "ตั้งค่าทั้งชั้น" button (not the shelf-name input)
-    this.el('cpGrid').querySelectorAll('button[data-shelf]').forEach(b => {
-      b.onclick = () => this.openCageConfig({ shelf: +b.dataset.shelf });
-    });
-    // editable shelf names — update the draft live without a re-render (keeps focus)
-    this.el('cpGrid').querySelectorAll('.ce-shelf-name').forEach(inp => {
-      inp.oninput = () => { this.draft.shelfLabels[inp.dataset.shelf] = inp.value; };
-    });
-  },
-
-  // Wizard: choose group + mice count for a single cage (or a whole shelf)
-  openCageConfig(target) {
-    const isShelf = target.shelf != null;
-    const current = isShelf ? null : this.draft.cells[target.cell];
-    const cellS = isShelf ? null : +target.cell.split('_')[0];
-    const cellP = isShelf ? null : +target.cell.split('_')[1];
-    const defCode = isShelf ? '' : this.cellCode(cellS, cellP);
-    const label = isShelf
-      ? `ตั้งค่าทั้ง${this.shelfLabel(target.shelf)}`
-      : `ตั้งค่ากรง ${defCode}`;
-    let selG = current ? current.g : (isShelf ? null : 0);
-    let selSex = current ? current.sex : 'M';
-    const curMice = current ? current.mice : null;
-    const otherPreset = curMice != null && curMice > 5;
-
-    const groupChoices = this.draft.groups.map((g, i) =>
-      `<button type="button" class="choice cage-grp-choice ${selG === i ? 'sel' : ''}" data-g="${i}">
-         <span class="sw" style="background:${g.color}"></span>${g.name || 'กลุ่ม ' + (i + 1)}
-       </button>`).join('');
-
-    const countCards = [1, 2, 3, 4, 5].map(n =>
-      `<button type="button" class="count-card ${curMice === n ? 'sel' : ''}" data-count="${n}">${n}</button>`).join('')
-      + `<button type="button" class="count-card other ${otherPreset ? 'sel' : ''}" data-count="other">อื่นๆ</button>`;
-
-    this.openModal(`
-      <div class="modal-head">
-        <div><h3>${label}</h3><div class="sub">${isShelf ? 'ใช้กับทุกกรงในชั้นนี้' : 'เลือกกลุ่ม แล้วเลือกจำนวนหนู'}</div></div>
-        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
-      </div>
-      <div class="modal-body">
-        ${isShelf ? '' : `<div class="field"><label>รหัสกรง</label><input id="cageCode" value="${defCode.replace(/"/g, '&quot;')}" placeholder="เช่น A-01"></div>`}
-        <div class="field"><label>1. กลุ่มทดลอง</label><div class="choice-row wrap" id="cageGrp">${groupChoices}</div></div>
-        <div class="field"><label>2. เพศ (ทั้งกรง)</label>
-          <div class="sex-row" id="cageSex">
-            <button type="button" class="sex-btn male ${selSex === 'M' ? 'sel' : ''}" data-sex="M">♂</button>
-            <button type="button" class="sex-btn female ${selSex === 'F' ? 'sel' : ''}" data-sex="F">♀</button>
-          </div>
-        </div>
-        <div class="field"><label>3. จำนวนหนูในกรง</label>
-          <div class="count-cards" id="cageCount">${countCards}</div>
-          <div class="count-other ${otherPreset ? '' : 'hidden'}" id="cageOtherWrap">
-            <input id="cageMice" type="number" min="1" max="99" value="${otherPreset ? curMice : ''}" placeholder="ระบุจำนวน">
-            <button class="btn btn-primary" id="cageOtherSave">บันทึก</button>
-          </div>
-        </div>
-      </div>
-      <div class="modal-foot">
-        ${current ? `<button class="btn btn-danger" id="cageClear">ลบกรง</button>` : ''}
-        <span class="spacer" style="flex:1"></span>
-        <button class="btn" id="cageCancel">ยกเลิก</button>
-      </div>
-    `, { compact: true });
-
-    const commit = (mice) => {
-      if (selG == null) { this.toast('กรุณาเลือกกลุ่มก่อน'); return; }
-      if (isShelf) {
-        // whole shelf: each cage keeps its own (default) code
-        for (let p = 1; p <= this.draft.layout.cols; p++) {
-          const prev = this.draft.cells[`${target.shelf}_${p}`];
-          this.draft.cells[`${target.shelf}_${p}`] = { g: selG, mice, sex: selSex, code: prev && prev.code };
-        }
-      } else {
-        const code = (this.el('cageCode').value || '').trim() || this.cageDefaultCode(cellS, cellP);
-        this.draft.cells[target.cell] = { g: selG, mice, sex: selSex, code };
-      }
-      this.closeModal(); this.renderCageEditor();
-    };
-
-    this.el('cageGrp').querySelectorAll('.cage-grp-choice').forEach(b => {
-      b.onclick = () => {
-        selG = +b.dataset.g;
-        this.el('cageGrp').querySelectorAll('.cage-grp-choice').forEach(x => x.classList.toggle('sel', x === b));
-      };
-    });
-    this.el('cageSex').querySelectorAll('.sex-btn').forEach(b => {
-      b.onclick = () => {
-        selSex = b.dataset.sex;
-        this.el('cageSex').querySelectorAll('.sex-btn').forEach(x => x.classList.toggle('sel', x === b));
-      };
-    });
-    this.el('cageCount').querySelectorAll('.count-card').forEach(b => {
-      b.onclick = () => {
-        if (b.dataset.count === 'other') {
-          this.el('cageCount').querySelectorAll('.count-card').forEach(x => x.classList.toggle('sel', x === b));
-          this.el('cageOtherWrap').classList.remove('hidden');
-          this.el('cageMice').focus();
-        } else {
-          commit(+b.dataset.count);   // 1–5 → save immediately
-        }
-      };
-    });
-    this.el('cageOtherSave').onclick = () => {
-      const mice = Math.max(1, Math.min(99, +this.el('cageMice').value || 0));
-      if (!mice) { this.el('cageMice').focus(); return; }
-      commit(mice);
-    };
-    this.el('cageMice').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this.el('cageOtherSave').click(); } });
-    this.el('closeModal').onclick = () => this.closeModal();
-    this.el('cageCancel').onclick = () => this.closeModal();
-    if (current) this.el('cageClear').onclick = () => {
-      delete this.draft.cells[target.cell];
-      this.closeModal(); this.renderCageEditor();
-    };
+  // short, human-readable project id (P1, P2, …) — used as the prefix of every
+  // mouse identity code, so it must stay compact (never a timestamp)
+  nextProjectId() {
+    const nums = DB.projects.map(p => { const m = /^P(\d+)$/.exec(p.id || ''); return m ? +m[1] : 0; });
+    return 'P' + ((nums.length ? Math.max(...nums) : 0) + 1);
   },
 
   // build a brand-new mouse (single starting weight today, no history)
-  freshMouse(code, sex = 'M') {
+  // `weight` is the reading Sci takes at intake (first weighing). Omit it only for
+  // demo/seed rows that have no real measurement.
+  freshMouse(code, sex = 'M', groupNo = null, cageNo = null, weight = null) {
     return {
       id: 'M' + Math.random().toString(36).slice(2, 9),
-      code, sex,
-      weights: [{ date: todayISO(), weight: Math.round((25 + rand(-2, 2)) * 10) / 10 }],
-      remark: '', treatments: [], excluded: false, alive: true, death: null, careOpen: false, humaneOrder: null,
+      code, sex, groupNo, cageNo,
+      weights: [{ date: todayISO(), weight: weight != null ? weight : Math.round((25 + rand(-2, 2)) * 10) / 10 }],
+      remark: '', treatments: [], excluded: false, alive: true, death: null, careOpen: false, flagOpen: false, flag: null, humaneOrder: null, necropsy: null,
     };
   },
 
@@ -1190,7 +1131,7 @@ const App = {
       return this.go('projects');
     }
 
-    const pid = 'P' + Date.now();
+    const pid = this.nextProjectId();
     DB.projects.push({
       id: pid, name, description: objective || '—', startDate: todayISO(),
       status: 'active', createdBy: this.user.id, approval: 'requested',
@@ -1209,14 +1150,27 @@ const App = {
   // ---------------------------------------------------------
   buildProject(p) {
     const req = p.request || { groups: [] };
-    // seed the build draft from the request; groups keep their planned colours
+    // seed the build draft from the request; groups keep their planned colours +
+    // the requested mouse count becomes the editable per-group capacity (the PI
+    // cannot enter more mice than this when populating later).
     this.draft = {
       mode: 'build', buildId: p.id,
-      facility: { roomNo: '', quarantineDate: '', moveInDate: todayISO(), ...(p.facility || {}) },
-      groups: (req.groups || []).map((g, i) => ({ name: g.name, color: g.color || this.GROUP_PALETTE[i % this.GROUP_PALETTE.length], isControl: g.isControl, desc: '' })),
-      layout: { shelves: 4, cols: 6 },
-      cells: {},
-      shelfLabels: {},    // custom shelf names, keyed by shelf number (blank = "ชั้น N")
+      facility: { roomNo: '', rackNo: '', quarantineDate: '', moveInDate: todayISO(), ...(p.facility || {}) },
+      // ชั้นที่ 1 — ชนิดอาหาร (PI เสนอมาในคำขอ, AV ยืนยัน). ถ้าคำขอไม่ได้ระบุ ให้ตั้ง "อาหารทั่วไป" ไว้เป็นค่าเริ่มต้น
+      diets: ((req.diets && req.diets.length) ? req.diets : [{ name: 'อาหารทั่วไป', isDefault: true, plannedMice: req.totalMice || 1 }])
+        .map((x, i) => ({
+          name: x.name, color: x.color || this.DIET_PALETTE[i % this.DIET_PALETTE.length],
+          isDefault: !!x.isDefault, desc: '', capacity: x.plannedMice || 1,
+        })),
+      // ชั้นที่ 2 — สารทดสอบ
+      groups: (req.groups || []).map((g, i) => ({
+        name: g.name, color: g.color || this.GROUP_PALETTE[i % this.GROUP_PALETTE.length],
+        isControl: g.isControl, desc: '', capacity: g.plannedMice || 1,
+      })),
+      // shelves are added one by one; each holds an independent list of (empty) cages,
+      // so different shelves may carry different numbers of cages. No default numbers —
+      // AV fills the shelf number + every cage code by hand.
+      shelves: [{ no: '', cages: [{ code: '' }] }],
       appointments: [],   // VET / SCI / ACT appointed from internal staff
       // password AV sets for each requested new-account person, keyed by email
       newPasswords: {},
@@ -1237,11 +1191,11 @@ const App = {
     const plannedSummary = (req.groups || []).map(g => `${g.name} ${g.plannedMice}`).join(' · ');
 
     this.shell(
-      `<a data-nav="build" data-project-id="${p.id}">สร้างโครงการ</a>`,
+      `<a data-nav="build" data-project-id="${p.id}">จัดสรรพื้นที่</a>`,
       `<div class="page">
         <div class="page-head">
-          <div><h2>สร้างโครงการ — ${p.name}</h2>
-            <div class="desc">คำขอผ่านการตรวจจริยธรรมแล้ว — กรอกข้อมูลสถานที่ จัดผังกรง และแต่งตั้งเจ้าหน้าที่ประจำโครงการ</div></div>
+          <div><h2>สร้างโครงการ & จัดสรรพื้นที่ — ${p.name}</h2>
+            <div class="desc">ยืนยันรายการกลุ่มทดลองทั้ง 2 ชั้นตามที่ผู้วิจัยเสนอ กำหนดสถานที่ และสร้างกรง (เว้นว่างไว้) — กดสร้างแล้วโครงการจะเริ่มทันที รอนักวิทยาศาสตร์ชั่งหนูเข้ากรง</div></div>
         </div>
 
         <div class="create-flow">
@@ -1257,28 +1211,39 @@ const App = {
           <div class="form-card">
             <div class="form-card-title">ข้อมูลสถานที่และการรับสัตว์</div>
             <div class="form-row3">
-              <div class="field"><label>เลขห้องปฏิบัติการ</label><input id="bpRoom" value="${(f.roomNo || '').replace(/"/g, '&quot;')}" placeholder="เช่น LA-204"></div>
+              <div class="field"><label>เลขห้องปฏิบัติการ (Room)</label><input id="bpRoom" value="${(f.roomNo || '').replace(/"/g, '&quot;')}" placeholder="เช่น AR01"></div>
+              <div class="field"><label>เลขชั้นวาง/แร็ค (Rack)</label><input id="bpRack" value="${(f.rackNo || '').replace(/"/g, '&quot;')}" placeholder="เช่น R1"></div>
+            </div>
+            <div class="form-row3">
               <div class="field"><label>วันที่รับเข้ากักกันโรค</label><input id="bpQuar" type="date" value="${f.quarantineDate || ''}"></div>
               <div class="field"><label>วันที่ย้ายเข้าห้องทดลอง</label><input id="bpMove" type="date" value="${f.moveInDate || ''}"></div>
             </div>
           </div>
 
           <div class="form-card">
-            <div class="form-card-title">กลุ่มทดลอง
-              <button class="btn btn-ghost btn-sm" id="bpAddGroup" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มกลุ่ม</button>
+            <div class="form-card-title">ชั้นที่ 1 · ชนิดอาหาร
+              <button class="btn btn-ghost btn-sm" id="bpAddDiet" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มชนิดอาหาร</button>
             </div>
-            <div id="cpGroups"></div>
-            <p class="empty-note">ปรับกลุ่ม สี และคำอธิบายได้ตามจริง (ตั้งต้นจากคำขอของผู้วิจัย)</p>
+            <div id="cpDiets"></div>
+            <div class="req-sum" id="bpDietSum"></div>
+            <p class="empty-note">ยืนยันรายการชนิดอาหารที่ผู้วิจัยเสนอมา · ติ๊ก <b>ค่าเริ่มต้น</b> ให้อาหารทั่วไป — กรงที่ผู้วิจัยยังไม่กำหนดจะใช้อาหารนี้</p>
           </div>
 
           <div class="form-card">
-            <div class="form-card-title">ผังกรง & จำนวนหนู</div>
-            <div class="layout-controls">
-              <div class="field"><label>จำนวนชั้น</label><input id="cpShelves" type="number" min="1" max="10" value="${d.layout.shelves}"></div>
-              <div class="field"><label>กรงต่อชั้น</label><input id="cpCols" type="number" min="1" max="12" value="${d.layout.cols}"></div>
+            <div class="form-card-title">ชั้นที่ 2 · สารทดสอบ
+              <button class="btn btn-ghost btn-sm" id="bpAddGroup" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มกลุ่ม</button>
             </div>
-            <label class="preview-label">คลิกกรงเพื่อกำหนดกลุ่ม เพศ และจำนวนหนู (เลขชั้น/เลขกรงปรับได้ภายหลังในหน้าจัดการกรง)</label>
-            <div id="cpGrid" class="cage-editor"></div>
+            <div id="cpGroups"></div>
+            <div class="req-sum" id="bpCapSum"></div>
+            <p class="empty-note">กำหนด <b>จำนวนหนูสูงสุดต่อกลุ่ม</b> — ผู้วิจัยจะจัดกรงเข้ากลุ่มได้ไม่เกินจำนวนนี้ (ตั้งต้นจากคำขอ)</p>
+          </div>
+
+          <div class="form-card">
+            <div class="form-card-title">ผังกรง (สร้างกรงเปล่า)
+              <button class="btn btn-ghost btn-sm" id="bpAddShelf" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มชั้น</button>
+            </div>
+            <p class="empty-note" style="margin-top:0">กดเพิ่มชั้น และเพิ่มกรงในแต่ละชั้นได้อิสระ (แต่ละชั้นมีจำนวนกรงไม่เท่ากันได้) · ตั้งเลขชั้นและรหัสกรงเองได้ · กรงจะถูกเว้นว่างไว้ รอนักวิทยาศาสตร์ชั่งหนูเข้า</p>
+            <div id="cpGrid" class="build-shelves"></div>
           </div>
 
           <div class="form-card">
@@ -1300,31 +1265,125 @@ const App = {
             <span class="spacer" style="flex:1"></span>
             <button class="btn btn-danger" id="bpReject">✗ ตีกลับ</button>
             <button class="btn" data-nav="projects">ยกเลิก</button>
-            <button class="btn btn-primary" id="bpCreate">✓ สร้างโครงการ</button>
+            <button class="btn btn-primary" id="bpCreate">✓ สร้างกรง & ส่งต่อผู้วิจัย</button>
           </div>
         </div>
       </div>`
     );
 
+    this.renderBuildDiets();
     this.renderBuildGroups();
     this.renderCageEditor();
     this.renderRequestedTeam(p);
     this.renderBuildStaff();
 
-    const onLayout = () => {
-      d.layout.shelves = Math.max(1, Math.min(10, +this.el('cpShelves').value || 1));
-      d.layout.cols = Math.max(1, Math.min(12, +this.el('cpCols').value || 1));
-      Object.keys(d.cells).forEach(k => { const [s, pos] = k.split('_').map(Number); if (s > d.layout.shelves || pos > d.layout.cols) delete d.cells[k]; });
-      this.renderCageEditor();
-    };
-    this.el('cpShelves').addEventListener('input', onLayout);
-    this.el('cpCols').addEventListener('input', onLayout);
-    this.el('bpAddGroup').onclick = () => { this.captureBuildGroups(); const i = d.groups.length; d.groups.push({ name: `Treatment-${i}`, color: this.GROUP_PALETTE[i % this.GROUP_PALETTE.length], isControl: false, desc: '' }); this.renderBuildGroups(); this.renderCageEditor(); };
+    this.el('bpAddDiet').onclick = () => { this.captureBuildDiets(); const i = d.diets.length; d.diets.push({ name: '', color: this.DIET_PALETTE[i % this.DIET_PALETTE.length], isDefault: false, desc: '', capacity: 1 }); this.renderBuildDiets(); };
+    this.el('bpAddGroup').onclick = () => { this.captureBuildGroups(); const i = d.groups.length; d.groups.push({ name: `Treatment-${i}`, color: this.GROUP_PALETTE[i % this.GROUP_PALETTE.length], isControl: false, desc: '', capacity: 1 }); this.renderBuildGroups(); };
+    this.el('bpAddShelf').onclick = () => { this.captureShelves(); d.shelves.push({ no: '', cages: [{ code: '' }] }); this.renderCageEditor(); };
     this.el('bpAddStaff').onclick = () => { this.captureBuildStaff(); d.appointments.push({ role: 'VET', userId: '' }); this.renderBuildStaff(); };
     this.el('bpViewReq').onclick = () => this.openProjectInfo(p);
     this.el('bpPrint').onclick = () => this.printCageLabels(p, d);
     this.el('bpReject').onclick = () => this.promptReject(p, 'av');
     this.el('bpCreate').onclick = () => this.submitBuildProject(p);
+  },
+
+  // read the shelf-number and cage-code inputs back into the draft (keeps focus-safe edits)
+  captureShelves() {
+    const c = this.el('cpGrid'); if (!c) return;
+    c.querySelectorAll('.bs-shelf').forEach((row, si) => {
+      const sh = this.draft.shelves[si]; if (!sh) return;
+      const noInp = row.querySelector('.bs-shelf-no'); if (noInp) sh.no = noInp.value;
+      row.querySelectorAll('.bs-cage-code').forEach((inp, ci) => { if (sh.cages[ci]) sh.cages[ci].code = inp.value; });
+    });
+  },
+
+  // add-shelf / add-cage editor — each shelf carries its own list of empty cages
+  renderCageEditor() {
+    const d = this.draft;
+    const totalCages = d.shelves.reduce((s, sh) => s + sh.cages.length, 0);
+    const html = d.shelves.map((sh, si) => {
+      const cages = sh.cages.map((cg, ci) => `
+        <div class="bs-cage">
+          <input class="bs-cage-code" data-si="${si}" data-ci="${ci}" value="${(cg.code || '').replace(/"/g, '&quot;')}" placeholder="รหัสกรง">
+          <button class="icon-btn bs-cage-del" data-si="${si}" data-ci="${ci}" title="ลบกรง">✕</button>
+        </div>`).join('');
+      return `<div class="bs-shelf" data-si="${si}">
+          <div class="bs-shelf-head">
+            <span class="bs-shelf-tag">ชั้น</span>
+            <input class="bs-shelf-no" data-si="${si}" value="${(sh.no || '').replace(/"/g, '&quot;')}" placeholder="เลขชั้น" title="เลขชั้น">
+            <span class="bs-shelf-count">${sh.cages.length} กรง</span>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn btn-ghost btn-sm bs-add-cage" data-si="${si}"><span class="ico-plus">+</span> เพิ่มกรง</button>
+            <button class="icon-btn bs-shelf-del" data-si="${si}" title="ลบชั้น" ${d.shelves.length <= 1 ? 'disabled' : ''}>🗑️</button>
+          </div>
+          <div class="bs-cages">${cages || '<span class="empty-note">ยังไม่มีกรง — กด “เพิ่มกรง”</span>'}</div>
+        </div>`;
+    }).join('');
+    this.el('cpGrid').innerHTML = html + `<div class="cpv-total">รวม ${d.shelves.length} ชั้น · ${totalCages} กรง (กรงเปล่า)</div>`;
+
+    // live-capture text edits without re-render (keep caret)
+    this.el('cpGrid').querySelectorAll('.bs-shelf-no').forEach(inp => inp.oninput = () => { d.shelves[+inp.dataset.si].no = inp.value; });
+    this.el('cpGrid').querySelectorAll('.bs-cage-code').forEach(inp => inp.oninput = () => { d.shelves[+inp.dataset.si].cages[+inp.dataset.ci].code = inp.value; });
+    this.el('cpGrid').querySelectorAll('.bs-add-cage').forEach(b => b.onclick = () => {
+      this.captureShelves();
+      d.shelves[+b.dataset.si].cages.push({ code: '' });   // blank — AV types the code
+      this.renderCageEditor();
+    });
+    this.el('cpGrid').querySelectorAll('.bs-cage-del').forEach(b => b.onclick = () => {
+      this.captureShelves(); d.shelves[+b.dataset.si].cages.splice(+b.dataset.ci, 1); this.renderCageEditor();
+    });
+    this.el('cpGrid').querySelectorAll('.bs-shelf-del').forEach(b => b.onclick = () => {
+      this.captureShelves(); d.shelves.splice(+b.dataset.si, 1); this.renderCageEditor();
+    });
+  },
+
+  // ชั้นที่ 1 — ชนิดอาหาร. Same shape as the group editor, but the radio marks the
+  // DEFAULT diet (the fallback for cages the PI has not assigned) instead of Control.
+  renderBuildDiets() {
+    const rows = this.draft.diets.map((x, i) => `
+      <div class="group-item">
+        <div class="group-row">
+          <input type="color" class="d-color" value="${x.color}" data-i="${i}">
+          <input class="d-name" value="${x.name}" placeholder="ชื่อชนิดอาหาร" data-i="${i}">
+          <label class="g-cap">สูงสุด <input type="number" class="d-capacity" min="1" max="200" value="${x.capacity || 1}" data-i="${i}"> ตัว</label>
+          <label class="g-ctrl"><input type="radio" name="cpDefaultDiet" ${x.isDefault ? 'checked' : ''} data-i="${i}"> ค่าเริ่มต้น</label>
+          <button class="icon-btn d-del" data-i="${i}" title="ลบชนิดอาหาร" ${this.draft.diets.length <= 1 ? 'disabled' : ''}>🗑️</button>
+        </div>
+        <input class="d-desc" value="${x.desc || ''}" placeholder="คำอธิบาย" data-i="${i}">
+      </div>`).join('');
+    this.el('cpDiets').innerHTML = rows;
+    this.el('cpDiets').querySelectorAll('.d-del').forEach(btn => btn.onclick = () => {
+      this.captureBuildDiets(); this.draft.diets.splice(+btn.dataset.i, 1);
+      if (!this.draft.diets.some(x => x.isDefault) && this.draft.diets.length) this.draft.diets[0].isDefault = true;
+      this.renderBuildDiets();
+    });
+    this.el('cpDiets').querySelectorAll('input[name="cpDefaultDiet"]').forEach(r => r.onchange = () => this.captureBuildDiets());
+    this.el('cpDiets').querySelectorAll('.d-capacity').forEach(inp => inp.oninput = () => { this.captureBuildDiets(); this.updateDietSum(); });
+    this.updateDietSum();
+  },
+
+  captureBuildDiets() {
+    const c = this.el('cpDiets'); if (!c) return;
+    c.querySelectorAll('.group-item').forEach((row, i) => {
+      if (!this.draft.diets[i]) return;
+      this.draft.diets[i].name = row.querySelector('.d-name').value;
+      this.draft.diets[i].color = row.querySelector('.d-color').value;
+      this.draft.diets[i].desc = row.querySelector('.d-desc').value;
+      this.draft.diets[i].capacity = Math.max(1, Math.min(200, +row.querySelector('.d-capacity').value || 1));
+      this.draft.diets[i].isDefault = row.querySelector('input[name="cpDefaultDiet"]').checked;
+    });
+  },
+
+  updateDietSum() {
+    const el = this.el('bpDietSum'); if (!el) return;
+    const p = Data.getProject(this.draft && this.draft.buildId);
+    const want = (p && p.request && +p.request.totalMice) || 0;
+    const sum = (this.draft.diets || []).reduce((s, x) => s + (+x.capacity || 0), 0);
+    const ok = want && sum === want;
+    el.className = `req-sum ${want ? (ok ? 'ok' : 'warn') : ''}`;
+    el.innerHTML = want
+      ? `รวมโควตาทุกชนิดอาหาร <b>${sum}</b> / ${want} ตัวที่ผู้วิจัยขอ ${ok ? '✓' : (sum > want ? '· มากกว่าที่ขอ' : '· น้อยกว่าที่ขอ')}`
+      : `รวมโควตาทุกชนิดอาหาร <b>${sum}</b> ตัว`;
   },
 
   renderBuildGroups() {
@@ -1333,6 +1392,7 @@ const App = {
         <div class="group-row">
           <input type="color" class="g-color" value="${g.color}" data-i="${i}">
           <input class="g-name" value="${g.name}" placeholder="ชื่อกลุ่ม" data-i="${i}">
+          <label class="g-cap">สูงสุด <input type="number" class="g-capacity" min="1" max="200" value="${g.capacity || 1}" data-i="${i}"> ตัว</label>
           <label class="g-ctrl"><input type="radio" name="cpControl" ${g.isControl ? 'checked' : ''} data-i="${i}"> Control</label>
           <button class="icon-btn g-del" data-i="${i}" title="ลบกลุ่ม" ${this.draft.groups.length <= 1 ? 'disabled' : ''}>🗑️</button>
         </div>
@@ -1342,10 +1402,26 @@ const App = {
     this.el('cpGroups').querySelectorAll('.g-del').forEach(btn => btn.onclick = () => {
       this.captureBuildGroups(); this.draft.groups.splice(+btn.dataset.i, 1);
       if (!this.draft.groups.some(g => g.isControl) && this.draft.groups.length) this.draft.groups[0].isControl = true;
-      this.draft.cells = {}; this.renderBuildGroups(); this.renderCageEditor();
+      this.renderBuildGroups();
     });
-    this.el('cpGroups').querySelectorAll('.g-color, .g-name').forEach(inp => inp.addEventListener('input', () => { this.captureBuildGroups(); this.renderCageEditor(); }));
     this.el('cpGroups').querySelectorAll('input[name="cpControl"]').forEach(r => r.onchange = () => this.captureBuildGroups());
+    // live "รวมโควตา vs จำนวนที่ผู้วิจัยขอ" — same idea as updateGroupSum on the request form
+    this.el('cpGroups').querySelectorAll('.g-capacity').forEach(inp => inp.oninput = () => { this.captureBuildGroups(); this.updateCapSum(); });
+    this.updateCapSum();
+  },
+
+  // hint under the group cards: does the sum of the capacities AV set match the
+  // total the PI asked for? (a mismatch is allowed — AV may allocate less)
+  updateCapSum() {
+    const el = this.el('bpCapSum'); if (!el) return;
+    const p = Data.getProject(this.draft && this.draft.buildId);
+    const want = (p && p.request && +p.request.totalMice) || 0;
+    const sum = (this.draft.groups || []).reduce((s, g) => s + (+g.capacity || 0), 0);
+    const ok = want && sum === want;
+    el.className = `req-sum ${want ? (ok ? 'ok' : 'warn') : ''}`;
+    el.innerHTML = want
+      ? `รวมโควตาทุกกลุ่ม <b>${sum}</b> / ${want} ตัวที่ผู้วิจัยขอ ${ok ? '✓' : (sum > want ? '· มากกว่าที่ขอ' : '· น้อยกว่าที่ขอ')}`
+      : `รวมโควตาทุกกลุ่ม <b>${sum}</b> ตัว`;
   },
 
   captureBuildGroups() {
@@ -1355,6 +1431,7 @@ const App = {
       this.draft.groups[i].name = row.querySelector('.g-name').value;
       this.draft.groups[i].color = row.querySelector('.g-color').value;
       this.draft.groups[i].desc = row.querySelector('.g-desc').value;
+      this.draft.groups[i].capacity = Math.max(1, Math.min(200, +row.querySelector('.g-capacity').value || 1));
       this.draft.groups[i].isControl = row.querySelector('input[name="cpControl"]').checked;
     });
   },
@@ -1412,12 +1489,32 @@ const App = {
   },
 
   submitBuildProject(p) {
+    this.captureBuildDiets();
     this.captureBuildGroups();
+    this.captureShelves();
     this.captureBuildStaff();
     const d = this.draft;
-    const cellKeys = Object.keys(d.cells);
-    if (!cellKeys.length) { this.toast('กรุณาจัดผังกรงอย่างน้อย 1 กรง'); return; }
+    if (!d.diets.length) { this.toast('ต้องมีชนิดอาหารอย่างน้อย 1 รายการ'); return; }
+    if (d.diets.some(x => !(x.name || '').trim())) { this.toast('กรุณากรอกชื่อชนิดอาหารให้ครบ'); return; }
+    if (d.groups.some(g => !(g.name || '').trim())) { this.toast('กรุณากรอกชื่อกลุ่มสารทดสอบให้ครบ'); return; }
+    const dietNames = d.diets.map(x => x.name.trim());
+    if (new Set(dietNames).size !== dietNames.length) { this.toast('ชื่อชนิดอาหารซ้ำกัน'); return; }
+    const groupNames = d.groups.map(g => g.name.trim());
+    if (new Set(groupNames).size !== groupNames.length) { this.toast('ชื่อกลุ่มสารทดสอบซ้ำกัน'); return; }
+    const totalCages = d.shelves.reduce((s, sh) => s + sh.cages.length, 0);
+    if (!totalCages) { this.toast('กรุณาสร้างกรงอย่างน้อย 1 กรง'); return; }
+    if (d.shelves.some(sh => sh.cages.some(c => !(c.code || '').trim()))) { this.toast('กรุณากรอกรหัสกรงให้ครบทุกกรง'); return; }
+    // รหัสกรงต้องไม่ซ้ำกันในโครงการ — เป็นตัวชี้ตำแหน่งที่คนใช้อ้างอิงหน้างาน
+    const seenCodes = new Set();
+    for (const sh of d.shelves) {
+      for (const c of sh.cages) {
+        const code = c.code.trim();
+        if (seenCodes.has(code)) { this.toast(`รหัสกรง "${code}" ซ้ำกัน — ต้องไม่ซ้ำภายในโครงการ`); return; }
+        seenCodes.add(code);
+      }
+    }
     if (d.appointments.some(a => !a.userId)) { this.toast('กรุณาเลือกบุคลากรให้ครบทุกรายการที่แต่งตั้ง'); return; }
+    if (!this.el('bpRoom').value.trim()) { this.el('bpRoom').focus(); this.toast('กรุณากรอกเลขห้องปฏิบัติการ'); return; }
 
     // open the accounts the PI requested for people who had none — AV sets the
     // password here; each new account is EXTERNAL and keeps its requested role.
@@ -1438,21 +1535,28 @@ const App = {
       this.log('เปิดบัญชีผู้ใช้ (จากคำขอโครงการ)', `${nu.name} (${nu.email}) · EXTERNAL`, p.name);
     });
 
-    const groups = d.groups.map((g, i) => ({ id: `${p.id}-G${i + 1}`, name: g.name.trim(), isControl: g.isControl, color: g.color, desc: (g.desc || '').trim() }));
+    // both layers carry a capacity (max mice) the PI cannot exceed when grouping cages
+    const diets = d.diets.map((x, i) => ({ id: `${p.id}-D${i + 1}`, name: x.name.trim(), isDefault: !!x.isDefault, color: x.color, desc: (x.desc || '').trim(), capacity: x.capacity || 1 }));
+    if (diets.length && !diets.some(x => x.isDefault)) diets[0].isDefault = true;   // always one fallback diet
+    const groups = d.groups.map((g, i) => ({ id: `${p.id}-G${i + 1}`, name: g.name.trim(), isControl: g.isControl, color: g.color, desc: (g.desc || '').trim(), capacity: g.capacity || 1 }));
+    // build EMPTY cages — no mice, no diet, no treatment group. Sci weighs the mice
+    // in later; the PI assigns the two group layers after that.
     const cages = [];
+    const shelfNames = {};
     let seq = 0;
-    for (let s = 1; s <= d.layout.shelves; s++) {
-      for (let pos = 1; pos <= d.layout.cols; pos++) {
-        const cell = d.cells[`${s}_${pos}`]; if (!cell) continue;
-        const code = (cell.code && cell.code.trim()) || this.cageDefaultCode(s, pos);
-        const mice = Array.from({ length: cell.mice }, (_, k) => this.freshMouse(`${code}-${k + 1}`, cell.sex || 'M'));
+    d.shelves.forEach((sh, si) => {
+      const s = si + 1;
+      shelfNames[s] = (sh.no || '').trim() || String(s);
+      sh.cages.forEach((cg, ci) => {
         cages.push({
-          id: `${p.id}-C${++seq}`, code, shelfLabel: this.shelfLabel(s), groupId: groups[cell.g].id, shelf: s, position: pos, mice,
+          id: `${p.id}-C${++seq}`, code: (cg.code || '').trim(), shelfLabel: shelfNames[s], groupId: null, dietId: null,
+          shelf: s, position: ci + 1, mice: [],
           water: { remaining: 300, added: null, consumed: 0 }, food: { remaining: 100, added: null, consumed: 0 },
           status: 'pending', lastRecordDate: todayISO(),
         });
-      }
-    }
+      });
+    });
+    const cagesPerShelf = Math.max(1, ...d.shelves.map(sh => sh.cages.length));
 
     // members = creator (PI) + requested CoPI/AHS + AV-appointed VET/Sci/ACT
     const members = [{ userId: p.createdBy, roles: ['PI'] }];
@@ -1465,45 +1569,42 @@ const App = {
     requested.forEach(a => add(a.userId === '__new__' ? a._createdId : a.userId, a.role));
     d.appointments.forEach(a => add(a.userId, a.role));
 
-    // keep the custom shelf names so the dashboard can label shelves
-    const shelfNames = {};
-    for (let s = 1; s <= d.layout.shelves; s++) shelfNames[s] = this.shelfLabel(s);
+    // AV is the LAST step of creation — the project goes live right here.
     Object.assign(p, {
-      approval: 'approved', startDate: d.facility.moveInDate || todayISO(),
-      facility: { roomNo: this.el('bpRoom').value.trim(), quarantineDate: this.el('bpQuar').value, moveInDate: this.el('bpMove').value },
-      shelves: d.layout.shelves, cagesPerShelf: d.layout.cols, shelfNames,
-      groups, cages, members,
+      approval: 'approved', startDate: this.el('bpMove').value || todayISO(),
+      facility: { roomNo: this.el('bpRoom').value.trim(), rackNo: this.el('bpRack').value.trim(), quarantineDate: this.el('bpQuar').value, moveInDate: this.el('bpMove').value },
+      builtBy: { by: this.user.name, at: todayISO() },
+      shelves: d.shelves.length, cagesPerShelf, shelfNames,
+      diets, groups, cages, members,
     });
-    this.log('สร้างโครงการ (สัตวแพทย์)', `${p.name} · ${cages.length} กรง · ${cages.reduce((s, c) => s + c.mice.length, 0)} ตัว`, p.name);
+    this.log('สร้างโครงการ (สัตวแพทย์)', `${p.name} · ${cages.length} กรง · ${diets.length} ชนิดอาหาร · ${groups.length} กลุ่มสารทดสอบ`, p.name);
     this.draft = null;
-    this.toast(`สร้างโครงการ "${p.name}" เรียบร้อย — เริ่มใช้งานได้`);
+    this.toast(`สร้างโครงการ "${p.name}" เรียบร้อย — รอนักวิทยาศาสตร์ชั่งหนูเข้ากรง`);
     this.go('projects');
   },
 
-  // print a simple cage-label sheet (one card per painted cage)
+  // print a simple cage-label sheet (one card per empty cage AV created)
   printCageLabels(p, d) {
+    this.captureShelves();
+    const room = this.el('bpRoom') ? this.el('bpRoom').value : (p.facility?.roomNo || '');
+    const rack = this.el('bpRack') ? this.el('bpRack').value : (p.facility?.rackNo || '');
     const rows = [];
-    for (let s = 1; s <= d.layout.shelves; s++) {
-      for (let pos = 1; pos <= d.layout.cols; pos++) {
-        const cell = d.cells[`${s}_${pos}`]; if (!cell) continue;
-        const code = (cell.code && cell.code.trim()) || this.cageDefaultCode(s, pos);
-        const g = d.groups[cell.g] || {};
+    d.shelves.forEach(sh => {
+      sh.cages.forEach(cg => {
+        const code = (cg.code || '').trim(); if (!code) return;
         rows.push(`<div class="cage-label">
           <div class="cl-code">${code}</div>
           <div class="cl-proj">${p.name}</div>
-          <div class="cl-grp"><span class="cl-dot" style="background:${g.color || '#888'}"></span>${g.name || ''}</div>
-          <div class="cl-meta">${cell.sex === 'F' ? '♀ เพศเมีย' : '♂ เพศผู้'} · ${cell.mice} ตัว</div>
-          <div class="cl-room">ห้อง: ${this.el('bpRoom') ? this.el('bpRoom').value : (p.facility?.roomNo || '')}</div>
+          <div class="cl-meta">ชั้น ${sh.no || '—'}</div>
+          <div class="cl-room">ห้อง: ${room || '—'}${rack ? ' · แร็ค: ' + rack : ''}</div>
         </div>`);
-      }
-    }
-    if (!rows.length) { this.toast('ยังไม่มีกรงให้พิมพ์ — จัดผังกรงก่อน'); return; }
+      });
+    });
+    if (!rows.length) { this.toast('ยังไม่มีกรงให้พิมพ์ — สร้างกรงก่อน'); return; }
     const css = `.labels{display:grid;grid-template-columns:repeat(2,1fr);gap:8mm;padding:6mm}
       .cage-label{border:1.5px solid #111;border-radius:6px;padding:6mm;page-break-inside:avoid}
       .cl-code{font-size:22pt;font-weight:700;letter-spacing:1px}
       .cl-proj{font-size:11pt;margin:2mm 0}
-      .cl-grp{display:flex;align-items:center;gap:5px;font-weight:600;font-size:12pt}
-      .cl-dot{width:11px;height:11px;border-radius:3px;display:inline-block}
       .cl-meta{font-size:11pt;margin-top:1mm}.cl-room{font-size:10pt;color:#444;margin-top:2mm}
       @media print{@page{size:A4;margin:8mm}}`;
     this.printDocument(`CageLabels_${p.name}`, `<style>${css}</style><div class="labels">${rows.join('')}</div>`);
@@ -1530,7 +1631,304 @@ const App = {
   },
 
   // ---------------------------------------------------------
-  // 3. DASHBOARD
+  // Location = CURRENT STATUS, derived from whichever cage holds the mouse
+  // (see the mouse identity/location note in CLAUDE.md). Never store this on the
+  // mouse — read it through here so a future "ย้ายกรง" needs no display changes.
+  // ---------------------------------------------------------
+  // ห้อง / แร็ค of a project (AV sets these when allocating space)
+  facilityLine(p) {
+    const f = p.facility || {};
+    const parts = [];
+    if (f.roomNo) parts.push(`ห้อง ${f.roomNo}`);
+    if (f.rackNo) parts.push(`แร็ค ${f.rackNo}`);
+    return parts.join(' · ');
+  },
+  // full physical location of a cage: ห้อง · แร็ค · ชั้น · กรง
+  cageLocation(p, cage, withCage = true) {
+    const parts = [];
+    const fac = this.facilityLine(p);
+    if (fac) parts.push(fac);
+    const shelf = (p.shelfNames && p.shelfNames[cage.shelf]) || cage.shelfLabel || cage.shelf;
+    if (shelf) parts.push(`ชั้น ${shelf}`);
+    if (withCage) parts.push(`กรง ${cage.code}`);
+    return parts.join(' · ');
+  },
+  popGroupCountLive(p, groupId) {
+    return (p.cages || []).reduce((n, c) => n + (c.groupId === groupId ? c.mice.length : 0), 0);
+  },
+  // mice currently on a given diet — cages with no dietId count toward the DEFAULT diet
+  dietCountLive(p, dietId) {
+    return (p.cages || []).reduce((n, c) => {
+      const d = this.cageDiet(p, c);
+      return n + (d && d.id === dietId ? c.mice.length : 0);
+    }, 0);
+  },
+  // colour helpers for the populate keypad tint (accept #rgb / #rrggbb)
+  rgbOf(hex) {
+    const m = (hex || '#64748b').replace('#', '');
+    const n = m.length === 3 ? m.split('').map(c => c + c).join('') : m;
+    return { r: parseInt(n.slice(0, 2), 16) || 0, g: parseInt(n.slice(2, 4), 16) || 0, b: parseInt(n.slice(4, 6), 16) || 0 };
+  },
+  shadeHex(hex, f) { const { r, g, b } = this.rgbOf(hex); const d = v => Math.max(0, Math.min(255, Math.round(v * f))); return `rgb(${d(r)},${d(g)},${d(b)})`; },
+  softHex(hex, a) { const { r, g, b } = this.rgbOf(hex); return `rgba(${r},${g},${b},${a})`; },
+
+  // "ลำดับในกรง" (cageNo) = เลขย่อยที่นักวิจัยใช้เรียกหนูในกรงนั้น — มีได้แค่ 1…5
+  // และห้ามซ้ำกันภายในกรงเดียวกัน ⇒ กรงหนึ่งจุหนูได้สูงสุด 5 ตัว
+  MAX_CAGE_NO: 5,
+
+  // typed by the user to confirm CHANGING an assignment that was already made
+  CONFIRM_PHRASE: 'confirm change',
+
+  // ---------------------------------------------------------
+  // PI ASSIGNS THE TWO GROUP LAYERS (after the mice are already in their cages).
+  // The two are deliberately separate actions — a cage may have a diet but no
+  // treatment group, or vice versa.
+  // ---------------------------------------------------------
+  // ชั้น 1 — ชนิดอาหาร. dietId null ⇒ กลับไปใช้อาหารทั่วไป (ค่าเริ่มต้น)
+  assignCageDiet(p, cage, dietId) {
+    if (cage.dietId === dietId) return { ok: true, changed: false };
+    if (dietId) {
+      const d = this.diets(p).find(x => x.id === dietId);
+      if (!d) return { ok: false, msg: 'ไม่พบชนิดอาหารนี้' };
+      if (d.capacity != null) {
+        const used = this.dietCountLive(p, dietId) - (this.cageDiet(p, cage)?.id === dietId ? cage.mice.length : 0);
+        if (used + cage.mice.length > d.capacity) {
+          return { ok: false, msg: `เกินโควตาอาหาร ${d.name} (สูงสุด ${d.capacity} ตัว · ใช้แล้ว ${used})` };
+        }
+      }
+    }
+    cage.dietId = dietId;
+    return { ok: true, changed: true };
+  },
+
+  // ชั้น 2 — สารทดสอบ. Assigning also hands every mouse in the cage its
+  // ลำดับในกลุ่ม (groupNo) — the last piece of the display tag. Removing the cage
+  // from a group releases those numbers again.
+  assignCageGroup(p, cage, groupId) {
+    if (cage.groupId === groupId) return { ok: true, changed: false };
+    if (groupId) {
+      const g = (p.groups || []).find(x => x.id === groupId);
+      if (!g) return { ok: false, msg: 'ไม่พบกลุ่มสารทดสอบนี้' };
+      if (g.capacity != null) {
+        const used = this.popGroupCountLive(p, groupId);
+        if (used + cage.mice.length > g.capacity) {
+          return { ok: false, msg: `เกินโควตากลุ่ม ${g.name} (สูงสุด ${g.capacity} ตัว · ใช้แล้ว ${used})` };
+        }
+      }
+    }
+    cage.mice.forEach(m => { m.groupNo = null; });     // release the old numbers first
+    cage.groupId = groupId;
+    if (groupId) {
+      const used = new Set();
+      (p.cages || []).forEach(c => { if (c.groupId === groupId) c.mice.forEach(m => { if (m.groupNo != null) used.add(m.groupNo); }); });
+      let n = 0;
+      cage.mice.forEach(m => { do { n++; } while (used.has(n)); used.add(n); m.groupNo = n; });
+    }
+    return { ok: true, changed: true };
+  },
+
+  // The palette shown under the จัดการกรง mode bar. Picking a chip arms a "brush";
+  // tapping cages then applies it. Each sub-mode has its own palette so the two
+  // assignment jobs never happen in the same interaction.
+  editModePanel(p) {
+    if (this.editMode === 'diet') {
+      const chips = this.diets(p).map(d => {
+        const used = this.dietCountLive(p, d.id);
+        return `<button class="asg-chip ${this.dietBrush === d.id ? 'on' : ''}" data-diet="${d.id}" style="--ac:${d.color}">
+            <i class="sw" style="background:${d.color}"></i>${d.name}${d.isDefault ? ' <span class="muted">(ค่าเริ่มต้น)</span>' : ''}
+            <span class="asg-cap">${used}${d.capacity != null ? '/' + d.capacity : ''}</span>
+          </button>`;
+      }).join('');
+      return `<div class="eb-panel">
+          <span class="ebp-label">เลือกชนิดอาหาร แล้วแตะกรงที่ต้องการ:</span>
+          <div class="asg-chips">${chips}</div>
+        </div>`;
+    }
+    if (this.editMode === 'group') {
+      const chips = (p.groups || []).map(g => {
+        const used = this.popGroupCountLive(p, g.id);
+        return `<button class="asg-chip ${this.groupBrush === g.id ? 'on' : ''}" data-group="${g.id}" style="--ac:${g.color}">
+            <i class="sw" style="background:${g.color}"></i>${g.name}${g.isControl ? ' <span class="muted">(control)</span>' : ''}
+            <span class="asg-cap">${used}${g.capacity != null ? '/' + g.capacity : ''}</span>
+          </button>`;
+      }).join('');
+      return `<div class="eb-panel">
+          <span class="ebp-label">เลือกกลุ่มสารทดสอบ แล้วแตะกรงที่ต้องการ:</span>
+          <div class="asg-chips">${chips}
+            <button class="asg-chip clear ${this.groupBrush === '__none__' ? 'on' : ''}" data-group="__none__">✕ เอาออกจากกลุ่ม</button>
+          </div>
+        </div>`;
+    }
+    if (this.editMode === 'move') {
+      const c = this.moveCageId ? p.cages.find(x => x.id === this.moveCageId) : null;
+      return `<div class="eb-panel">
+          <span class="ebp-label">${c
+            ? `เลือกกรง <b>${c.code}</b> แล้ว — กด “ย้ายมาชั้นนี้” ที่หัวชั้นปลายทาง`
+            : 'แตะกรงที่ต้องการย้าย'}</span>
+          ${c ? '<button class="btn btn-sm" id="cancelMove">ยกเลิกการเลือก</button>' : ''}
+        </div>`;
+    }
+    return '';
+  },
+
+  // ---------------------------------------------------------
+  // FIRST WEIGHING / INTAKE (Sci) — หนูถูกชั่งแล้วนำเข้ากรง
+  // At this point the animal gets its PERMANENT code (โครงการ-รหัสกรง-ลำดับในกรง).
+  // No treatment group is assigned yet and the cage stays on the default diet;
+  // the PI groups the cages afterwards, as two separate actions.
+  // ---------------------------------------------------------
+  openIntakeCage(p, cage) {
+    let selSex = null;                       // one sex per cage
+    let mice = [];                           // [{cageNo, weight}]
+    let kp = null;                           // two-card keypad state
+    const diet = this.cageDiet(p, cage);
+
+    const renderList = () => {
+      const ready = !!selSex;
+      const rows = mice.map((m, i) => `
+        <div class="pop-mrow" data-i="${i}">
+          <span class="pm-idx">หนูตัวที่ ${i + 1}</span>
+          <button type="button" class="pm-chip" data-i="${i}" data-field="n">ในกรง <b>#${m.cageNo}</b></button>
+          <button type="button" class="pm-chip" data-i="${i}" data-field="w">น้ำหนัก <b>${this.g(m.weight)} g</b></button>
+          <button class="icon-btn pm-del" data-i="${i}" title="เอาออก">✕</button>
+        </div>`).join('') || '<p class="empty-note">ยังไม่ได้นำหนูเข้ากรงนี้</p>';
+
+      this.setModal(`
+        <div class="modal-head">
+          <div><h3>🐭 รับหนูเข้ากรง ${cage.code}</h3>
+            <div class="sub">ชั่งน้ำหนักครั้งแรก · ${this.cageLocation(p, cage, false)}</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="intake-note">อาหารเริ่มต้น: <b>${diet ? diet.name : '—'}</b> · ยังไม่จัดกลุ่มสารทดสอบ — ผู้วิจัยจะกำหนดภายหลัง</div>
+          <div class="field"><label>1. เพศของหนูในกรงนี้ <span class="muted">(ทั้งกรงเพศเดียวกัน)</span></label>
+            <div class="sex-row" id="inSex">
+              <button type="button" class="sex-btn male ${selSex === 'M' ? 'sel' : ''}" data-sex="M">♂ เพศผู้</button>
+              <button type="button" class="sex-btn female ${selSex === 'F' ? 'sel' : ''}" data-sex="F">♀ เพศเมีย</button>
+            </div>
+          </div>
+          <div class="field">
+            <label>2. หนูที่ชั่งแล้ว <span class="muted">(สูงสุด ${this.MAX_CAGE_NO} ตัว)</span></label>
+            <div id="inMice">${rows}</div>
+            <button class="btn btn-ghost btn-sm" id="inAdd" ${!ready ? 'disabled' : ''}><span class="ico-plus">+</span> ชั่ง & เพิ่มหนู</button>
+            ${!ready ? '<p class="empty-note" style="margin-top:6px">เลือกเพศก่อนจึงจะเพิ่มหนูได้</p>' : ''}
+          </div>
+        </div>
+        <div class="modal-foot">
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn" id="inCancel">ยกเลิก</button>
+          <button class="btn btn-primary" id="inSave">บันทึกเข้ากรง</button>
+        </div>
+      `);
+
+      this.el('inSex').querySelectorAll('.sex-btn').forEach(b => b.onclick = () => { selSex = b.dataset.sex; render(); });
+      this.el('inMice').querySelectorAll('.pm-chip').forEach(b => b.onclick = () => startNums(+b.dataset.i, false, b.dataset.field));
+      this.el('inMice').querySelectorAll('.pm-del').forEach(b => b.onclick = () => { mice.splice(+b.dataset.i, 1); render(); });
+      if (ready) this.el('inAdd').onclick = () => {
+        if (mice.length >= this.MAX_CAGE_NO) { this.toast(`กรงหนึ่งรับหนูได้ไม่เกิน ${this.MAX_CAGE_NO} ตัว`); return; }
+        mice.push({ cageNo: null, weight: null });
+        startNums(mice.length - 1, true, 'n');
+      };
+      this.el('closeModal').onclick = () => this.closeModal();
+      this.el('inCancel').onclick = () => this.closeModal();
+      this.el('inSave').onclick = () => commit();
+    };
+
+    // one page, two cards: ลำดับในกรง (integer) + น้ำหนัก (decimal), one shared pad
+    const renderNums = () => {
+      const accent = (diet && diet.color) || '#2563eb';
+      const nAccent = accent, wAccent = this.shadeHex(accent, 0.55);
+      const nSoft = this.softHex(accent, 0.12), wSoft = this.softHex(accent, 0.22);
+      const activeAccent = kp.active === 'n' ? nAccent : wAccent;
+      const activeSoft = kp.active === 'n' ? nSoft : wSoft;
+      const card = (key, label, ac, soft, hint, buf, unit) => `
+        <button type="button" class="num-card ${kp.active === key ? 'active' : ''}" data-card="${key}" style="--nc-accent:${ac};--nc-soft:${soft}">
+          <span class="nc-label">${label}</span>
+          <span class="nc-val ${buf === '' ? 'empty' : ''}">${buf === '' ? '—' : buf}${buf !== '' && unit ? `<small>${unit}</small>` : ''}</span>
+          <span class="nc-hint">${hint}</span>
+        </button>`;
+      const keys = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button class="kp-key" data-key="${n}">${n}</button>`).join('');
+      this.setModal(`
+        <div class="modal-head">
+          <div><h3>กรง ${cage.code} · หนูตัวที่ ${kp.i + 1}</h3>
+            <div class="sub">แตะการ์ดเพื่อเลือกช่อง แล้วกดตัวเลข · หรือพิมพ์จากคีย์บอร์ด (Tab สลับช่อง · Enter ยืนยัน)</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="kp-ctx">เพศ ${selSex === 'F' ? '♀ เพศเมีย' : '♂ เพศผู้'} · ${diet ? diet.name : '—'}</div>
+          <div class="num-cards">
+            ${card('n', 'ลำดับในกรง', nAccent, nSoft, `1–${this.MAX_CAGE_NO}`, kp.nBuf, '')}
+            ${card('w', 'น้ำหนักที่ชั่งได้', wAccent, wSoft, 'กรัม (g)', kp.wBuf, ' g')}
+          </div>
+          <div class="kp-wrap" style="--kp-accent:${activeAccent};--kp-soft:${activeSoft}">
+            <div class="kp-grid">${keys}</div>
+            <div class="kp-row">
+              <button class="kp-key kp-act" data-key="clear">C</button>
+              <button class="kp-key" data-key="0">0</button>
+              ${kp.active === 'w' ? '<button class="kp-key kp-act" data-key="dot">.</button>' : ''}
+              <button class="kp-key kp-act" data-key="back">⌫</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="kpCancel">ยกเลิก</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-primary" id="kpOk" style="background:${nAccent}">ยืนยัน</button>
+        </div>
+      `);
+      this.el('closeModal').onclick = () => this.closeModal();
+      this.el('kpCancel').onclick = () => cancelStep();
+      this.el('kpOk').onclick = () => okNums();
+      document.querySelectorAll('.num-card').forEach(b => b.onclick = () => { kp.active = b.dataset.card; render(); });
+      document.querySelectorAll('.kp-key').forEach(b => b.onclick = () => {
+        const k = b.dataset.key, bk = kp.active === 'n' ? 'nBuf' : 'wBuf';
+        if (k === 'back') kp[bk] = kp[bk].slice(0, -1);
+        else if (k === 'clear') kp[bk] = '';
+        else if (k === 'dot') { if (!kp[bk].includes('.')) kp[bk] = (kp[bk] === '' ? '0.' : kp[bk] + '.'); }
+        else if (kp[bk].replace('.', '').length < 4) kp[bk] = (kp[bk] === '0' ? '' : kp[bk]) + k;
+        render();
+      });
+    };
+
+    const startNums = (i, isNew, active) => {
+      kp = { i, isNew, active: active || 'n',
+        nBuf: mice[i].cageNo == null ? '' : String(mice[i].cageNo),
+        wBuf: mice[i].weight == null ? '' : String(mice[i].weight) };
+      render();
+    };
+    const cancelStep = () => { if (kp.isNew) mice.splice(kp.i, 1); kp = null; render(); };
+    const okNums = () => {
+      const nv = kp.nBuf === '' ? null : +kp.nBuf;
+      const wv = kp.wBuf === '' ? null : parseFloat(kp.wBuf);
+      if (nv == null || nv < 1) { this.toast('กรุณากรอกลำดับในกรง'); kp.active = 'n'; return render(); }
+      if (nv > this.MAX_CAGE_NO) { this.toast(`ลำดับในกรงต้องอยู่ระหว่าง 1–${this.MAX_CAGE_NO}`); kp.active = 'n'; return render(); }
+      if (mice.some((m, i) => i !== kp.i && m.cageNo === nv)) { this.toast(`ลำดับในกรง #${nv} ถูกใช้แล้วในกรงนี้`); kp.active = 'n'; return render(); }
+      if (wv == null || !(wv > 0)) { this.toast('กรุณากรอกน้ำหนักที่ชั่งได้'); kp.active = 'w'; return render(); }
+      mice[kp.i].cageNo = nv;
+      mice[kp.i].weight = Math.round(wv * 10) / 10;
+      kp = null; render();
+    };
+
+    // create the real animals — this is the moment each mouse gets its permanent code
+    const commit = () => {
+      if (!mice.length) { this.toast('ยังไม่ได้เพิ่มหนู'); return; }
+      if (mice.some(m => m.cageNo == null || m.weight == null)) { this.toast('กรอกลำดับในกรงและน้ำหนักให้ครบทุกตัว'); return; }
+      cage.mice = mice
+        .slice()
+        .sort((a, b) => a.cageNo - b.cageNo)
+        .map(m => this.freshMouse(mouseCode(p.id, cage.code, m.cageNo), selSex, null, m.cageNo, m.weight));
+      cage.lastRecordDate = todayISO();
+      this.log('รับหนูเข้ากรง (ชั่งครั้งแรก)', `${cage.code} · ${mice.length} ตัว (${selSex === 'M' ? '♂' : '♀'})`, p.name);
+      this.closeModal();
+      this.toast(`นำหนู ${mice.length} ตัวเข้ากรง ${cage.code} แล้ว`);
+      this.renderDashboard();
+    };
+
+    const render = () => (kp ? renderNums() : renderList());
+    this.openModal('', { compact: true });
+    render();
+  },
+
   // ---------------------------------------------------------
   renderDashboard() {
     const p = Data.getProject(this.route.projectId);
@@ -1552,39 +1950,59 @@ const App = {
     const canWeigh = operational && this.can('weigh', p);
     const canEdit = !closed && this.can('editProject', p);
     const canMembers = this.can('manageMembers', p);
+    // การชั่งครั้งแรก: Sci ชั่งหนูแล้วนำเข้ากรงที่ยังว่าง — ทำได้ตราบใดที่ยังมีกรงว่าง
+    const emptyCages = p.cages.filter(c => !c.mice.length);
+    const canIntake = canWeigh && emptyCages.length > 0;
     if (this.editing && !canEdit) this.editing = false;
     if (this.weighing && !canWeigh) this.weighing = false;
+    if (this.intake && !canIntake) this.intake = false;
 
     // tallest cage drives a uniform box height across the whole project
     const maxMice = p.cages.reduce((m, c) => Math.max(m, c.mice.length), 1);
 
+    // After the project starts, cages and mice are FIXED — จัดการกรง only assigns the
+    // two group layers and moves a cage to another shelf. Shelves render the same in
+    // every mode; only the cage cards change (see cageCard).
     const shelves = [];
     for (let s = 1; s <= p.shelves; s++) {
-      const cells = [];
-      for (let pos = 1; pos <= p.cagesPerShelf; pos++) {
-        const cage = p.cages.find(c => c.shelf === s && c.position === pos);
-        cells.push(cage ? this.cageCard(p, cage, maxMice) : this.emptyCell(maxMice, this.editing, s, pos));
-      }
+      const shelfCages = p.cages.filter(c => c.shelf === s).sort((a, b) => a.position - b.position);
+      const cells = shelfCages.map(cage => this.cageCard(p, cage, maxMice));
+      if (!shelfCages.length) cells.push(this.emptyCell(maxMice));
+      const moveHere = this.editing && this.editMode === 'move' && this.moveCageId
+        && !shelfCages.some(c => c.id === this.moveCageId)
+        ? `<button class="btn btn-sm move-here" data-moveto="${s}">⬇️ ย้ายมาชั้นนี้</button>` : '';
       shelves.push(`
         <div class="shelf">
-          <div class="shelf-label">${(p.shelfNames && p.shelfNames[s]) || 'ชั้นที่ ' + s}</div>
-          <div class="cage-row" style="--cols:${p.cagesPerShelf}">${cells.join('')}</div>
+          <div class="shelf-label">${(p.shelfNames && p.shelfNames[s]) || 'ชั้นที่ ' + s}${moveHere}</div>
+          <div class="cage-row" style="--cols:${Math.max(1, shelfCages.length)}">${cells.join('')}</div>
         </div>`);
     }
 
-    const modeBar = this.weighing
+    const modeBar = this.intake
+      ? `<div class="weighing-banner intake">
+           <span>🐭 <b>โหมดรับหนูเข้ากรง (ชั่งครั้งแรก)</b> — แตะกรงว่างเพื่อชั่งน้ำหนักและนำหนูเข้า · เหลือ ${emptyCages.length} กรงว่าง</span>
+           <span class="spacer"></span>
+           <button class="btn" id="exitIntake">เสร็จสิ้น</button>
+         </div>`
+      : this.weighing
       ? `<div class="weighing-banner">
            <span>⚖️ <b>โหมดชั่งน้ำหนัก</b> — แตะกรงที่ต้องการเริ่มบันทึก (กรงสีเขียว = บันทึกแล้ว)</span>
            <span class="spacer"></span>
            <button class="btn" id="exitWeighing">ออกจากโหมด</button>
          </div>`
       : this.editing
-      ? `<div class="edit-banner">
-           <span>✏️ <b>โหมดจัดการกรง</b> — แตะกรงว่างเพื่อเพิ่ม · แตะกรงเพื่อแก้ไข/ลบ</span>
-           <span class="spacer"></span>
-           <label class="edit-num">ชั้น <input id="edShelves" type="number" min="1" max="10" value="${p.shelves}"></label>
-           <label class="edit-num">กรง/ชั้น <input id="edCols" type="number" min="1" max="12" value="${p.cagesPerShelf}"></label>
-           <button class="btn" id="exitEditing">เสร็จสิ้น</button>
+      ? `<div class="edit-banner col">
+           <div class="eb-top">
+             <span>✏️ <b>จัดการกรง</b> — เลือกสิ่งที่ต้องการทำ (ทำได้ทีละอย่าง)</span>
+             <span class="spacer" style="flex:1"></span>
+             <button class="btn" id="exitEditing">เสร็จสิ้น</button>
+           </div>
+           <div class="eb-modes">
+             <button class="btn eb-mode ${this.editMode === 'diet' ? 'on' : ''}" data-editmode="diet">🍚 กำหนดชนิดอาหาร</button>
+             <button class="btn eb-mode ${this.editMode === 'group' ? 'on' : ''}" data-editmode="group">💊 กำหนดสารทดสอบ</button>
+             <button class="btn eb-mode ${this.editMode === 'move' ? 'on' : ''}" data-editmode="move">↔️ ย้ายกรงไปชั้นอื่น</button>
+           </div>
+           ${this.editModePanel(p)}
          </div>`
       : `<div class="mode-bar">
            <span style="flex:1"></span>
@@ -1593,14 +2011,17 @@ const App = {
            ${this.can('viewReports', p) ? `<button class="btn" data-nav="reports">📈 กราฟ</button>` : ''}
            ${operational && this.can('cageCare', p) ? `<button class="btn" data-nav="cagecare" data-project-id="${p.id}">🧹 ดูแลกรง</button>` : ''}
            ${operational && this.can('dosing', p) ? `<button class="btn" data-nav="dosing" data-project-id="${p.id}">💉 ให้สารทดสอบ</button>` : ''}
-           ${canWeigh ? `<button class="btn btn-primary" id="startWeighing">⚖️ ชั่งน้ำหนัก</button>` : ''}
+           ${canIntake ? `<button class="btn btn-primary" id="startIntake">🐭 รับหนูเข้ากรง (${emptyCages.length} กรงว่าง)</button>` : ''}
+           ${canWeigh && !this.isEmptyProject(p) ? `<button class="btn btn-primary" id="startWeighing">⚖️ ชั่งน้ำหนัก</button>` : ''}
          </div>`;
 
     this.shell(
       `<a data-nav="project" data-project-id="${p.id}">${p.name}</a>`,
       `<div class="page wide">
         <div class="page-head">
-          <div><h2>${p.name} ${closed ? '<span class="pill closed">ปิดแล้ว</span>' : ''}</h2><div class="desc">${p.description}${closed ? ' · โครงการปิดแล้ว (ดูอย่างเดียว)' : ''}</div></div>
+          <div><h2>${p.name} ${closed ? '<span class="pill closed">ปิดแล้ว</span>' : ''}</h2>
+            <div class="desc">${p.description}${closed ? ' · โครงการปิดแล้ว (ดูอย่างเดียว)' : ''}</div>
+            ${this.facilityLine(p) ? `<div class="desc loc">📍 ${this.facilityLine(p)}</div>` : ''}</div>
         </div>
         ${modeBar}
         ${shelves.join('')}
@@ -1619,12 +2040,18 @@ const App = {
       </div>`
     );
 
-    if (canWeigh && !this.weighing && !this.editing) {
+    if (canWeigh && !this.isEmptyProject(p) && !this.weighing && !this.editing && !this.intake) {
       this.el('startWeighing').addEventListener('click', () => {
         this.weighing = true;
         this.weighSession = { done: new Set() };   // no cage weighed yet this round
         this.renderDashboard();
       });
+    }
+    if (canIntake && !this.weighing && !this.editing && !this.intake) {
+      this.el('startIntake').addEventListener('click', () => { this.intake = true; this.renderDashboard(); });
+    }
+    if (this.intake) {
+      this.el('exitIntake').addEventListener('click', () => { this.intake = false; this.renderDashboard(); });
     }
     if (this.weighing) {
       this.el('exitWeighing').addEventListener('click', () => {
@@ -1633,39 +2060,115 @@ const App = {
         this.renderDashboard();
       });
     }
-    if (!this.weighing && !this.editing) {
+    if (!this.weighing && !this.editing && !this.intake) {
       this.el('sickReport').addEventListener('click', () => this.openSickReport(p));
       this.el('deathReport').addEventListener('click', () => this.openDeathReport(p));
     }
     if (this.editing) {
-      this.el('exitEditing').addEventListener('click', () => { this.editing = false; this.renderDashboard(); });
-      // layout resize — clamp so existing cages are never orphaned
-      const applyLayout = () => {
-        const minShelves = p.cages.reduce((m, c) => Math.max(m, c.shelf), 1);
-        const minCols = p.cages.reduce((m, c) => Math.max(m, c.position), 1);
-        const shelves = Math.max(minShelves, Math.min(10, +this.el('edShelves').value || minShelves));
-        const cols = Math.max(minCols, Math.min(12, +this.el('edCols').value || minCols));
-        if (shelves !== p.shelves || cols !== p.cagesPerShelf) {
-          p.shelves = shelves; p.cagesPerShelf = cols;
-          this.log('แก้ผังโครงการ', `${shelves} ชั้น × ${cols} กรง/ชั้น`, p.name);
-        }
+      this.el('exitEditing').addEventListener('click', () => {
+        this.editing = false; this.editMode = null; this.moveCageId = null; this.renderDashboard();
+      });
+      // pick which of the three jobs to do — switching resets the armed brush/selection
+      document.querySelectorAll('[data-editmode]').forEach(b => b.onclick = () => {
+        const m = b.dataset.editmode;
+        this.editMode = this.editMode === m ? null : m;
+        this.dietBrush = null; this.groupBrush = null; this.moveCageId = null;
         this.renderDashboard();
-      };
-      this.el('edShelves').addEventListener('change', applyLayout);
-      this.el('edCols').addEventListener('change', applyLayout);
-      document.querySelectorAll('[data-empty]').forEach(elm => {
-        elm.addEventListener('click', () => this.openCageEditor(p, +elm.dataset.shelf, +elm.dataset.pos, null));
+      });
+      document.querySelectorAll('[data-diet]').forEach(b => b.onclick = () => {
+        this.dietBrush = this.dietBrush === b.dataset.diet ? null : b.dataset.diet;
+        this.renderDashboard();
+      });
+      document.querySelectorAll('[data-group]').forEach(b => b.onclick = () => {
+        this.groupBrush = this.groupBrush === b.dataset.group ? null : b.dataset.group;
+        this.renderDashboard();
+      });
+      const cm = this.el('cancelMove');
+      if (cm) cm.onclick = () => { this.moveCageId = null; this.renderDashboard(); };
+      // ย้ายกรงไปชั้นอื่น — the cage keeps its code, mice and grouping; only its shelf changes
+      document.querySelectorAll('[data-moveto]').forEach(b => b.onclick = () => {
+        const cage = p.cages.find(x => x.id === this.moveCageId);
+        if (!cage) return;
+        const to = +b.dataset.moveto;
+        const from = cage.shelf;
+        cage.shelf = to;
+        cage.shelfLabel = (p.shelfNames && p.shelfNames[to]) || String(to);
+        cage.position = p.cages.filter(x => x.shelf === to && x !== cage).reduce((mx, x) => Math.max(mx, x.position), 0) + 1;
+        // close the gap the cage left behind so positions stay 1..N on the old shelf
+        p.cages.filter(x => x.shelf === from).sort((a, b) => a.position - b.position)
+          .forEach((x, i) => { x.position = i + 1; });
+        this.moveCageId = null;
+        this.log('ย้ายกรง', `${cage.code} · ชั้น ${(p.shelfNames && p.shelfNames[from]) || from} → ${(p.shelfNames && p.shelfNames[to]) || to}`, p.name);
+        this.toast(`ย้ายกรง ${cage.code} ไปชั้น ${(p.shelfNames && p.shelfNames[to]) || to} แล้ว`);
+        this.renderDashboard();
       });
     }
     // cage clicks
     document.querySelectorAll('[data-cage]').forEach(elm => {
       elm.addEventListener('click', () => {
         const cage = Data.getCage(p, elm.dataset.cage);
-        if (this.editing) this.openCageEditor(p, cage.shelf, cage.position, cage);
+        if (this.editing) this.applyCageEdit(p, cage);
+        else if (this.intake) {
+          if (cage.mice.length) { this.toast(`กรง ${cage.code} มีหนูอยู่แล้ว`); return; }
+          this.openIntakeCage(p, cage);
+        }
         else if (this.weighing) this.startWizard(p, cage);
         else this.openCagePopup(p, cage);
       });
     });
+  },
+
+  // tapping a cage while in จัดการกรง — what happens depends on the active sub-mode.
+  // Assigning a layer for the FIRST time is immediate; CHANGING an existing decision
+  // asks the user to type CONFIRM_PHRASE, because it rewrites how the data is grouped
+  // (and, for สารทดสอบ, renumbers the animals' tags).
+  applyCageEdit(p, cage) {
+    if (this.editMode === 'diet') {
+      if (!this.dietBrush) { this.toast('เลือกชนิดอาหารจากแถบด้านบนก่อน'); return; }
+      if (!cage.mice.length) { this.toast(`กรง ${cage.code} ยังไม่มีหนู`); return; }
+      const apply = () => {
+        const r = this.assignCageDiet(p, cage, this.dietBrush);
+        if (!r.ok) { this.toast(r.msg); return; }
+        if (r.changed) this.log('กำหนดชนิดอาหาร', `${cage.code} → ${(this.cageDiet(p, cage) || {}).name || '—'}`, p.name);
+        this.renderDashboard();
+      };
+      const from = this.diets(p).find(x => x.id === cage.dietId);   // null ⇒ ยังไม่เคยกำหนด
+      if (!from) return apply();
+      const to = this.diets(p).find(x => x.id === this.dietBrush);
+      if (from.id === (to && to.id)) return;
+      return this.confirmDialog({
+        title: `เปลี่ยนชนิดอาหารของกรง ${cage.code}?`,
+        body: `<b>${from.name}</b> → <b>${to ? to.name : '—'}</b> · มีผลกับหนู ${cage.mice.length} ตัวในกรงนี้`
+          + `<div class="confirm-note">กรงนี้ถูกกำหนดอาหารไปแล้ว การแก้ไขจะเปลี่ยนการจัดกลุ่มของข้อมูลที่บันทึกไว้</div>`,
+        okLabel: 'ยืนยันการแก้ไข', requireText: this.CONFIRM_PHRASE, onOk: apply,
+      });
+    }
+    if (this.editMode === 'group') {
+      if (!this.groupBrush) { this.toast('เลือกกลุ่มสารทดสอบจากแถบด้านบนก่อน'); return; }
+      if (!cage.mice.length) { this.toast(`กรง ${cage.code} ยังไม่มีหนู`); return; }
+      const target = this.groupBrush === '__none__' ? null : this.groupBrush;
+      const apply = () => {
+        const r = this.assignCageGroup(p, cage, target);
+        if (!r.ok) { this.toast(r.msg); return; }
+        if (r.changed) this.log('กำหนดกลุ่มสารทดสอบ', `${cage.code} → ${(this.cageGroup(p, cage) || {}).name || 'เอาออกจากกลุ่ม'}`, p.name);
+        this.renderDashboard();
+      };
+      const from = this.cageGroup(p, cage);                          // null ⇒ ยังไม่เคยจัดกลุ่ม
+      if (!from) { if (!target) return; return apply(); }
+      if (from.id === target) return;
+      const to = target ? (p.groups || []).find(g => g.id === target) : null;
+      return this.confirmDialog({
+        title: `เปลี่ยนกลุ่มสารทดสอบของกรง ${cage.code}?`,
+        body: `<b>${from.name}</b> → <b>${to ? to.name : 'เอาออกจากกลุ่ม'}</b> · มีผลกับหนู ${cage.mice.length} ตัวในกรงนี้`
+          + `<div class="confirm-note">ลำดับในกลุ่มเดิม (${cage.mice.map(m => '#' + m.groupNo).join(', ')}) จะถูกคืนและออกใหม่ — รหัสกำกับของหนูจะเปลี่ยนตาม</div>`,
+        okLabel: 'ยืนยันการแก้ไข', requireText: this.CONFIRM_PHRASE, onOk: apply,
+      });
+    }
+    if (this.editMode === 'move') {
+      this.moveCageId = this.moveCageId === cage.id ? null : cage.id;
+      return this.renderDashboard();
+    }
+    this.toast('เลือกสิ่งที่ต้องการทำจากแถบด้านบนก่อน');
   },
 
   cageCard(p, cage, maxMice = cage.mice.length) {
@@ -1687,7 +2190,7 @@ const App = {
       const dead = !m.alive;
       const arrow = (dead || !weighed || chg == null) ? '' : `${chg >= 0 ? '▲' : '▼'}${this.g(Math.abs(chg))}`;
       return `<div class="mrow ${dead ? 'dead' : m.excluded ? 'stop' : ''}">
-        <span class="mid">${m.code.split('-').slice(-1)[0]}${this.treatMark(m)}${this.flagMark(m)}</span>
+        <span class="mid">${m.cageNo != null ? m.cageNo : m.code.split('-').slice(-1)[0]}${this.treatMark(m)}${this.flagMark(m)}</span>
         <span class="mw">${dead ? '' : (weighed ? this.g(cur) : '–') + '<span class="unit">g</span>'}</span>
         <span class="chg ${weighed ? st : ''}">${arrow}</span>
       </div>`;
@@ -1700,14 +2203,28 @@ const App = {
         <div class="s-avg">${weighed ? this.g(per) + ' g/ตัว' : ''}</div>
       </div>`;
 
-    // status colour: weighing mode → gray (not weighed) / green (done); otherwise care/normal
-    const cageStatus = this.weighing ? (weighed ? 'done' : 'normal') : this.cageStatus(cage);
+    // status colour: weighing mode → gray (not weighed) / green (done); otherwise care/normal.
+    // In intake mode the empty cages are the targets, so they glow and the filled ones dim.
+    const isEmpty = !cage.mice.length;
+    const cageStatus = this.weighing ? (weighed ? 'done' : 'normal')
+      : this.intake ? (isEmpty ? 'normal' : 'done')
+      : this.cageStatus(cage);
+    // จัดการกรง: only cages that can receive the current action look interactive
+    const assignable = this.editing && (this.editMode === 'diet' || this.editMode === 'group') && !isEmpty;
+    const modeCls = this.weighing ? 'selectable'
+      : this.intake ? (isEmpty ? 'selectable intake-target' : 'intake-filled')
+      : assignable ? 'selectable'
+      : this.editing && this.editMode === 'move' ? (this.moveCageId === cage.id ? 'selectable move-picked' : 'selectable')
+      : this.editing && this.editMode ? 'intake-filled'
+      : '';
+    const diet = this.cageDiet(p, cage);
     return `
-      <div class="cage ${cageStatus} ${this.weighing ? 'selectable' : ''}" style="--maxmice:${maxMice}" data-cage="${cage.id}">
+      <div class="cage ${cageStatus} ${modeCls}" style="--maxmice:${maxMice}" data-cage="${cage.id}">
         <div class="cage-top">
           <span class="cage-code">${cage.code}</span>
-          <span class="cage-grp">${group ? group.name : ''}</span>
+          <span class="cage-grp">${group ? group.name : (isEmpty ? '' : '<span class="ungrouped">ยังไม่จัดกลุ่ม</span>')}</span>
         </div>
+        ${diet && !isEmpty ? `<div class="cage-diet" style="--dc:${diet.color}">🍚 ${diet.name}</div>` : ''}
         <div class="cage-main">
           <div class="cage-mice${hasMarks ? ' has-marks' : ''}">${mouseList || '<span class="empty-note">ไม่มีหนู</span>'}</div>
           <div class="cage-supply">
@@ -1718,121 +2235,18 @@ const App = {
       </div>`;
   },
 
-  emptyCell(maxMice = 1, editing = false, shelf = 0, pos = 0) {
-    if (editing) {
-      return `<div class="cage empty editable" style="--maxmice:${maxMice}" data-empty data-shelf="${shelf}" data-pos="${pos}">
-        <div class="empty-mark">＋ เพิ่มกรง</div></div>`;
-    }
+  // placeholder for a shelf that holds no cages at all. Cages are created only by AV
+  // at build time — after the project starts they can no longer be added or removed.
+  emptyCell(maxMice = 1) {
     return `<div class="cage empty" style="--maxmice:${maxMice}"><div class="empty-mark">ว่าง</div></div>`;
-  },
-
-  // Edit-mode: add a new cage, or edit/delete an existing one (group + sex + mice count)
-  openCageEditor(p, shelf, pos, cage) {
-    const code = cage ? cage.code : `${this.SHELF_LETTERS[shelf - 1]}-${String(pos).padStart(2, '0')}`;
-    let selG = cage ? Math.max(0, p.groups.findIndex(g => g.id === cage.groupId)) : 0;
-    let selSex = cage && cage.mice[0] ? cage.mice[0].sex : 'M';
-    const curMice = cage ? cage.mice.length : null;
-    const otherPreset = curMice != null && curMice > 5;
-
-    const groupChoices = p.groups.map((g, i) =>
-      `<button type="button" class="choice cage-grp-choice ${selG === i ? 'sel' : ''}" data-g="${i}">
-         <span class="sw" style="background:${g.color}"></span>${g.name}
-       </button>`).join('');
-    // editing an existing cage: can only ADD mice, never reduce (removal is per-mouse: move/death)
-    const countCards = [1, 2, 3, 4, 5].map(n => {
-      const locked = curMice != null && n < curMice;
-      return `<button type="button" class="count-card ${curMice === n ? 'sel' : ''}" data-count="${n}" ${locked ? 'disabled' : ''}>${n}</button>`;
-    }).join('')
-      + `<button type="button" class="count-card other ${otherPreset ? 'sel' : ''}" data-count="other">อื่นๆ</button>`;
-
-    this.openModal(`
-      <div class="modal-head">
-        <div><h3>${cage ? 'แก้ไขกรง' : 'เพิ่มกรง'} ${code}</h3><div class="sub">ชั้น ${shelf} · ตำแหน่ง ${pos}${cage ? ` · ปัจจุบัน ${cage.mice.length} ตัว (เพิ่มได้เท่านั้น)` : ''}</div></div>
-        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
-      </div>
-      <div class="modal-body">
-        <div class="field"><label>1. กลุ่มทดลอง</label><div class="choice-row wrap" id="cageGrp">${groupChoices}</div></div>
-        <div class="field"><label>2. เพศ (ทั้งกรง)</label>
-          <div class="sex-row" id="cageSex">
-            <button type="button" class="sex-btn male ${selSex === 'M' ? 'sel' : ''}" data-sex="M">♂</button>
-            <button type="button" class="sex-btn female ${selSex === 'F' ? 'sel' : ''}" data-sex="F">♀</button>
-          </div>
-        </div>
-        <div class="field"><label>3. จำนวนหนูในกรง</label>
-          <div class="count-cards" id="cageCount">${countCards}</div>
-          <div class="count-other ${otherPreset ? '' : 'hidden'}" id="cageOtherWrap">
-            <input id="cageMice" type="number" min="1" max="99" value="${otherPreset ? curMice : ''}" placeholder="ระบุจำนวน">
-            <button class="btn btn-primary" id="cageOtherSave">บันทึก</button>
-          </div>
-        </div>
-      </div>
-      <div class="modal-foot">
-        ${cage ? `<button class="btn btn-danger" id="cageDelete">ลบกรง</button>` : ''}
-        <span class="spacer" style="flex:1"></span>
-        <button class="btn" id="cageCancel">ยกเลิก</button>
-      </div>
-    `, { compact: true });
-
-    const commit = (mice) => {
-      if (selG == null) { this.toast('กรุณาเลือกกลุ่มก่อน'); return; }
-      const groupId = p.groups[selG].id;
-      if (cage) {
-        // increase-only: reducing headcount must go through per-mouse move/death, not silent deletion
-        if (mice < cage.mice.length) { this.toast('ลดจำนวนไม่ได้ — ต้องเอาหนูออกทีละตัว (ย้าย/บันทึกการตาย)'); return; }
-        cage.groupId = groupId;
-        cage.mice.forEach(m => { if (m.alive) m.sex = selSex; });
-        let nextN = cage.mice.reduce((mx, m) => Math.max(mx, parseInt(m.code.split('-').pop()) || 0), 0);
-        while (cage.mice.length < mice) { nextN++; cage.mice.push(this.freshMouse(`${cage.code}-${nextN}`, selSex)); }
-        this.log('แก้ไขกรง', `${cage.code} · ${p.groups[selG].name} · ${mice} ตัว (${selSex === 'M' ? '♂' : '♀'})`, p.name);
-      } else {
-        const newMice = Array.from({ length: mice }, (_, k) => this.freshMouse(`${code}-${k + 1}`, selSex));
-        p.cages.push({
-          id: `${p.id}-C${Date.now().toString(36)}`, code, groupId, shelf, position: pos, mice: newMice,
-          water: { remaining: 300, added: null, consumed: 0 },
-          food: { remaining: 100, added: null, consumed: 0 },
-          status: 'pending', lastRecordDate: todayISO(),
-        });
-        this.log('เพิ่มกรง', `${code} · ${p.groups[selG].name} · ${mice} ตัว (${selSex === 'M' ? '♂' : '♀'})`, p.name);
-      }
-      this.closeModal(); this.renderDashboard();
-    };
-
-    this.el('cageGrp').querySelectorAll('.cage-grp-choice').forEach(b => {
-      b.onclick = () => { selG = +b.dataset.g; this.el('cageGrp').querySelectorAll('.cage-grp-choice').forEach(x => x.classList.toggle('sel', x === b)); };
-    });
-    this.el('cageSex').querySelectorAll('.sex-btn').forEach(b => {
-      b.onclick = () => { selSex = b.dataset.sex; this.el('cageSex').querySelectorAll('.sex-btn').forEach(x => x.classList.toggle('sel', x === b)); };
-    });
-    this.el('cageCount').querySelectorAll('.count-card').forEach(b => {
-      b.onclick = () => {
-        if (b.dataset.count === 'other') {
-          this.el('cageCount').querySelectorAll('.count-card').forEach(x => x.classList.toggle('sel', x === b));
-          this.el('cageOtherWrap').classList.remove('hidden');
-          this.el('cageMice').focus();
-        } else commit(+b.dataset.count);
-      };
-    });
-    this.el('cageOtherSave').onclick = () => {
-      const mice = Math.max(1, Math.min(99, +this.el('cageMice').value || 0));
-      if (!mice) { this.el('cageMice').focus(); return; }
-      commit(mice);
-    };
-    this.el('cageMice').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this.el('cageOtherSave').click(); } });
-    this.el('closeModal').onclick = () => this.closeModal();
-    this.el('cageCancel').onclick = () => this.closeModal();
-    if (cage) this.el('cageDelete').onclick = () => {
-      if (!confirm(`ลบกรง ${cage.code} และหนูทั้งหมดในกรง?`)) return;
-      const i = p.cages.indexOf(cage);
-      if (i >= 0) p.cages.splice(i, 1);
-      this.log('ลบกรง', `${cage.code}`, p.name);
-      this.closeModal(); this.renderDashboard();
-    };
   },
 
   // ---------------------------------------------------------
   // Cage popup (normal mode)
   // ---------------------------------------------------------
   openCagePopup(p, cage) {
+    // a cage the PI left empty at populate has NO group yet (groupId === null) —
+    // it still renders on the dashboard, so every group read here must be guarded
     const group = Data.getGroup(p, cage.groupId);
     const controlChange = Data.controlAvgChange(p);
     const canTreat = this.can('treat', p);
@@ -1848,9 +2262,9 @@ const App = {
       const chgClass = chg == null ? '' : chg >= 0 ? 'up' : 'down';
       const chgTxt = chg == null ? '–' : `${this.gs(chg)}g`;
       let vsControl = '–';
-      if (chg != null && controlChange != null && !group.isControl) {
+      if (chg != null && controlChange != null && group && !group.isControl) {
         vsControl = `${this.gs(chg - controlChange)}g`;
-      } else if (group.isControl) {
+      } else if (group && group.isControl) {
         vsControl = '(กลุ่มควบคุม)';
       }
       const dead = !m.alive;
@@ -1880,7 +2294,7 @@ const App = {
         : `<span style="color:var(--text-muted)">—</span>`;
       return `
         <tr class="${dead ? 'row-dead' : m.excluded ? 'row-stop' : ''}">
-          <td data-mouse="${m.id}"><b>${m.code}</b> ${this.treatMark(m)}<span class="mono" style="color:var(--text-muted)"> (${m.sex === 'M' ? '♂' : '♀'})</span> ${badges}</td>
+          <td data-mouse="${m.id}"><b>${m.code}</b> ${this.tagChip(p, cage, m)}${this.treatMark(m)}<span class="mono" style="color:var(--text-muted)"> (${m.sex === 'M' ? '♂' : '♀'})</span> ${badges}</td>
           <td class="num" data-mouse="${m.id}">${this.g(cur)} g</td>
           <td class="num" data-mouse="${m.id}"><span class="chg ${dead ? '' : chgClass}">${dead ? '–' : chgTxt}</span></td>
           <td class="num" data-mouse="${m.id}">${dead || m.excluded ? '—' : vsControl}</td>
@@ -1896,7 +2310,8 @@ const App = {
       <div class="modal-head">
         <div>
           <h3>กรง ${cage.code}</h3>
-          <div class="sub">${group.name} · บันทึกล่าสุด ${cage.lastRecordDate}</div>
+          <div class="sub">${group ? group.name : 'ยังไม่กำหนดกลุ่ม'} · บันทึกล่าสุด ${cage.lastRecordDate}</div>
+          <div class="sub loc">📍 ${this.cageLocation(p, cage, false)}</div>
         </div>
         <span class="spacer"></span>
         <button class="icon-btn" id="closeModal">✕</button>
@@ -2175,8 +2590,8 @@ const App = {
     this.openModal(`
       <div class="modal-head">
         <div>
-          <h3>หนู ${mouse.code} ${this.treatMark(mouse)}${this.flagMark(mouse)}</h3>
-          <div class="sub">กรง ${cage.code} · เพศ ${mouse.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'}</div>
+          <h3>หนู ${mouse.code} ${this.tagChip(p, cage, mouse)}${this.treatMark(mouse)}${this.flagMark(mouse)}</h3>
+          <div class="sub">📍 ${this.cageLocation(p, cage)} · เพศ ${mouse.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'}</div>
         </div>
         <span class="spacer"></span>
         <button class="icon-btn" id="closeModal">✕</button>
@@ -2516,7 +2931,7 @@ const App = {
         : (m.necropsy ? '<span class="chg up">✓ บันทึกแล้ว</span>' : '<span class="chg down">รอบันทึก</span>');
       return `<tr class="dr-row" data-mid="${m.id}">
         <td>${m.death.date}</td><td>${m.death.time || '—'}</td><td>${cage.code}</td>
-        <td><b>${m.code}</b></td><td>${g ? g.name : '—'}</td><td>${m.death.reporter || '—'}</td>
+        <td><b>${m.code}</b><br>${this.tagChip(p, cage, m)}</td><td>${g ? g.name : '—'}</td><td>${m.death.reporter || '—'}</td>
         <td>${type}</td><td>${disp}</td><td>${nec}</td></tr>`;
     }).join('');
 
@@ -2582,7 +2997,7 @@ const App = {
           ${t.note ? `<div class="fu-note">📝 ${t.note}</div>` : ''}
         </div>`).join('');
       return `<div class="fu-card" data-mid="${m.id}">
-        <div class="fu-head"><b>${m.code}</b> · กรง ${cage.code} · ${g ? g.name : '—'} ${status}
+        <div class="fu-head"><b>${m.code}</b> ${this.tagChip(p, cage, m)} · กรง ${cage.code} ${status}
           <span class="fu-count">${m.treatments.length} ครั้ง</span></div>
         <div class="fu-log">${log}</div>
       </div>`;
@@ -2821,7 +3236,7 @@ const App = {
       <table class="form">${this.COLS4}
         <tr><td class="band" colspan="4">PROTOCOL INFORMATION</td></tr>
         <tr><td class="lbl">AR</td><td>Protocol No. &nbsp; ${p.name}</td><td class="lbl">Lot.</td><td>—</td></tr>
-        <tr><td class="lbl">Case Number</td><td>${mouse.code}</td><td class="lbl">Date / Time</td><td>${latest.date || todayISO()} &nbsp; ${latest.time || ''}</td></tr>
+        <tr><td class="lbl">Case Number</td><td>${this.mouseLabel(p, cage, mouse)}</td><td class="lbl">Date / Time</td><td>${latest.date || todayISO()} &nbsp; ${latest.time || ''}</td></tr>
         <tr><td class="lbl">Cage &amp; ID</td><td colspan="3">${cage.code} · ${mouse.code} · ${g ? g.name : ''} · ${mouse.sex === 'M' ? 'Male ♂' : 'Female ♀'}</td></tr>
         <tr><td class="band" colspan="4">SICK CASE REPORT</td></tr>
         <tr><td class="lbl" colspan="4">Abnormal / Clinical Sign(s)</td></tr>
@@ -2888,7 +3303,7 @@ const App = {
       </table>
       <table class="grid" style="margin-top:10px">
         <colgroup><col style="width:40%"><col style="width:15%"><col style="width:15%"><col style="width:15%"><col style="width:15%"></colgroup>
-        <tr><th style="text-align:left">Examination of System / Organ(s)</th><th>ID: ${mouse.code}</th><th>ID:</th><th>ID:</th><th>ID:</th></tr>
+        <tr><th style="text-align:left">Examination of System / Organ(s)</th><th>ID: ${this.mouseLabel(p, cage, mouse)}</th><th>ID:</th><th>ID:</th><th>ID:</th></tr>
         ${sysRows}
       </table>
       <table class="form" style="margin-top:10px">${this.COLS2}
@@ -2908,7 +3323,7 @@ const App = {
 
     // fill actual rows; pad to 15 blank rows like the paper form
     const filled = dead.map(({ m, cage }, i) =>
-      `<tr><td>${i + 1}.</td><td>${m.death.date || ''}</td><td>${m.death.time || ''}</td><td>${cage.code}</td><td>${m.code}</td><td>${m.death.reporter || ''}</td></tr>`);
+      `<tr><td>${i + 1}.</td><td>${m.death.date || ''}</td><td>${m.death.time || ''}</td><td>${cage.code}</td><td>${this.mouseLabel(p, cage, m)}</td><td>${m.death.reporter || ''}</td></tr>`);
     for (let i = filled.length; i < 15; i++) filled.push(`<tr><td>${i + 1}.</td><td></td><td></td><td></td><td></td><td></td></tr>`);
 
     return `
@@ -2968,7 +3383,7 @@ const App = {
       <table class="form">${this.COLS4}
         <tr><td class="band" colspan="4">PROTOCOL INFORMATION</td></tr>
         <tr><td class="lbl">AR</td><td>Protocol No. &nbsp; ${p.name}</td><td class="lbl">Lot.</td><td>—</td></tr>
-        <tr><td class="lbl">Case Number</td><td>${mouse.code}</td><td class="lbl">Date / Time</td><td>${first.date || todayISO()} &nbsp; ${first.time || ''}</td></tr>
+        <tr><td class="lbl">Case Number</td><td>${this.mouseLabel(p, cage, mouse)}</td><td class="lbl">Date / Time</td><td>${first.date || todayISO()} &nbsp; ${first.time || ''}</td></tr>
         <tr><td class="lbl">Cage &amp; ID</td><td colspan="3">${cage.code} · ${mouse.code} · ${g ? g.name : ''} · ${mouse.sex === 'M' ? 'Male ♂' : 'Female ♀'}</td></tr>
         <tr><td class="lbl">Clinical Signs =</td><td colspan="3">${allSigns}</td></tr>
       </table>
@@ -3008,6 +3423,23 @@ const App = {
   //   steps: water-remaining → food-remaining → each mouse →
   //           water-added → food-added → review → save
   // ---------------------------------------------------------
+  // ยืนยันก่อนออกจาก wizard ชั่งน้ำหนัก — ถ้ากดยกเลิก ต้องวาด step เดิมกลับมา
+  // (confirmDialog แทนที่ overlay ของ wizard ไป)
+  confirmExitWizard(warn) {
+    const meta = this.wizardStepMeta();
+    const atReview = this.wizard.step >= meta.review;
+    this.confirmDialog({
+      title: 'ออกจากการชั่งน้ำหนัก?',
+      body: warn,
+      okLabel: 'ออกโดยไม่บันทึก',
+      onOk: () => { this.wizard = null; this.closeModal(); },
+    });
+    // "ยกเลิก" / ✕ / คลิกพื้นหลัง → กลับไปหน้าเดิมของ wizard
+    const back = () => { if (this.wizard) (atReview ? this.renderWizardReview() : this.renderWizardStep()); };
+    this.el('cfCancel').onclick = back;
+    this.el('closeModal').onclick = back;
+  },
+
   startWizard(p, cage) {
     const mice = cage.mice.filter(m => m.alive);   // dead mice are not weighed
     this.wizard = {
@@ -3059,7 +3491,8 @@ const App = {
       const m = w.mice[idx];
       const last = Data.latestWeight(m);
       icon = '🐭'; title = `ชั่งหนู ${m.code}`;
-      hint = `เพศ ${m.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'} · กรอกน้ำหนักปัจจุบัน`;
+      const tag = this.mouseTag(w.p, w.cage, m);
+      hint = `${tag ? tag + ' · ' : ''}เพศ ${m.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'} · กรอกน้ำหนักปัจจุบัน`;
       progress = `<div class="mouse-progress">หนูตัวที่ ${idx + 1} จาก ${w.mice.length}</div>`;
       bodyExtra = `<div class="wizard-prev">น้ำหนักครั้งก่อน: <b>${this.g(last)} g</b></div>`;
       value = w.data.mouseWeights[idx] ?? '';
@@ -3123,7 +3556,7 @@ const App = {
     });
     this.el('wizNext').onclick = () => this.wizardNext();
     this.el('wizBack').onclick = () => this.wizardBack();
-    this.el('wizClose').onclick = () => { if (confirm('ออกจากการชั่งน้ำหนัก? ข้อมูลที่กรอกจะไม่ถูกบันทึก')) { this.wizard = null; this.closeModal(); } };
+    this.el('wizClose').onclick = () => this.confirmExitWizard('ข้อมูลที่กรอกไว้จะไม่ถูกบันทึก');
   },
 
   captureInput() {
@@ -3192,7 +3625,7 @@ const App = {
       </div>
     `);
     this.el('wizBack').onclick = () => { w.step = meta.foodAdd; this.renderWizardStep(); };
-    this.el('wizClose').onclick = () => { if (confirm('ออกจากการชั่งน้ำหนัก?')) { this.wizard = null; this.closeModal(); } };
+    this.el('wizClose').onclick = () => this.confirmExitWizard('ค่าที่ตรวจทานไว้จะไม่ถูกบันทึก');
     this.el('wizSave').onclick = () => this.wizardSave();
   },
 
@@ -3260,6 +3693,7 @@ const App = {
     if (!this.reportState || this.reportState.projectId !== p.id) {
       this.reportState = {
         projectId: p.id, mode: 'group', groupIds: p.groups.map(g => g.id), metrics: ['weight'],
+        dietIds: this.diets(p).map(d => d.id),      // layer 1 filter — which diets are in scope
         groupColor: Object.fromEntries(p.groups.map((g, i) => [g.id, g.color || this.PALETTE[i % this.PALETTE.length]])),
         metricDash: { ...this.DEFAULT_METRIC_DASH },
       };
@@ -3277,6 +3711,10 @@ const App = {
 
     const groupChecks = p.groups.map(g =>
       pill('group', g.id, st.groupIds.includes(g.id), '', g.name, `<span class="sw" style="background:${g.color || '#94a3b8'}"></span>`)).join('');
+
+    // layer 1 — filter which diets are in scope (a 2-factor study is read one diet at a time)
+    const dietChecks = this.diets(p).map(d =>
+      pill('diet', d.id, st.dietIds.includes(d.id), '', d.name, `<span class="sw" style="background:${d.color || '#94a3b8'}"></span>`)).join('');
 
     const metricChecks = [['weight', '⚖️', 'น้ำหนัก'], ['water', '💧', 'น้ำ'], ['food', '🍚', 'อาหาร']]
       .map(([v, ic, label]) => pill('metric', v, st.metrics.includes(v), ic, label)).join('');
@@ -3299,8 +3737,12 @@ const App = {
             <div class="ctrl-label">👁️ มุมมอง</div>
             <div class="check-row">${modeChecks}</div>
           </div>
+          ${this.diets(p).length > 1 ? `<div class="ctrl-group">
+            <div class="ctrl-label">🍚 ชนิดอาหาร</div>
+            <div class="check-row">${dietChecks}</div>
+          </div>` : ''}
           <div class="ctrl-group">
-            <div class="ctrl-label">🎨 กลุ่ม</div>
+            <div class="ctrl-label">💊 สารทดสอบ</div>
             <div class="check-row">${groupChecks}</div>
           </div>
           <div class="ctrl-group">
@@ -3318,6 +3760,7 @@ const App = {
       const role = inp.dataset.role, val = inp.value, s = this.reportState;
       if (role === 'mode') s.mode = val;                                   // single-select
       else if (role === 'group') s.groupIds = inp.checked ? [...new Set([...s.groupIds, val])] : s.groupIds.filter(x => x !== val);
+      else if (role === 'diet') s.dietIds = inp.checked ? [...new Set([...s.dietIds, val])] : s.dietIds.filter(x => x !== val);
       else if (role === 'metric') s.metrics = inp.checked ? [...new Set([...s.metrics, val])] : s.metrics.filter(x => x !== val);
       this.syncReportChecks();
       this.drawReport(p);
@@ -3391,6 +3834,13 @@ const App = {
   // simulated as a gentle series from current remaining values.
   // No time-range picker — the x-axis is every recorded weigh-day (data is already
   // averaged to one value per day at each weighing).
+  // a cage is in scope only when BOTH layers are selected (2-factor design)
+  reportCages(p, groupId = null) {
+    const st = this.reportState;
+    const dietOk = c => !st.dietIds || st.dietIds.includes((this.cageDiet(p, c) || {}).id);
+    return p.cages.filter(c => dietOk(c) && (groupId ? c.groupId === groupId : st.groupIds.includes(c.groupId)));
+  },
+
   drawReport(p) {
     const st = this.reportState;
     const metricLabel = { weight: 'น้ำหนัก', water: 'น้ำ', food: 'อาหาร' };
@@ -3399,7 +3849,7 @@ const App = {
     const dashOf = m => st.metricDash[m] || '';
 
     const groups = p.groups.filter(g => st.groupIds.includes(g.id));
-    const cages = p.cages.filter(c => st.groupIds.includes(c.groupId));
+    const cages = this.reportCages(p);
 
     // x-axis length = longest weight history among the selected mice
     const range = Math.max(1, ...cages.flatMap(c => c.mice).map(m => m.weights.length)) - 1;
@@ -3421,7 +3871,7 @@ const App = {
         // per-mouse lines (every mouse in every selected group): group colour, tone spread within the group
         groups.forEach(g => {
           const base = colorOf(g.id);
-          const show = p.cages.filter(c => c.groupId === g.id).flatMap(c => c.mice);
+          const show = this.reportCages(p, g.id).flatMap(c => c.mice);
           show.forEach((m, j) => {
             const tone = show.length > 1 ? (j / (show.length - 1)) * 0.55 : 0;
             series.push({ label: m.code + suffix(metric), color: this.lighten(base, tone), dash,
@@ -3430,7 +3880,7 @@ const App = {
         });
       } else if (metric === 'weight') {
         groups.forEach(g => {
-          const gm = p.cages.filter(c => c.groupId === g.id).flatMap(c => c.mice).filter(m => Data.inStats(m));
+          const gm = this.reportCages(p, g.id).flatMap(c => c.mice).filter(m => Data.inStats(m));
           const pts = [];
           for (let d = 0; d <= range; d++) {
             const vals = gm.map(m => this.tail(m.weights.map(w => w.weight), range + 1)[d]).filter(v => v != null);
@@ -3445,7 +3895,7 @@ const App = {
         const val = c => metric === 'water' ? c.water.consumed : c.food.consumed;
         groups.forEach(g => {
           const base = colorOf(g.id);
-          const gc = p.cages.filter(c => c.groupId === g.id);
+          const gc = this.reportCages(p, g.id);
           gc.forEach((c, j) => {
             const tone = gc.length > 1 ? (j / (gc.length - 1)) * 0.55 : 0;
             series.push({ label: c.code + suffix(metric), color: this.lighten(base, tone), dash, points: simSeries(val(c)) });
@@ -3454,7 +3904,7 @@ const App = {
       } else {
         // group average of daily consumption per group
         groups.forEach(g => {
-          const gc = p.cages.filter(c => c.groupId === g.id);
+          const gc = this.reportCages(p, g.id);
           if (!gc.length) return;
           const base = gc.reduce((a, c) => a + (metric === 'water' ? c.water.consumed : c.food.consumed), 0) / gc.length;
           series.push({ label: g.name + suffix(metric), color: colorOf(g.id), dash, points: simSeries(base) });
@@ -3499,11 +3949,16 @@ const App = {
 
   exportCSV(p) {
     const st = this.reportState;
-    const rows = [['Mouse', 'Group', 'Date', 'Weight(g)']];
-    const cages = p.cages.filter(c => st.groupIds.includes(c.groupId));
+    // both grouping layers are exported so the sheet can be pivoted either way
+    const rows = [['Mouse', 'Cage', 'Diet', 'Group', 'NoInGroup', 'Tag', 'Date', 'Weight(g)']];
+    const cages = this.reportCages(p);
     cages.forEach(c => {
       const g = Data.getGroup(p, c.groupId);
-      c.mice.forEach(m => m.weights.forEach(w => rows.push([m.code, g.name, w.date, w.weight])));
+      const d = this.cageDiet(p, c);
+      c.mice.forEach(m => m.weights.forEach(w => rows.push([
+        m.code, c.code, d ? d.name : '', g ? g.name : '', m.groupNo ?? '',
+        this.mouseTag(p, c, m), w.date, w.weight,
+      ])));
     });
     const csv = rows.map(r => r.map(x => `"${x}"`).join(',')).join('\n');
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
@@ -3682,11 +4137,18 @@ const App = {
         const u = DB.users.find(x => x.id === b.dataset.del);
         if (u.id === this.user.id) { this.toast('ลบบัญชีตัวเองไม่ได้'); return; }
         if (this.isLastAdmin(u)) { this.toast('ต้องมี admin อย่างน้อย 1 คน'); return; }
-        if (!confirm(`ลบผู้ใช้ ${u.name}? (จะถูกเอาออกจากทุกโครงการด้วย)`)) return;
-        DB.users = DB.users.filter(x => x.id !== u.id);
-        DB.projects.forEach(p => { if (p.members) p.members = p.members.filter(m => m.userId !== u.id); });
-        this.log('ลบผู้ใช้', `${u.name} (${u.email})`, '');
-        this.renderUsers();
+        const inProjects = DB.projects.filter(p => (p.members || []).some(m => m.userId === u.id)).length;
+        this.confirmDialog({
+          title: `ลบผู้ใช้ ${u.name}?`,
+          body: `${u.email} · ตำแหน่ง ${this.positionLabel(u)}${inProjects ? `<br>จะถูกถอดออกจาก <b>${inProjects} โครงการ</b> ที่ได้รับแต่งตั้งไว้` : ''}`,
+          okLabel: '🗑️ ลบผู้ใช้',
+          onOk: () => {
+            DB.users = DB.users.filter(x => x.id !== u.id);
+            DB.projects.forEach(p => { if (p.members) p.members = p.members.filter(m => m.userId !== u.id); });
+            this.log('ลบผู้ใช้', `${u.name} (${u.email})`, '');
+            this.renderUsers();
+          },
+        });
       };
     });
   },
@@ -3933,6 +4395,46 @@ const App = {
       if (e.target === overlay && !this.wizard) this.closeModal();
     });
     document.body.appendChild(overlay);
+  },
+  // In-app replacement for window.confirm() so destructive prompts match the app's
+  // modal styling. `onOk` runs only when confirmed. Never use native confirm().
+  // Pass `requireText` to demand the user TYPE that exact phrase first — used when
+  // an already-made decision is being changed (see CONFIRM_PHRASE).
+  confirmDialog({ title, body, okLabel = 'ยืนยัน', danger = true, requireText = null, onOk }) {
+    this.openModal(`
+      <div class="modal-head"><div><h3>${title}</h3></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <p class="confirm-body">${body}</p>
+        ${requireText ? `<div class="confirm-type">
+            <label>พิมพ์ <code>${requireText}</code> เพื่อยืนยันการแก้ไข</label>
+            <input id="cfText" autocomplete="off" placeholder="${requireText}">
+          </div>` : ''}
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="cfCancel">ยกเลิก</button>
+        <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}" id="cfOk" ${requireText ? 'disabled' : ''}>${okLabel}</button>
+      </div>`, { compact: true });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('cfCancel').onclick = () => this.closeModal();
+    const ok = this.el('cfOk');
+    ok.onclick = () => { if (ok.disabled) return; this.closeModal(); onOk(); };
+    if (requireText) {
+      const inp = this.el('cfText');
+      const check = () => { ok.disabled = inp.value.trim().toLowerCase() !== requireText.toLowerCase(); };
+      inp.addEventListener('input', check);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !ok.disabled) { e.preventDefault(); ok.click(); } });
+      inp.focus();
+    }
+  },
+
+  // replace the current modal's contents in place (used by re-rendering dialogs
+  // like the populate-cage editor) — keeps the same overlay, no flicker
+  setModal(html) {
+    const o = this.el('overlay');
+    const m = o && o.querySelector('.modal');
+    if (m) m.innerHTML = html; else this.openModal(html, { compact: true });
   },
   closeModal() {
     const o = this.el('overlay');
