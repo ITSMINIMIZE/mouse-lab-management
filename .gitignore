@@ -3,6 +3,8 @@
 
 # Local Claude Code settings
 .claude/
+# developer notes — kept local, not for the public repo
+CLAUDE.md
 
 # deliverables — pitch decks, TOR, presentations. Kept local, not for the public repo
 เอกสารส่งมอบ/
