@@ -36,45 +36,50 @@
 // scope: 'all'    = sees every project without being appointed to it
 //        'member' = only projects they are appointed to
 const POSITIONS = {
-  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewSupply', 'viewFinance'] },
-  AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
-  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewSupply'] },
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewSupply', 'viewFinance'] },
+  AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
+  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'viewCage', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewSupply'] },
   // AEC = สำนักเลขานุการคณะกรรมการจริยธรรมการใช้สัตว์ทดลอง — like IACUC (read-only
   // across projects) but can approve/reject a PI's project REQUEST at stage 1.
-  AEC:      { key: 'AEC',      label: 'สำนักเลขาฯ คกก.จริยธรรมการใช้สัตว์ทดลอง', scope: 'all', caps: ['view', 'enterProject', 'createProject', 'reviewAEC'] },
+  // AEC reviews the paperwork only: it reads a project's DETAILS (the info popup)
+  // but never steps inside — no enterProject, so the dashboard is closed to it.
+  AEC:      { key: 'AEC',      label: 'สำนักเลขาฯ คกก.จริยธรรมการใช้สัตว์ทดลอง', scope: 'all', caps: ['view', 'createProject', 'reviewAEC'] },
+  // IACUC/AUDIT walk the dashboard to see the layout, but no `viewCage`: the cage
+  // cards are not clickable for them, so no per-animal record opens.
   IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
-  QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
+  QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
   AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
-  // EX = QA + GM
-  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'enterProject', 'createProject', 'viewSupply', 'viewFinance'] },
+  // EX reads details like AEC (no enterProject) but keeps งานคลัง / การเงิน
+  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewSupply', 'viewFinance'] },
   // OCH inspects on site like a site-safety officer: sees the project cards but
   // deliberately has NO enterProject — clicking a card opens a safety report form.
   OCH:      { key: 'OCH',      label: 'เจ้าหน้าที่ชีวอนามัย',           scope: 'all',    caps: ['view', 'createProject', 'ochReport'] },
   // GM works the stockroom/finance side only — no `view` at all, so hasAccess()
   // keeps them out of every project and the โครงการ tab stays hidden.
   GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewSupply', 'viewFinance'] },
-  EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'enterProject', 'createProject'] },
+  EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
 };
 const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'SCI', 'ACT', 'AEC', 'IACUC', 'QA', 'AUDIT', 'EX', 'OCH', 'GM', 'EXTERNAL'];
 
 // Project-level roles. PI/COPI/AHS are the research team; SCI/VET/ACT mirror the
 // system position of the same name but are confined to the one project.
 const ROLES = {
-  PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'enterProject', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
-  COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'enterProject', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
-  AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'enterProject', 'flag', 'reportDeath', 'dosing', 'viewReports'] },
-  SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view', 'enterProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view', 'enterProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view', 'enterProject', 'flag', 'reportDeath', 'cageCare'] },
+  PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
+  COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
+  AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'enterProject', 'viewCage', 'flag', 'reportDeath', 'dosing', 'viewReports'] },
+  SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'reportDeath', 'cageCare'] },
 };
 const ROLE_ORDER = ['PI', 'COPI', 'AHS', 'SCI', 'VET', 'ACT'];
 
 // capability catalogue (drives gating + the two permission matrices)
 const CAPABILITIES = [
   { key: 'view',          label: 'เห็นโครงการในรายการ' },
-  { key: 'enterProject',  label: 'เข้าไปดูกรง / หนู / ประวัติ' },
+  { key: 'enterProject',  label: 'เข้าหน้าโครงการ (ผังกรง)' },
+  { key: 'viewCage',      label: 'กดดูการ์ดรายกรง / ประวัติหนูรายตัว' },
   { key: 'createProject', label: 'ยื่นขอสร้างโครงการ' },
   { key: 'editProject',   label: 'จัดการกรง / แก้ไขผังโครงการ' },
   { key: 'manageMembers', label: 'แต่งตั้ง / ถอดถอนสมาชิกโครงการ' },
@@ -101,11 +106,13 @@ const CAPABILITIES = [
 // holds the role in EVERY approved project (see App.myProjectRoles override) so a
 // client can switch and compare views without hunting for a project they belong to.
 // In a real deployment nobody has `projectRole` — project.members drives it.
-function makeUser(id, firstName, lastName, email, password, position, projectRole) {
+function makeUser(id, firstName, lastName, email, password, position, projectRole, phone) {
   return {
     id, firstName, lastName, email, password,
     position: Array.isArray(position) ? position[0] : position,
     projectRole: projectRole || null,
+    // เบอร์ติดต่อ — ใช้เติมอัตโนมัติตอนผู้ตรวจตีกลับคำขอ (AEC/AV)
+    phone: phone || '053-935-000',
     name: `${firstName} ${lastName}`.trim(),
   };
 }
@@ -190,7 +197,7 @@ function makeMouse(code, sex, baseline, trend, groupNo = null, cageNo = null) {
     id: 'M' + _mouseSeq,
     code,
     sex,                       // 'M' | 'F' — bound to the animal (follows it across cages)
-    groupNo,                   // ลำดับในกลุ่มสารทดสอบ — null until the PI assigns the cage a group (part of the TAG, not the code)
+    groupNo,                   // ลำดับในกลุ่มทดสอบ — null until the PI assigns the cage a group (part of the TAG, not the code)
     cageNo,                    // ลำดับในกรง 1…5 (part of the permanent code)
     weights: buildWeightSeries(baseline, trend),
     remark: '',
@@ -216,7 +223,7 @@ function makeMouse(code, sex, baseline, trend, groupNo = null, cageNo = null) {
 // A cage carries the experiment grouping in TWO independent layers, both assigned
 // by the PI *after* the mice are already in the cage, and never at the same time:
 //   dietId  — ชนิดอาหาร (layer 1). null ⇒ อาหารทั่วไป (the project's default diet)
-//   groupId — สารทดสอบ (layer 2). null ⇒ ยังไม่ถูกจัดเข้ากลุ่มการทดลอง
+//   groupId — กลุ่มทดสอบ (layer 2). null ⇒ ยังไม่ถูกจัดเข้ากลุ่มการทดลอง
 function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
   return {
     id,
@@ -224,6 +231,7 @@ function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
     groupId,
     dietId: opts.dietId ?? null,
     shelf,
+    rackNo: opts.rackNo ?? null,   // แร็คที่ชั้นนี้อยู่ (โครงการหนึ่งมีได้หลายแร็ค)
     position,
     mice,
     water: {
@@ -254,7 +262,7 @@ const dietsP1 = [
   { id: 'D2', name: 'ไขมันสูง',     isDefault: false, color: '#d97706', capacity: 24 },
 ];
 
-// LAYER 2 — สารทดสอบ. `capacity` = จำนวนหนูสูงสุดต่อกลุ่มที่สัตวแพทย์อนุมัติ.
+// LAYER 2 — กลุ่มทดสอบ. `capacity` = จำนวนหนูสูงสุดต่อกลุ่มที่สัตวแพทย์อนุมัติ.
 // แต่ละกลุ่มมี 6 กรง × 2 ตัว = 12 ตัว — ตั้ง 14 ไว้ให้เหลือโควตา
 const groupsP1 = [
   { id: 'G1', name: 'Control',      isControl: true,  color: '#64748b', capacity: 14 },
@@ -464,10 +472,12 @@ const DB = {
       startDate: '2026-05-12',
       status: 'active',
       // ตำแหน่งที่สัตวแพทย์จัดสรร — เป็น "สถานะปัจจุบัน" ของหนูในโครงการนี้
-      facility: { roomNo: 'AR02', rackNo: 'R3', quarantineDate: '2026-05-05', moveInDate: '2026-05-12' },
+      facility: { roomNo: 'AR02', rackNo: 'R3 · R4', racks: ['R3', 'R4'], quarantineDate: '2026-05-05', moveInDate: '2026-05-12' },
       shelves: 4,
       cagesPerShelf: 6,
       shelfNames: { 1: 'A', 2: 'B', 3: 'C', 4: 'D' },
+      // โครงการนี้กินพื้นที่ 2 แร็ค — ชั้น A/B อยู่แร็ค R3, ชั้น C/D อยู่แร็ค R4
+      shelfRacks: { 1: 'R3', 2: 'R3', 3: 'R4', 4: 'R4' },
       diets: dietsP1,
       groups: groupsP1,
       cages: cagesP1,
@@ -486,10 +496,11 @@ const DB = {
       description: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
       startDate: '2026-01-08',
       status: 'closed',
-      facility: { roomNo: 'AR01', rackNo: 'R1', quarantineDate: '2026-01-02', moveInDate: '2026-01-08' },
+      facility: { roomNo: 'AR01', rackNo: 'R1', racks: ['R1'], quarantineDate: '2026-01-02', moveInDate: '2026-01-08' },
       shelves: 2,
       cagesPerShelf: 3,
       shelfNames: { 1: 'A', 2: 'B' },
+      shelfRacks: { 1: 'R1', 2: 'R1' },
       diets: dietsDone,
       groups: groupsDone,
       cages: cagesDone,
@@ -546,7 +557,7 @@ const DB = {
 //
 // Mice arrive AFTER the project is live: Sci weighs each mouse and places it into a
 // cage (first weighing). At that moment a cage has no treatment group and falls back
-// to the default diet; the PI assigns ชนิดอาหาร and สารทดสอบ later, as two separate
+// to the default diet; the PI assigns ชนิดอาหาร and กลุ่มทดสอบ later, as two separate
 // actions, from the จัดการกรง page.
 (function seedApproval() {
   DB.projects.forEach(p => { if (!p.approval) p.approval = 'approved'; });
@@ -558,11 +569,29 @@ const DB = {
       status: 'active', createdBy: creatorId, approval,
       requestDate: req.requestDate || todayISO(),
       request: {
-        totalMice: req.totalMice,
+        // ---- protocol header (ใบอนุญาต / โปรโตคอล) ----
+        lotNo: req.lotNo || '',                // เลขล็อตของโครงการ (ต่อท้ายชื่อโครงการ)
+        protocolNo: req.protocolNo || '',
+        pi: req.pi || '',
+        approvedDate: req.approvedDate || '',  // ช่วงที่ใบอนุญาตครอบคลุม
+        untilDate: req.untilDate || '',
+        species: req.species || '',
+        strain: req.strain || '',
+        sexes: req.sexes || ['M'],             // ['M'] | ['F'] | ['M','F']
+        ageMin: req.ageMin ?? '',            // อายุเป็นช่วง เช่น 6–8 สัปดาห์
+        ageMax: req.ageMax ?? '',
+        weightMin: req.weightMin || '',        // ช่วงน้ำหนักเฉลี่ย (กรัม)
+        weightMax: req.weightMax || '',
+        maleCount: req.maleCount || 0,         // จำนวนสัตว์แยกตามเพศ …
+        femaleCount: req.femaleCount || 0,
+        totalMice: req.totalMice,              // … และผลรวมของทั้งสอง (derived)
         // การทดลองมี 2 ชั้น — PI เสนอรายการมาในคำขอ แล้ว AV ยืนยันตอนสร้าง
         diets: req.diets || [],                // ชั้น 1: ชนิดอาหาร [{name,isDefault,plannedMice}]
-        groups: req.groups,                    // ชั้น 2: สารทดสอบ [{name,isControl,plannedMice}]
-        objective: req.objective || '',
+        groups: req.groups,                    // ชั้น 2: กลุ่มทดสอบ [{name,isControl,plannedMice}]
+        objective: req.objective || '',        // = Protocol description
+        protocolEndpoint: req.protocolEndpoint || '',
+        humaneEndpoint: req.humaneEndpoint || '',
+        plan: req.plan || [],                  // แผนการใช้สัตว์ทดลอง [{date:'YYYY-MM-DD', detail}] — sorted by date
         diagram: req.diagram || null,          // experiment diagram (image)
         aup: req.aup || null,                  // Animal Use Protocol (pdf)
         approvalDoc: req.approvalDoc || null,  // ethics approval (pdf)
@@ -576,6 +605,16 @@ const DB = {
   }
 
   const demoReq = {
+    lotNo: '1',
+    protocolNo: 'MU-AEC-2569-014',
+    pi: 'PI — นักวิจัย',
+    // อนุมัติ 2 วันก่อน · สิ้นสุด 1 ปีถัดมา (ครบปีพอดีแบบนับรวมวันแรก)
+    approvedDate: isoDaysAgo(2), untilDate: isoDaysAgo(-362),
+    species: 'Mus musculus (หนูเมาส์)', strain: 'C57BL/6',
+    sexes: ['M', 'F'], ageMin: 6, ageMax: 8, weightMin: 20, weightMax: 25,
+    maleCount: 12, femaleCount: 12,
+    protocolEndpoint: 'สิ้นสุดเมื่อครบ 12 สัปดาห์ของการให้สารทดสอบ หรือเมื่อเก็บตัวอย่างครบตามแผน',
+    humaneEndpoint: 'น้ำหนักลดเกิน 20% ของน้ำหนักเริ่มต้น · ไม่กินอาหาร/น้ำเกิน 24 ชม. · ขนหยองซึม ไม่ตอบสนองต่อสิ่งเร้า · หายใจลำบาก · มีแผลติดเชื้อลุกลาม — ให้ทำการุณยฆาตทันที',
     totalMice: 24, objective: 'ประเมินความปลอดภัยต่อระบบหัวใจของสารทดสอบในหนูทดลอง',
     diets: [
       { name: 'อาหารทั่วไป', isDefault: true, plannedMice: 12 },
@@ -585,6 +624,13 @@ const DB = {
       { name: 'Control', isControl: true, plannedMice: 8 },
       { name: 'Low dose', isControl: false, plannedMice: 8 },
       { name: 'High dose', isControl: false, plannedMice: 8 },
+    ],
+    plan: [
+      { date: isoDaysAgo(-7),  detail: 'รับสัตว์ทดลองเข้าห้องเลี้ยง · ปรับสภาพ (acclimatization) 7 วัน' },
+      { date: isoDaysAgo(-14), detail: 'ชั่งน้ำหนักครั้งแรก แบ่งกลุ่ม และเริ่มให้อาหารตามชนิดที่กำหนด' },
+      { date: isoDaysAgo(-21), detail: 'เริ่มให้สารทดสอบตามขนาดที่กำหนด · ติดตามอาการรายวัน' },
+      { date: isoDaysAgo(-49), detail: 'เก็บตัวอย่างเลือดกลางการทดลอง และประเมินค่าทางชีวเคมี' },
+      { date: isoDaysAgo(-77), detail: 'สิ้นสุดการทดลอง · การุณยฆาตตามหลักมนุษยธรรม และผ่าซากเก็บอวัยวะ' },
     ],
     diagram: { name: 'experimental-design.png', url: null },
     aup: { name: 'AUP_Cardio_2026.pdf', url: null },

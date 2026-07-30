@@ -4,13 +4,9 @@
 # Local Claude Code settings
 .claude/
 
-# presentation deliverables
+# deliverables — pitch decks, TOR, presentations. Kept local, not for the public repo
+เอกสารส่งมอบ/
 *.pptx
-
-# contract / pitch deliverables — kept local, not for the public repo
-iLAMP_TOR.docx
-iLAMP_TOR.pdf
-MouseLab_Prototype_Pitch.pdf
 
 # institutional source forms (CMU originals) — reference only, kept local
 แบบฟอร์ม/
