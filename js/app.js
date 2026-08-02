@@ -2036,7 +2036,6 @@ const App = {
           </div>
 
           <div class="create-actions">
-            <button class="btn" id="bpPrint">🏷️ ปริ้นใบติดหน้ากรง</button>
             <span class="spacer" style="flex:1"></span>
             <button class="btn btn-danger" id="bpReject">✗ ตีกลับ</button>
             <button class="btn" data-nav="projects">ยกเลิก</button>
@@ -2071,7 +2070,6 @@ const App = {
     };
     this.el('bpAddStaff').onclick = () => { this.captureBuildStaff(); d.appointments.push({ role: 'VET', userId: '' }); this.renderBuildStaff(); };
     this.el('bpViewReq').onclick = () => this.openProjectInfo(p);
-    this.el('bpPrint').onclick = () => this.printCageLabels(p, d);
     this.el('bpReject').onclick = () => this.promptReject(p, 'av');
     this.el('bpCreate').onclick = () => this.submitBuildProject(p);
   },
@@ -2460,33 +2458,223 @@ const App = {
     this.go('projects');
   },
 
-  // print a simple cage-label sheet (one card per empty cage AV created)
-  printCageLabels(p, d) {
-    this.captureShelves();
-    const room = this.el('bpRoom') ? this.el('bpRoom').value : (p.facility?.roomNo || '');
-    const rack = [...new Set((d.shelves || []).map(sh => (sh.rack || '').trim()).filter(Boolean))].join(' · ')
-      || (p.facility?.rackNo || '');
-    const rows = [];
-    d.shelves.forEach(sh => {
-      sh.cages.forEach(cg => {
-        const code = (cg.code || '').trim(); if (!code) return;
-        rows.push(`<div class="cage-label">
-          <div class="cl-code">${code}</div>
-          <div class="cl-proj">${p.name}</div>
-          <div class="cl-meta">ชั้น ${sh.no || '—'}</div>
-          <div class="cl-room">ห้อง: ${room || '—'}${rack ? ' · แร็ค: ' + rack : ''}</div>
-        </div>`);
-      });
-    });
-    if (!rows.length) { this.toast('ยังไม่มีกรงให้พิมพ์ — สร้างกรงก่อน'); return; }
-    const css = `.labels{display:grid;grid-template-columns:repeat(2,1fr);gap:8mm;padding:6mm}
-      .cage-label{border:1.5px solid #111;border-radius:6px;padding:6mm;page-break-inside:avoid}
-      .cl-code{font-size:22pt;font-weight:700;letter-spacing:1px}
-      .cl-proj{font-size:11pt;margin:2mm 0}
-      .cl-meta{font-size:11pt;margin-top:1mm}.cl-room{font-size:10pt;color:#444;margin-top:2mm}
-      @media print{@page{size:A4;margin:8mm}}`;
-    this.printDocument(`CageLabels_${p.name}`, `<style>${css}</style><div class="labels">${rows.join('')}</div>`);
+  // ---------------------------------------------------------
+  // ใบติดหน้ากรง (CAGE CARD)
+  // ---------------------------------------------------------
+  // Replicates the printed card slotted into the cage-front holder. The field
+  // LABELS are English verbatim exactly as on the paper card (Protocol No. · PI. ·
+  // Animal Sp. · Strain · Sex. · Animal in Protocol · Animal in Cage · CAGE No. ·
+  // GROUP · Start · End · Protocol) — same rule as every other official form here.
+  // Values sit on a rule that runs to the next label, so anything the system does
+  // not know prints as an EMPTY RULE to be filled in by hand, like the original.
+  //
+  // Works from two places, hence the tolerant `cage` shape:
+  //   • AV build screen — draft cages, no animals yet → the protocol half is filled,
+  //     the animal half is left blank for the day the mice arrive.
+  //   • a live cage — every slot filled from the animals actually in it.
+  CAGE_CARD_CSS: `
+    /* 90 × 55 mm = ขนาดนามบัตรมาตรฐาน (ไทย/ยุโรป) — เข้าซองใส่หน้ากรงและ
+       เครื่องตัดนามบัตรทั่วไปได้เลย.
+       2 × 5 = 10 ใบ/หน้า A4: 2×90 = 180mm กว้าง, 5×55 = 275mm สูง ยังเหลือขอบ
+       ให้เครื่องพิมพ์ (พิมพ์ชิดขอบกระดาษไม่ได้) และไม่ล้นไปหน้า 2. */
+    .cards { display: grid; grid-template-columns: repeat(2, 90mm); justify-content: center; }
+    .cc {
+      width: 90mm; height: 55mm; padding: 3.2mm 3.6mm; border: 0.35mm solid #111;
+      page-break-inside: avoid; overflow: hidden; position: relative;
+      display: flex; flex-direction: column; font-size: 7pt; line-height: 1.1;
+      /* rows keep their natural height and share the leftover space, so a card
+         with short values breathes and one whose values wrap tightens up by
+         itself instead of pushing the last line off the bottom */
+      justify-content: space-between; gap: 1.1mm;
+    }
+    /* one line of the form: labels keep their natural width, values stretch */
+    .cc-r { display: flex; align-items: flex-end; gap: 1.2mm; }
+    .cc-l { flex: none; white-space: nowrap; font-size: 7pt; }
+    /* values WRAP rather than clip — a cage card that hides half the protocol
+       number is worse than one with a value on two lines. The tail below is
+       flexible, so the extra line eats its slack instead of the card's. */
+    .cc-v {
+      flex: 1 1 auto; min-width: 0; border-bottom: 0.2mm solid #111;
+      padding: 0 0.8mm 0.3mm; font-weight: 700;
+      overflow-wrap: break-word; line-height: 1.1;   /* break long words only, never "Ma/le" */
+    }
+    .cc-v.sm { font-size: 6.5pt; }
+    /* short fixed vocabularies (Male/Female) must never be squeezed by a long
+       species or strain sharing the row */
+    .cc-v.fix { flex: 0 0 auto; min-width: 14mm; }
+    /* CAGE No. row — the number is the one thing readable from across the room */
+    .cc-cage { display: flex; align-items: center; gap: 1.6mm; }
+    .cc-cage .cc-l { align-self: center; }
+    .cc-no { font-size: 22pt; font-weight: 700; line-height: 1; letter-spacing: 0.4pt; }
+    .cc-grp { flex: 1 1 auto; min-width: 0; display: flex; align-items: flex-end; gap: 1.2mm; }
+    /* free-text tail: protocol line + study title, filling the rest of the card */
+    .cc-tail { display: flex; gap: 1.2mm; flex: 0 1 auto; min-height: 0; }
+    .cc-tail .cc-l { align-self: flex-start; padding-top: 0.7mm; }
+    .cc-txt { flex: 1 1 auto; min-width: 0; border-top: 0.2mm solid #111; padding-top: 0.8mm; }
+    .cc-txt b { font-size: 7pt; }
+    /* a very long study title is clamped to two lines so the diet line below it
+       always survives — what goes in the hopper matters more than the full title */
+    .cc-title {
+      font-size: 7.5pt; font-weight: 700; margin-top: 0.8mm; line-height: 1.15;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .cc-diet { font-size: 6.5pt; margin-top: 0.8mm; }
+    @media print { @page { size: A4; margin: 8mm 5mm; } }
+  `,
+  // one card. `cage` may be a real cage or a build draft `{ code }`.
+  buildCageCard(p, cage) {
+    const esc = v => String(v ?? '').replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+    const r = p.request || {};
+    const mice = cage.mice || [];
+    const live = mice.filter(m => m.alive);
+
+    // Sex belongs to the CAGE, not the protocol: Sci picks it at intake and the
+    // whole cage is one sex. The licence may cover both — this card states what
+    // is actually in front of you. (Joined, not truncated, if data ever disagrees.)
+    const sexes = [...new Set(live.map(m => m.sex))];
+    const sexText = sexes.map(s => (s === 'M' ? 'Male' : 'Female')).join(', ');
+
+    // Start = the day THESE animals went into THIS cage (their first weighing),
+    // so each card carries its own date rather than the project's.
+    // End = the last dated item on the plan (แผนการใช้สัตว์ทดลอง) — the day the
+    // protocol says this study finishes.
+    const firstDates = live.map(m => (m.weights && m.weights.length ? m.weights[0].date : null)).filter(Boolean);
+    const startDate = firstDates.length ? firstDates.sort()[0] : '';
+    const planDates = (r.plan || []).map(x => x.date).filter(Boolean).sort();
+    const endDate = planDates.length ? planDates[planDates.length - 1] : '';
+
+    // "Animal in Protocol" → Lot. 1 = 40   ·   "Animal in Cage" → 2 [ #3, #4 ]
+    const total = r.totalMice || '';
+    const inProtocol = total ? (r.lotNo ? `Lot. ${esc(r.lotNo)} = ${total}` : String(total)) : '';
+    const nos = live.map(m => `#${m.cageNo}`).join(', ');
+    const inCage = live.length ? `${live.length}${nos ? `  [ ${nos} ]` : ''}` : '';
+
+    const group = this.cageGroup(p, cage);
+    const diet = this.cageDiet(p, cage);
+    // อายุ–เพศ ที่รับสัตว์เข้าโครงการ = บรรทัด Protocol ของต้นฉบับ
+    const age = r.ageMin && r.ageMax ? (r.ageMin === r.ageMax ? `${r.ageMin}` : `${r.ageMin}–${r.ageMax}`)
+      : (r.ageMin || r.ageMax || '');
+    const intake = age ? `รับสัตว์ทดลอง = ${age} weeks${sexText ? ' – ' + sexText : ''}` : '';
+
+    const row = (...cells) => `<div class="cc-r">${cells.join('')}</div>`;
+    const L = t => `<span class="cc-l">${t}</span>`;
+    const V = (v, cls = '') => `<span class="cc-v ${cls}">${esc(v) || '&nbsp;'}</span>`;
+
+    return `<div class="cc">
+      ${row(L('Protocol No.'), V(r.protocolNo), L('PI.'), V(r.pi, 'sm'))}
+      ${row(L('Animal Sp.'), V(r.species, 'sm'), L('Strain'), V(r.strain, 'sm'), L('Sex.'), V(sexText, 'sm fix'))}
+      ${row(L('Animal in Protocol'), V(inProtocol, 'sm'), L('Animal in Cage'), V(inCage, 'sm'))}
+      <div class="cc-cage">
+        ${L('CAGE No.')}<span class="cc-no">${esc(cage.code)}</span>
+        <span class="cc-grp">${L('GROUP')}${V(group ? group.name : '')}</span>
+      </div>
+      ${row(L('Start'), V(startDate ? this.thaiDate(startDate) : '', 'sm'),
+            L('End'), V(endDate ? this.thaiDate(endDate) : '', 'sm'))}
+      <div class="cc-tail">
+        ${L('Protocol')}
+        <span class="cc-txt">
+          <b>${esc(intake) || '&nbsp;'}</b>
+          <div class="cc-title">${esc(p.name)}${r.lotNo ? ` (Lot ${esc(r.lotNo)})` : ''}</div>
+          ${/* ไม่มีในต้นฉบับ — เพิ่มเพราะระบบนี้แยกชนิดอาหารเป็นอีกชั้นหนึ่ง
+                และคนเติมอาหารต้องอ่านจากหน้ากรงว่าต้องใส่สูตรไหน */''}
+          ${diet ? `<div class="cc-diet">🍚 อาหาร: <b>${esc(diet.name)}</b></div>` : ''}
+        </span>
+      </div>
+    </div>`;
   },
+  // print a sheet of cards — 2 × 4 per A4, cut on the borders
+  printCageCards(p, cages, tag = '') {
+    if (!cages.length) { this.toast('ยังไม่มีกรงให้พิมพ์ — สร้างกรงก่อน'); return; }
+    const cards = cages.map(c => this.buildCageCard(p, c)).join('');
+    this.printDocument(`CageCards_${p.name}${tag}`,
+      `<style>${this.CAGE_CARD_CSS}</style><div class="cards">${cards}</div>`);
+    this.log('พิมพ์ใบติดหน้ากรง', `${cages.length} ใบ`, p.name);
+  },
+  // Reprint cards for a project that is already running — all of them, or just the
+  // cages that changed (a cage regrouped, animals moved, a card torn or faded).
+  // Selection is per cage and grouped the way the rack physically is, so you tick
+  // what you are standing in front of.
+  openCageCards(p) {
+    if (!this.can('cageCard', p)) { this.toast('ใบติดหน้ากรงเป็นงานของทีมวิจัย (PI / CoPI / AHS)'); return; }
+    const sel = new Set(p.cages.map(c => c.id));      // ค่าเริ่มต้น = ทั้งหมด
+    const byShelf = {};
+    p.cages.forEach(c => { (byShelf[c.shelf] = byShelf[c.shelf] || []).push(c); });
+
+    const draw = () => {
+      const shelves = Object.keys(byShelf).sort((a, b) => a - b).map(sh => {
+        const list = byShelf[sh];
+        const rack = (p.shelfRacks || {})[sh];
+        const all = list.every(c => sel.has(c.id));
+        return `<div class="cs-shelf">
+          <div class="cs-head">
+            <b>ชั้น ${p.shelfNames?.[sh] || sh}</b>${rack ? `<span class="cs-rack">แร็ค ${rack}</span>` : ''}
+            <span class="spacer" style="flex:1"></span>
+            <button class="nt-link" data-shelf="${sh}">${all ? 'ไม่เอาชั้นนี้' : 'เลือกทั้งชั้น'}</button>
+          </div>
+          <div class="cs-grid">${list.map(c => {
+            const g = this.cageGroup(p, c);
+            const n = c.mice.filter(m => m.alive).length;
+            return `<button class="cs-cage ${sel.has(c.id) ? 'on' : ''}" data-cid="${c.id}">
+              <b>${c.code}</b>
+              <span>${g ? g.name : 'ยังไม่จัดกลุ่ม'}</span>
+              <span class="cs-n">${n ? n + ' ตัว' : 'ว่าง'}</span>
+            </button>`;
+          }).join('')}</div>
+        </div>`;
+      }).join('');
+
+      this.openModal(`
+        <div class="modal-head">
+          <div><h3>🏷️ ใบติดหน้ากรง</h3>
+            <div class="sub">${p.name} · เลือกกรงที่ต้องการพิมพ์ · 10 ใบ/หน้า A4 · ขนาดนามบัตร 90 × 55 มม.</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="cs-bar">
+            <button class="btn mini" id="csAll">เลือกทั้งหมด</button>
+            <button class="btn mini" id="csNone">ล้างที่เลือก</button>
+            <span class="spacer" style="flex:1"></span>
+            <span class="count-chip">เลือกแล้ว ${sel.size} / ${p.cages.length} กรง</span>
+          </div>
+          ${shelves}
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="csCancel">ปิด</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-primary" id="csPrint" ${sel.size ? '' : 'disabled'}>🖨️ พิมพ์ ${sel.size} ใบ</button>
+        </div>
+      `, { wide: true });
+
+      this.el('closeModal').onclick = () => this.closeModal();
+      this.el('csCancel').onclick = () => this.closeModal();
+      this.el('csAll').onclick = () => { p.cages.forEach(c => sel.add(c.id)); draw(); };
+      this.el('csNone').onclick = () => { sel.clear(); draw(); };
+      document.querySelectorAll('[data-shelf]').forEach(b => b.onclick = () => {
+        const list = byShelf[b.dataset.shelf];
+        const all = list.every(c => sel.has(c.id));
+        list.forEach(c => (all ? sel.delete(c.id) : sel.add(c.id)));
+        draw();
+      });
+      document.querySelectorAll('.cs-cage').forEach(b => b.onclick = () => {
+        const id = b.dataset.cid;
+        sel.has(id) ? sel.delete(id) : sel.add(id);
+        draw();
+      });
+      this.el('csPrint').onclick = () => {
+        const chosen = p.cages.filter(c => sel.has(c.id));
+        if (!chosen.length) return;
+        this.closeModal();
+        this.printCageCards(p, chosen, chosen.length === p.cages.length ? '' : `_${chosen.length}ใบ`);
+      };
+    };
+    draw();
+  },
+
+  // NOTE: the AV build screen used to print blank cards straight from the cage
+  // draft. Printing the card is the research team's job (`cageCard` = PI/CoPI/AHS),
+  // and AV does not hold it, so that button and its draft printer are gone. The
+  // team prints the same blank cards from the dashboard the moment AV hands the
+  // project over — before intake every slot is still empty anyway.
 
   // shared reject prompt for the AV build screen
   promptReject(p, stage) {
@@ -3020,6 +3208,7 @@ const App = {
            <span style="flex:1"></span>
            <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
            <button class="btn" id="deathReport">✝ รายงานการตาย</button>
+           ${this.can('cageCard', p) && p.cages.length ? `<button class="btn" id="cageCards">🏷️ ใบติดหน้ากรง</button>` : ''}
            ${this.can('viewReports', p) ? `<button class="btn" data-nav="reports">📈 กราฟ</button>` : ''}
            ${operational && this.can('cageCare', p) ? `<button class="btn" data-nav="cagecare" data-project-id="${p.id}">🧹 ดูแลกรง</button>` : ''}
            ${operational && this.can('dosing', p) ? `<button class="btn" data-nav="dosing" data-project-id="${p.id}">💉 ให้สารทดสอบ</button>` : ''}
@@ -3102,6 +3291,8 @@ const App = {
     if (!this.weighing && !this.editing && !this.intake) {
       this.el('sickReport').addEventListener('click', () => this.openSickReport(p));
       this.el('deathReport').addEventListener('click', () => this.openDeathReport(p));
+      const cc = this.el('cageCards');
+      if (cc) cc.addEventListener('click', () => this.openCageCards(p));
     }
     if (this.editing) {
       this.el('exitEditing').addEventListener('click', () => {
@@ -3387,12 +3578,17 @@ const App = {
         <p class="empty-note">แตะที่หนูเพื่อดูกราฟน้ำหนัก ประวัติ${canTreat ? ' และเพิ่มการรักษา' : ' และการรักษา'}</p>
       </div>
       <div class="modal-foot">
+        ${this.can('cageCard', p) ? `<button class="btn" id="printCard">🏷️ ใบติดหน้ากรง</button>` : ''}
+        <span class="spacer"></span>
         <button class="btn" id="closeModal2">ปิด</button>
       </div>
     `);
 
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('closeModal2').onclick = () => this.closeModal();
+    // reprint this cage's card once it actually holds animals and a group
+    const pc = this.el('printCard');
+    if (pc) pc.onclick = () => this.printCageCards(p, [cage], `_${cage.code}`);
     document.querySelectorAll('td[data-mouse]').forEach(td => {
       td.onclick = () => {
         const m = cage.mice.find(x => x.id === td.dataset.mouse);

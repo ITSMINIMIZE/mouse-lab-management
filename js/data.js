@@ -36,7 +36,7 @@
 // scope: 'all'    = sees every project without being appointed to it
 //        'member' = only projects they are appointed to
 const POSITIONS = {
-  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewSupply', 'viewFinance'] },
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewSupply', 'viewFinance', 'cageCard'] },
   AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
   VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
   SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
@@ -66,9 +66,9 @@ const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'SCI', 'ACT', 'AEC', 'IACUC', 'QA'
 // Project-level roles. PI/COPI/AHS are the research team; SCI/VET/ACT mirror the
 // system position of the same name but are confined to the one project.
 const ROLES = {
-  PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
-  COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports'] },
-  AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'enterProject', 'viewCage', 'flag', 'reportDeath', 'dosing', 'viewReports'] },
+  PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports', 'cageCard'] },
+  COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports', 'cageCard'] },
+  AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'enterProject', 'viewCage', 'flag', 'reportDeath', 'dosing', 'viewReports', 'cageCard'] },
   SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
   VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
   ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'reportDeath', 'cageCare'] },
@@ -92,6 +92,7 @@ const CAPABILITIES = [
   { key: 'handleCarcass', label: 'จัดการซาก — ทำลาย / ชันสูตร' },
   { key: 'stop',          label: 'สั่ง Stop (ไม่คิดเฉลี่ย)' },
   { key: 'viewReports',   label: 'ดูหน้ากราฟ / ผลวิเคราะห์' },
+  { key: 'cageCard',      label: 'พิมพ์ใบติดหน้ากรง' },
   { key: 'reviewAEC',     label: 'ตรวจ/อนุมัติคำขอสร้างโครงการ (จริยธรรม)' },
   { key: 'approve',       label: 'สร้างโครงการจริง / ตีกลับ (สัตวแพทย์)' },
   { key: 'manageUsers',   label: 'จัดการบัญชีผู้ใช้ระบบ' },
@@ -296,10 +297,13 @@ for (let si = 0; si < 4; si++) {
   let gno = 0;                                   // running number within this treatment group
   for (let pos = 1; pos <= 6; pos++) {
     const code = `${letter}-${String(pos).padStart(2, '0')}`;   // CAGE code (location)
+    // เพศเป็นข้อมูลของ "กรง" ไม่ใช่ของโครงการ — Sci เลือกเพศตอนรับหนูเข้ากรง
+    // และทั้งกรงต้องเพศเดียวกัน (ห้ามผสม) · สลับผู้/เมียทีละกรง
+    const cageSex = pos % 2 === 1 ? 'M' : 'F';
     const mice = [];
     for (let k = 1; k <= 2; k++) {
       gno++;
-      mice.push(makeMouse(mouseCode('P1', code, k), k === 1 ? 'M' : 'F',
+      mice.push(makeMouse(mouseCode('P1', code, k), cageSex,
         prof.baseline + rand(-1.2, 1.2),
         prof.trend + rand(-0.05, 0.05), gno, k));
     }
@@ -450,9 +454,10 @@ for (let si = 0; si < 2; si++) {
   for (let pos = 1; pos <= 3; pos++) {
     const code = `${letter}-${String(pos).padStart(2, '0')}`;
     const g1 = ++gno, g2 = ++gno;
+    const cageSex = pos % 2 === 1 ? 'M' : 'F';   // ทั้งกรงเพศเดียวกันเสมอ
     cagesDone.push(makeCage(nextCageId(), code, groupId, si + 1, pos, [
-      makeMouse(mouseCode('P3', code, 1), 'M', 26.5 + rand(-1, 1), si === 0 ? 0.28 : 0.16, g1, 1),
-      makeMouse(mouseCode('P3', code, 2), 'F', 25.5 + rand(-1, 1), si === 0 ? 0.26 : 0.15, g2, 2),
+      makeMouse(mouseCode('P3', code, 1), cageSex, 26.5 + rand(-1, 1), si === 0 ? 0.28 : 0.16, g1, 1),
+      makeMouse(mouseCode('P3', code, 2), cageSex, 25.5 + rand(-1, 1), si === 0 ? 0.26 : 0.15, g2, 2),
     ], { dietId: 'DD1', lastRecordDate: isoDaysAgo(96) }));
   }
 }
@@ -469,10 +474,33 @@ const DB = {
       createdBy: 'u_pi',
       name: 'NAFLD Diet Study',
       description: 'ศึกษาผลของอาหารไขมันสูงและยาต่อภาวะไขมันพอกตับในหนู C57BL/6',
-      startDate: '2026-05-12',
+      // เดโมสร้างน้ำหนักย้อนหลัง 14 วัน — วันเริ่มโครงการ/วันเข้ากรงจึงต้องเลื่อน
+      // ตามไปด้วย ไม่งั้น "Start" บนใบติดหน้ากรง (= วันชั่งครั้งแรก) จะขัดกับ
+      // วันที่โครงการประกาศไว้
+      startDate: isoDaysAgo(14),
       status: 'active',
+      // หัวโปรโตคอลของใบอนุญาต — โครงการที่ live แล้วก็ผ่านขั้นตอนคำขอมาก่อน
+      // จึงต้องมี request ติดตัวไว้เสมอ (ใบติดหน้ากรงดึงข้อมูลจากตรงนี้)
+      request: {
+        lotNo: '1', protocolNo: 'MU-AEC-2569-007', pi: 'ดร. นภา ศรีสุข',
+        approvedDate: '2026-05-01', untilDate: '2027-04-30',
+        species: 'Mus musculus', strain: 'C57BL/6',
+        sexes: ['M', 'F'], ageMin: 6, ageMax: 8, weightMin: 20, weightMax: 25,
+        maleCount: 24, femaleCount: 24, totalMice: 48,
+        objective: 'ศึกษาผลของอาหารไขมันสูงและยาต่อภาวะไขมันพอกตับในหนู C57BL/6',
+        // แผนการใช้สัตว์ทดลอง — รายการสุดท้ายคือ "End" บนใบติดหน้ากรง
+        plan: [
+          { date: isoDaysAgo(21), detail: 'รับสัตว์เข้าห้องกักกันโรค · ปรับสภาพ 7 วัน' },
+          { date: isoDaysAgo(14), detail: 'ชั่งน้ำหนักแรกเข้า นำหนูเข้ากรง และเริ่มให้อาหารตามชนิดที่กำหนด' },
+          { date: isoDaysAgo(7),  detail: 'เริ่มให้สารทดสอบตามขนาดที่กำหนด · ติดตามอาการรายวัน' },
+          { date: isoDaysAgo(-28), detail: 'เก็บตัวอย่างเลือดกลางการทดลอง และประเมินค่าทางชีวเคมี' },
+          { date: isoDaysAgo(-70), detail: 'สิ้นสุดการทดลอง · การุณยฆาตตามหลักมนุษยธรรม และผ่าซากเก็บตับ' },
+        ],
+        protocolEndpoint: 'สิ้นสุดเมื่อครบ 12 สัปดาห์ของการให้อาหารตามชนิดที่กำหนด และเก็บตัวอย่างตับครบทุกตัว',
+        humaneEndpoint: 'น้ำหนักลดเกิน 20% ของน้ำหนักเริ่มต้น · ไม่กินอาหาร/น้ำเกิน 24 ชม. · ขนหยองซึม ไม่ตอบสนองต่อสิ่งเร้า — ให้ทำการุณยฆาตทันที',
+      },
       // ตำแหน่งที่สัตวแพทย์จัดสรร — เป็น "สถานะปัจจุบัน" ของหนูในโครงการนี้
-      facility: { roomNo: 'AR02', rackNo: 'R3 · R4', racks: ['R3', 'R4'], quarantineDate: '2026-05-05', moveInDate: '2026-05-12' },
+      facility: { roomNo: 'AR02', rackNo: 'R3 · R4', racks: ['R3', 'R4'], quarantineDate: isoDaysAgo(21), moveInDate: isoDaysAgo(14) },
       shelves: 4,
       cagesPerShelf: 6,
       shelfNames: { 1: 'A', 2: 'B', 3: 'C', 4: 'D' },
@@ -496,6 +524,19 @@ const DB = {
       description: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
       startDate: '2026-01-08',
       status: 'closed',
+      request: {
+        lotNo: '1', protocolNo: 'MU-AEC-2568-112', pi: 'ดร. นภา ศรีสุข',
+        approvedDate: '2025-12-20', untilDate: '2026-12-19',
+        species: 'Mus musculus', strain: 'BALB/c',
+        sexes: ['M', 'F'], ageMin: 8, ageMax: 10, weightMin: 22, weightMax: 28,
+        maleCount: 6, femaleCount: 6, totalMice: 12,
+        objective: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
+        plan: [
+          { date: '2026-01-02', detail: 'รับสัตว์เข้าห้องกักกันโรค' },
+          { date: '2026-01-08', detail: 'ชั่งน้ำหนักแรกเข้า นำหนูเข้ากรง' },
+          { date: '2026-04-02', detail: 'สิ้นสุดการทดลอง · ปิดโครงการ' },
+        ],
+      },
       facility: { roomNo: 'AR01', rackNo: 'R1', racks: ['R1'], quarantineDate: '2026-01-02', moveInDate: '2026-01-08' },
       shelves: 2,
       cagesPerShelf: 3,
@@ -681,14 +722,18 @@ const DB = {
       { shelf: 1, no: 'A', cages: ['A-01', 'A-02', 'A-03'] },
       { shelf: 2, no: 'B', cages: ['B-01', 'B-02'] },
     ];
+    const RACK = 'R1';                       // โครงการนี้ใช้แร็คเดียว
     const shelfNames = {};
+    const shelfRacks = {};
     const cages = [];
     let seq = 0;
     layout.forEach(row => {
       shelfNames[row.shelf] = row.no;
+      shelfRacks[row.shelf] = RACK;
       row.cages.forEach((code, i) => {
         cages.push({
           id: `${id}-C${++seq}`, code, shelfLabel: row.no, groupId: null, dietId: null,
+          rackNo: RACK,
           shelf: row.shelf, position: i + 1, mice: [],
           water: { remaining: 300, added: null, consumed: 0 },
           food:  { remaining: 100, added: null, consumed: 0 },
@@ -702,16 +747,30 @@ const DB = {
       startDate: todayISO(), status: 'active', createdBy: 'u_pi', approval: 'approved',
       requestDate: isoDaysAgo(6),
       request: {
+        // หัวโปรโตคอลครบชุดเหมือนที่ฟอร์มคำขอสร้างให้ — ใบติดหน้ากรงอ่านจากตรงนี้
+        lotNo: '1', protocolNo: 'MU-AEC-2569-021', pi: 'ดร. นภา ศรีสุข',
+        approvedDate: isoDaysAgo(8), untilDate: isoDaysAgo(-357),
+        species: 'Mus musculus', strain: 'ICR',
+        sexes: ['M', 'F'], ageMin: 7, ageMax: 9, weightMin: 22, weightMax: 28,
+        maleCount: 6, femaleCount: 4,
         totalMice: 10, objective: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
         diets: [ { name: 'อาหารทั่วไป', isDefault: true, plannedMice: 10 }, { name: 'ไขมันสูง', isDefault: false, plannedMice: 6 } ],
         groups: [ { name: 'Control', isControl: true, plannedMice: 4 }, { name: 'Treatment', isControl: false, plannedMice: 6 } ],
+        // รายการสุดท้ายของแผน = ช่อง "End" บนใบติดหน้ากรง
+        plan: [
+          { date: isoDaysAgo(5), detail: 'รับสัตว์เข้าห้องกักกันโรค · ปรับสภาพ' },
+          { date: isoDaysAgo(-1), detail: 'ชั่งน้ำหนักแรกเข้า นำหนูเข้ากรง และแบ่งกลุ่ม' },
+          { date: isoDaysAgo(-84), detail: 'สิ้นสุดการทดลอง · เก็บตัวอย่างไตและการุณยฆาต' },
+        ],
+        protocolEndpoint: 'สิ้นสุดเมื่อครบ 12 สัปดาห์ หรือเมื่อเก็บตัวอย่างไตครบทุกตัว',
+        humaneEndpoint: 'น้ำหนักลดเกิน 20% ของน้ำหนักเริ่มต้น · ไม่กินอาหาร/น้ำเกิน 24 ชม. · ปัสสาวะผิดปกติร่วมกับซึมไม่ตอบสนอง — ให้ทำการุณยฆาตทันที',
         diagram: null, aup: null, approvalDoc: null,
         appointments: [ { role: 'COPI', userId: 'u_copi', name: 'CoPI — นักวิจัยร่วม' } ],
       },
       aecReview: { by: 'AEC — สำนักเลขาฯ จริยธรรม', at: isoDaysAgo(4) },
       builtBy: { by: 'AV — สัตวแพทย์ประจำหน่วย', at: isoDaysAgo(1) },
-      facility: { roomNo: 'AR01', rackNo: 'R1', quarantineDate: isoDaysAgo(5), moveInDate: isoDaysAgo(1) },
-      shelves: layout.length, cagesPerShelf: 3, shelfNames,
+      facility: { roomNo: 'AR01', rackNo: RACK, racks: [RACK], quarantineDate: isoDaysAgo(5), moveInDate: isoDaysAgo(1) },
+      shelves: layout.length, cagesPerShelf: 3, shelfNames, shelfRacks,
       diets, groups, cages, documents: [],
       members: [
         { userId: 'u_pi',     roles: ['PI'] },
@@ -740,6 +799,40 @@ const DB = {
   // creator (nobody is appointed until AV builds the project).
   DB.projects.forEach(p => {
     if ((p.approval || 'approved') === 'approved') p.members = TEAM.map(m => ({ userId: m.userId, roles: [...m.roles] }));
+  });
+})();
+
+// ------------------------------------------------------------------
+// SHAPE GUARD — every project's `request` must carry the full field set
+//
+// The request blob has grown over time (protocol header, age range, plan,
+// endpoints, extra attachments…). Projects seeded BEFORE a field existed simply
+// lack the key, and anything reading it prints nothing — that is exactly how the
+// cage card ended up almost blank for P8, and earlier for P1/P3.
+//
+// This backfills the missing keys with an EMPTY value of the right type, so a
+// consumer always finds the key and renders a blank line instead of breaking.
+// It never overwrites a value that is already there, so a project built through
+// the real request form passes through untouched.
+//
+// When adding a field to the request form, add it here too.
+// ------------------------------------------------------------------
+const REQUEST_SHAPE = {
+  lotNo: '', protocolNo: '', pi: '',
+  approvedDate: '', untilDate: '',
+  species: '', strain: '', sexes: [],
+  ageMin: '', ageMax: '', weightMin: '', weightMax: '',
+  maleCount: 0, femaleCount: 0, totalMice: 0,
+  objective: '', protocolEndpoint: '', humaneEndpoint: '',
+  diets: [], groups: [], plan: [],
+  diagram: null, aup: null, approvalDoc: null, extraDocs: [], appointments: [],
+};
+(function normalizeRequests() {
+  DB.projects.forEach(p => {
+    const r = p.request || (p.request = {});
+    Object.entries(REQUEST_SHAPE).forEach(([k, blank]) => {
+      if (r[k] === undefined) r[k] = Array.isArray(blank) ? [] : blank;
+    });
   });
 })();
 
