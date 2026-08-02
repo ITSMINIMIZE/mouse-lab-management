@@ -729,7 +729,7 @@ input, select { font-family: inherit; }
 .cage-row[style*="--cols:7"] .cage-main, .cage-row[style*="--cols:8"] .cage-main { gap: 5px; }
 .cage-row[style*="--cols:7"] .cage-supply, .cage-row[style*="--cols:8"] .cage-supply { padding-left: 5px; font-size: 9.5px; }
 .cage-row[style*="--cols:7"] .cage-supply .s-avg, .cage-row[style*="--cols:8"] .cage-supply .s-avg { display: none; }
-.cage-row[style*="--cols:7"] .cage-mice .mrow, .cage-row[style*="--cols:8"] .cage-mice .mrow { grid-template-columns: 10px minmax(0, 1fr) 29px; gap: 3px; font-size: 11.5px; }
+.cage-row[style*="--cols:7"] .cage-mice .mrow, .cage-row[style*="--cols:8"] .cage-mice .mrow { grid-template-columns: calc(10px + var(--marks, 0) * 15px) minmax(0, 1fr) 29px; gap: 3px; font-size: 11.5px; }
 
 /* fall back to fewer columns only when the screen genuinely cannot hold them */
 @media (max-width: 1240px) { .cage-row { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; } }
@@ -790,15 +790,18 @@ input, select { font-family: inherit; }
 /* per-mouse weight list on cage card — reserve height for the tallest cage.
    Fixed-width numeric columns (weight, delta) so every row aligns and never wraps. */
 .cage-mice { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; min-height: calc(var(--maxmice, 1) * 23px); }
+/* --marks = the most badges any one mouse in this cage carries (0…3: + ! ❄).
+   The id column grows by exactly one badge-width each, so every row in the cage
+   keeps the same column start — the weight numbers stay in one line. */
 .cage-mice .mrow {
   position: relative;
-  display: grid; grid-template-columns: 11px minmax(0, 1fr) 33px; align-items: baseline; gap: 4px;
+  display: grid;
+  grid-template-columns: calc(11px + var(--marks, 0) * 15px) minmax(0, 1fr) 33px;
+  align-items: baseline; gap: 4px;
   font-variant-numeric: tabular-nums; line-height: 1.5; white-space: nowrap;
 }
-/* the id cell holds the number + (optional) treatment badge, side by side */
+/* the id cell holds the number + (optional) badges, side by side */
 .cage-mice .mid { display: flex; align-items: center; gap: 2px; align-self: center; font-size: 11px; color: var(--text-muted); font-weight: 700; }
-/* cages with a treatment mark widen the id cell just enough to fit the badge — no overlap, no extra gap */
-.cage-mice.has-marks .mrow { grid-template-columns: 24px minmax(0, 1fr) 33px; }
 .cage-mice .mw { font-size: 12.5px; font-weight: 700; color: var(--text); text-align: right; white-space: nowrap; overflow: hidden; }
 .cage-mice .mw .unit { font-size: 9px; font-weight: 600; color: var(--text-muted); margin-left: 1px; }
 .cage-mice .chg { font-size: 11px; font-weight: 700; text-align: right; white-space: nowrap; }
@@ -825,6 +828,15 @@ input, select { font-family: inherit; }
   width: 13px; height: 13px; cursor: help; vertical-align: middle; flex: none;
   background: #f97316; color: #fff; border-radius: 3px;
   font-size: 12px; font-weight: 700; line-height: 1;
+}
+/* frozen carcass — ice-blue snowflake, still waiting for จัดการซาก.
+   Solid background on purpose: it sits on a struck-through (dead) row and the
+   red line must not run across the mark. */
+.frozen-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; cursor: help; vertical-align: middle; flex: none;
+  background: #e0f2fe; color: #0284c7; border: 1px solid #7dd3fc; border-radius: 3px;
+  font-size: 10px; font-weight: 700; line-height: 1;
 }
 
 /* ============================================================
@@ -1247,8 +1259,7 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   .cage-supply .s-ic { width: 11px; }
   .cage-supply .s-main { gap: 2px; }
   .cage-supply .s-avg { font-size: 8px; padding-left: 13px; }
-  .cage-mice .mrow { grid-template-columns: 10px minmax(0, 1fr) 30px; gap: 3px; }
-  .cage-mice.has-marks .mrow { grid-template-columns: 21px minmax(0, 1fr) 30px; }
+  .cage-mice .mrow { grid-template-columns: calc(10px + var(--marks, 0) * 15px) minmax(0, 1fr) 30px; gap: 3px; }
   .cage-mice .mw { font-size: 11.5px; }
   .cage-mice .chg { font-size: 10px; }
 }
@@ -1456,3 +1467,66 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 /* ตำแหน่งที่ไม่มีสิทธิ์ viewCage (IACUC/AUDIT) — เห็นผังกรงแต่กดเข้าไม่ได้ */
 .cage.no-open { cursor: default; }
 .cage.no-open:hover { transform: none; box-shadow: var(--shadow); }
+
+/* ============================================================
+ * NOTIFICATIONS — bell in the app bar + dropdown panel
+ * ============================================================ */
+.notify-wrap { position: relative; flex: none; }
+.notify-btn {
+  position: relative; width: 38px; height: 38px; border: 0; border-radius: 11px;
+  background: transparent; font-size: 18px; line-height: 1; cursor: pointer;
+  transition: background .15s, transform .15s;
+}
+.notify-btn:hover { background: var(--surface-2); }
+.notify-btn:active { transform: translateY(1px); }
+.notify-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.notify-dot {
+  position: absolute; top: 1px; right: 0; min-width: 17px; height: 17px; padding: 0 4px;
+  border-radius: 999px; background: var(--red); color: #fff;
+  font-size: 10.5px; font-weight: 700; line-height: 17px; text-align: center;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.notify-panel {
+  position: absolute; right: 0; top: calc(100% + 8px); z-index: 60;
+  width: 380px; max-width: calc(100vw - 24px);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow-lg); display: none; overflow: hidden;
+}
+.notify-panel.open { display: block; }
+.nt-head {
+  display: flex; align-items: center; gap: 8px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border); font-size: 14px; background: var(--surface-2);
+}
+.nt-count { font-size: 11px; font-weight: 700; color: #fff; background: var(--red); border-radius: 999px; padding: 2px 8px; }
+.nt-link { border: 0; background: transparent; color: var(--primary); font-family: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; padding: 4px 6px; border-radius: 7px; }
+.nt-link:hover { background: var(--primary-soft); }
+.nt-list { max-height: 460px; overflow-y: auto; }
+.nt-item {
+  display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left;
+  padding: 11px 14px; border: 0; border-bottom: 1px solid var(--border);
+  background: var(--surface); font-family: inherit; cursor: pointer; transition: background .12s;
+}
+.nt-item:last-child { border-bottom: 0; }
+.nt-item:hover { background: var(--surface-2); }
+.nt-item.unread { background: #f7faff; }
+.nt-item.unread:hover { background: var(--primary-soft); }
+.nt-ico { font-size: 17px; line-height: 1.3; flex: none; }
+.nt-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.nt-title { font-size: 13.5px; font-weight: 600; color: var(--text); line-height: 1.4; }
+.nt-detail { font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+.nt-meta { font-size: 11px; color: #94a3b8; margin-top: 1px; }
+/* urgency shows as a tint on the icon side, not a stripe */
+.nt-item.warn .nt-ico { filter: none; }
+.nt-item.bad .nt-title { color: #b91c1c; }
+.nt-item.warn .nt-title { color: #b45309; }
+.nt-item.ok .nt-title { color: #15803d; }
+.nt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); flex: none; margin-top: 6px; }
+.nt-empty { padding: 28px 14px; text-align: center; font-size: 13px; color: var(--text-muted); font-style: italic; }
+@media (max-width: 520px) { .notify-panel { width: calc(100vw - 24px); right: -60px; } }
+
+/* progress counter inside the weighing banner */
+.weigh-progress {
+  font-size: 12.5px; font-weight: 700; color: var(--primary-dark);
+  background: var(--surface); border-radius: 999px; padding: 4px 12px; white-space: nowrap;
+}
+.weigh-progress.full { background: var(--green-soft); color: var(--green); }

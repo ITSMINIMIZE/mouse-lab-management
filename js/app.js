@@ -199,6 +199,12 @@ const App = {
     if (!m.flagOpen || !m.alive) return '';
     return `<span class="flag-mark" title="แจ้งผิดปกติ — รอ VET ตรวจสอบ">!</span>`;
   },
+  // ซากอยู่ในช่องแช่แข็ง = งานค้างของ Sci/VET (จัดการซาก) — ต้องเห็นได้จากผังกรง
+  // ไม่ต้องเปิดการ์ดเข้าไปดู
+  frozenMark(m) {
+    if (m.alive || !m.death || m.death.carcass !== 'frozen') return '';
+    return `<span class="frozen-mark" title="ซากแช่แข็ง — รอจัดการซาก">❄</span>`;
+  },
 
   // minimum acceptable daily weight gain (g). Below this = warning; loss/no-gain = bad.
   GAIN_THRESHOLD: 0.2,
@@ -537,6 +543,173 @@ const App = {
     const role = (proj && this.myProjectRoles(proj).join('/')) || this.positionKey();
     DB.auditLog.push({ ts: Date.now(), user: this.user.name, role, action, detail, project: projectName });
   },
+  // =========================================================
+  // NOTIFICATIONS
+  // One row per EVENT with a recipient list, not one row per person — the same
+  // event then reads/dismisses consistently for everyone. `link` says where the
+  // notification takes you; openNotification() re-checks permission before going,
+  // because who may enter a project can change after the notification was sent.
+  // =========================================================
+  // recipient resolvers — always return an array of userIds
+  nTo: {
+    position(key) { return DB.users.filter(u => u.position === key).map(u => u.id); },
+    // members of a project holding any of these project roles
+    roles(p, roles) {
+      return ((p && p.members) || []).filter(m => (m.roles || []).some(r => roles.includes(r))).map(m => m.userId);
+    },
+    team(p) { return ((p && p.members) || []).map(m => m.userId); },
+    creator(p) { return p && p.createdBy ? [p.createdBy] : []; },
+  },
+
+  // send. `to` may contain duplicates/nulls and always drops the actor themselves —
+  // nobody needs telling about the thing they just did.
+  notify({ kind, title, detail = '', project = null, to = [], link = null }) {
+    const me = this.user.id;
+    const list = [...new Set(to.filter(Boolean))].filter(id => id !== me);
+    if (!list.length) return null;
+    const n = {
+      id: 'n' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      ts: Date.now(), kind, title, detail,
+      projectId: project ? project.id : null,
+      projectName: project ? project.name : '',
+      by: this.user.name,
+      to: list, readBy: [], link,
+    };
+    DB.notifications.push(n);
+    return n;
+  },
+
+  myNotifications() {
+    const me = this.user.id;
+    return DB.notifications.filter(n => n.to.includes(me)).sort((a, b) => b.ts - a.ts);
+  },
+  unreadCount() {
+    const me = this.user.id;
+    return DB.notifications.filter(n => n.to.includes(me) && !n.readBy.includes(me)).length;
+  },
+  markRead(n) { const me = this.user.id; if (!n.readBy.includes(me)) n.readBy.push(me); },
+  markAllRead() { this.myNotifications().forEach(n => this.markRead(n)); },
+
+  // how long ago, in words
+  agoText(ts) {
+    const s = Math.floor((Date.now() - ts) / 1000);
+    if (s < 60) return 'เมื่อสักครู่';
+    if (s < 3600) return `${Math.floor(s / 60)} นาทีที่แล้ว`;
+    if (s < 86400) return `${Math.floor(s / 3600)} ชั่วโมงที่แล้ว`;
+    if (s < 604800) return `${Math.floor(s / 86400)} วันที่แล้ว`;
+    return this.thaiDate(new Date(ts).toISOString().slice(0, 10));
+  },
+
+  // each kind carries its own icon + urgency colour
+  NOTIFY_KINDS: {
+    request:  { icon: '📨', tone: 'info' },
+    approve:  { icon: '✅', tone: 'ok' },
+    reject:   { icon: '✗',  tone: 'bad' },
+    build:    { icon: '🏗️', tone: 'ok' },
+    member:   { icon: '👥', tone: 'info' },
+    weigh:    { icon: '⚖️', tone: 'info' },
+    intake:   { icon: '🐭', tone: 'info' },
+    group:    { icon: '💊', tone: 'info' },
+    flag:     { icon: '⚠️', tone: 'warn' },
+    treat:    { icon: '🩺', tone: 'warn' },
+    healed:   { icon: '💚', tone: 'ok' },
+    humane:   { icon: '🛑', tone: 'bad' },
+    death:    { icon: '✝',  tone: 'bad' },
+    carcass:  { icon: '❄️', tone: 'warn' },
+    necropsy: { icon: '🔬', tone: 'info' },
+    doc:      { icon: '📎', tone: 'warn' },   // ใช้เฉพาะตอน "ลบ" เอกสาร — การแนบเพิ่มไม่แจ้ง
+  },
+
+  // go where the notification points — but only if the user may still go there
+  openNotification(n) {
+    this.markRead(n);
+    this.closeNotifyPanel();
+    const p = n.projectId ? Data.getProject(n.projectId) : null;
+    const l = n.link || {};
+    if (p && !this.hasAccess(p)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงโครงการนี้แล้ว'); return this.go(this.homeRoute()); }
+    switch (l.type) {
+      case 'projectInfo': return p ? this.openProjectInfo(p) : this.go('projects');
+      case 'build':       return p && this.canBuild ? this.buildProject(p) : this.openProjectInfo(p);
+      case 'editRequest': return p && this.isCreator(p) ? this.editProject(p) : this.openProjectInfo(p);
+      case 'dashboard':
+        if (p && this.canEnter(p)) return this.go('dashboard', p.id);
+        return p ? this.openProjectInfo(p) : this.go('projects');
+      case 'mouse': {
+        if (!p || !this.canEnter(p) || !this.can('viewCage', p)) return p ? this.openProjectInfo(p) : this.go('projects');
+        const cage = (p.cages || []).find(c => c.id === l.cageId);
+        const mouse = cage && cage.mice.find(m => m.id === l.mouseId);
+        this.go('dashboard', p.id);
+        if (cage && mouse) this.openMouseDetail(p, cage, mouse);
+        else if (cage) this.openCagePopup(p, cage);
+        return;
+      }
+      default: return p ? this.openProjectInfo(p) : this.go('projects');
+    }
+  },
+
+  // ---- the dropdown panel -------------------------------------------------
+  toggleNotifyPanel() {
+    const panel = this.el('notifyPanel');
+    if (!panel) return;
+    if (panel.classList.contains('open')) return this.closeNotifyPanel();
+    this.renderNotifyPanel();
+    panel.classList.add('open');
+    setTimeout(() => document.addEventListener('mousedown', this._notifyOut = (e) => {
+      if (!e.target.closest('.notify-wrap')) this.closeNotifyPanel();
+    }), 0);
+  },
+  closeNotifyPanel() {
+    const panel = this.el('notifyPanel');
+    if (panel) panel.classList.remove('open');
+    if (this._notifyOut) { document.removeEventListener('mousedown', this._notifyOut); this._notifyOut = null; }
+  },
+  renderNotifyPanel() {
+    const panel = this.el('notifyPanel'); if (!panel) return;
+    const me = this.user.id;
+    const list = this.myNotifications();
+    const unread = this.unreadCount();
+    const rows = list.slice(0, 40).map(n => {
+      const k = this.NOTIFY_KINDS[n.kind] || { icon: '🔔', tone: 'info' };
+      const isUnread = !n.readBy.includes(me);
+      return `<button class="nt-item ${k.tone}${isUnread ? ' unread' : ''}" data-nid="${n.id}">
+          <span class="nt-ico">${k.icon}</span>
+          <span class="nt-body">
+            <span class="nt-title">${n.title}</span>
+            ${n.detail ? `<span class="nt-detail">${n.detail}</span>` : ''}
+            <span class="nt-meta">${n.projectName ? n.projectName + ' · ' : ''}${n.by} · ${this.agoText(n.ts)}</span>
+          </span>
+          ${isUnread ? '<span class="nt-dot"></span>' : ''}
+        </button>`;
+    }).join('') || '<p class="nt-empty">ยังไม่มีการแจ้งเตือน</p>';
+
+    panel.innerHTML = `
+      <div class="nt-head">
+        <b>การแจ้งเตือน</b>
+        ${unread ? `<span class="nt-count">${unread} ใหม่</span>` : ''}
+        <span class="spacer" style="flex:1"></span>
+        ${unread ? '<button class="nt-link" id="ntAllRead">อ่านทั้งหมด</button>' : ''}
+      </div>
+      <div class="nt-list">${rows}</div>`;
+
+    panel.querySelectorAll('.nt-item').forEach(b => b.onclick = () => {
+      const n = DB.notifications.find(x => x.id === b.dataset.nid);
+      if (n) this.openNotification(n);
+    });
+    const all = this.el('ntAllRead');
+    if (all) all.onclick = (e) => { e.stopPropagation(); this.markAllRead(); this.renderNotifyPanel(); this.refreshNotifyBadge(); };
+  },
+  // update just the badge without re-rendering the page underneath
+  refreshNotifyBadge() {
+    const btn = this.el('notifyBtn'); if (!btn) return;
+    const unread = this.unreadCount();
+    btn.innerHTML = `🔔${unread ? `<span class="notify-dot">${unread > 99 ? '99+' : unread}</span>` : ''}`;
+  },
+
+  // vets who should hear about an animal in this project: the ones appointed to it,
+  // plus the head vet (AV) who is accountable across every project
+  nVets(p) { return [...this.nTo.roles(p, ['VET']), ...this.nTo.position('AV')]; },
+  nResearchers(p) { return [...this.nTo.creator(p), ...this.nTo.roles(p, ['PI', 'COPI'])]; },
+
   formatTs(ts) {
     const d = new Date(ts);
     const p = n => String(n).padStart(2, '0');
@@ -567,6 +740,7 @@ const App = {
       `<optgroup label="ตำแหน่งระดับระบบ">${DB.users.filter(x => !x.projectRole).map(opt).join('')}</optgroup>` +
       `<optgroup label="บทบาทในโครงการ (ทีมวิจัย)">${DB.users.filter(x => x.projectRole).map(opt).join('')}</optgroup>`;
 
+    const unread = this.unreadCount();
     this.el('root').innerHTML = `
       <div id="app-shell">
         <header class="appbar">
@@ -576,6 +750,12 @@ const App = {
           <div class="spacer"></div>
           <button class="btn btn-ghost" data-nav="audit">📋 Audit Log</button>
           ${this.canManageUsers ? `<button class="btn btn-ghost" data-nav="users">👤 จัดการผู้ใช้</button>` : ''}
+          <div class="notify-wrap">
+            <button class="notify-btn" id="notifyBtn" title="การแจ้งเตือน" aria-label="การแจ้งเตือน" aria-haspopup="true">
+              🔔${unread ? `<span class="notify-dot">${unread > 99 ? '99+' : unread}</span>` : ''}
+            </button>
+            <div class="notify-panel" id="notifyPanel"></div>
+          </div>
           <div class="user-menu">
             <button class="user-btn" id="userMenuBtn">
               <span class="avatar">${initial}</span>
@@ -602,6 +782,9 @@ const App = {
         </div>
         <button class="demo-toggle" id="demoToggle" title="สลับผู้ใช้ (โหมดสาธิต)">🧪 <span class="demo-toggle-txt">สาธิต</span></button>
       </div>`;
+
+    // notification bell
+    this.el('notifyBtn').onclick = (e) => { e.stopPropagation(); this.toggleNotifyPanel(); };
 
     // user menu dropdown (close on outside click, wired only while open)
     const menuBtn = this.el('userMenuBtn'), dropdown = this.el('userDropdown');
@@ -782,14 +965,15 @@ const App = {
       `<div class="page">
         <div class="page-head">
           <div><h2>โครงการ${this.canReview ? '' : 'ของฉัน'}${count}</h2><div class="desc">${sub}</div></div>
-          <button class="btn btn-primary" id="newProjectBtn"><span class="ico-plus">+</span> สร้างโครงการ</button>
+          ${this.can('createProject') ? `<button class="btn btn-primary" id="newProjectBtn"><span class="ico-plus">+</span> สร้างโครงการ</button>` : ''}
         </div>
         <div class="project-grid">${cards}</div>
       </div>`
     );
 
     // "new project" always starts a fresh draft (never resumes a stale edit-draft)
-    this.el('newProjectBtn').onclick = () => { this.draft = null; this.go('create'); };
+    const newBtn = this.el('newProjectBtn');
+    if (newBtn) newBtn.onclick = () => { this.draft = null; this.go('create'); };
 
     // the whole card is one target — it opens the detail popup, nothing else
     document.querySelectorAll('.card-open').forEach(el => {
@@ -874,6 +1058,12 @@ const App = {
     p.approval = 'aec_ok'; p.rejectReason = '';
     p.aecReview = { by: this.user.name, at: todayISO() };
     this.log('อนุมัติคำขอ (จริยธรรม)', p.name, p.name);
+    // A2 — the vet is next in the chain
+    this.notify({ kind: 'approve', title: 'คำขอผ่านจริยธรรมแล้ว — รอจัดสรรพื้นที่',
+      detail: p.name, project: p, to: this.nTo.position('AV'), link: { type: 'build' } });
+    this.notify({ kind: 'approve', title: 'คำขอของคุณผ่านการตรวจจริยธรรมแล้ว',
+      detail: `${p.name} — รอสัตวแพทย์จัดสรรพื้นที่และสร้างกรง`, project: p,
+      to: [...this.nTo.creator(p), ...this.nTo.roles(p, ['COPI'])], link: { type: 'projectInfo' } });
     this.toast(`ผ่านการตรวจจริยธรรม — ส่งต่อสัตวแพทย์เพื่อสร้างโครงการ`);
   },
   // either reviewer sends it back; `stage` records who bounced it
@@ -882,13 +1072,25 @@ const App = {
     p.reviewedBy = this.user.name; p.reviewedAt = todayISO();
     p.rejectPhone = (phone || '').trim();   // so the PI can call back straight away
     this.log('ตีกลับโครงการ', `${p.name} · ${reason}`, p.name);
+    // A3 — the researcher has to act; carry the reason and the callback number
+    this.notify({ kind: 'reject', title: `คำขอถูกตีกลับ (${stage === 'av' ? 'สัตวแพทย์' : 'จริยธรรม'})`,
+      detail: `${reason}${p.rejectPhone ? ` · ติดต่อ ${p.rejectPhone}` : ''}`, project: p,
+      to: [...this.nTo.creator(p), ...this.nTo.roles(p, ['COPI'])],
+      link: { type: 'editRequest' } });
     this.toast(`ตีกลับให้แก้ไข: ${p.name}`);
   },
   // the creator fixes a rejected request → back to the AEC queue
   resubmitProject(p) {
+    const bouncedBy = p.rejectStage;          // remember before it is cleared
     p.approval = 'requested'; p.rejectReason = ''; p.rejectStage = null;
     p.requestDate = todayISO();
     this.log('ยื่นคำขออีกครั้ง', p.name, p.name);
+    // A4 — back to whoever sent it back (AV bounces still re-enter at the AEC queue,
+    // so tell both when the vet was the one who rejected it)
+    this.notify({ kind: 'request', title: 'ผู้วิจัยแก้คำขอและยื่นใหม่แล้ว',
+      detail: p.name, project: p,
+      to: bouncedBy === 'av' ? [...this.nTo.position('AV'), ...this.nTo.position('AEC')] : this.nTo.position('AEC'),
+      link: { type: 'projectInfo' } });
     this.toast('ส่งคำขอให้สำนักเลขาฯ จริยธรรมตรวจอีกครั้ง');
   },
   confirmDeleteProject(p) {
@@ -1110,6 +1312,8 @@ const App = {
   },
 
   renderCreateProject() {
+    // ยื่นคำขอได้เฉพาะผู้ที่มีสิทธิ์ — ปิดทางเข้าที่ตัว route เอง ไม่ใช่แค่ซ่อนปุ่ม
+    if (!this.can('createProject')) { this.toast('คุณไม่มีสิทธิ์ยื่นขอสร้างโครงการ'); return this.go(this.homeRoute()); }
     if (!this.draft || this.draft.mode === 'build') this.draft = this.blankRequestDraft();
     // a draft built by an older version may be missing the newer collections
     const blank = this.blankRequestDraft();
@@ -1610,6 +1814,7 @@ const App = {
 
   // submit (or resubmit) the PI request → project enters the AEC queue
   submitCreateProject() {
+    if (!this.can('createProject')) { this.toast('คุณไม่มีสิทธิ์ยื่นขอสร้างโครงการ'); return this.go(this.homeRoute()); }
     this.captureReqMeta();
     this.captureReqDiets();
     this.captureReqGroups();
@@ -1688,6 +1893,12 @@ const App = {
       members: [{ userId: this.user.id, roles: ['PI'] }],
     });
     this.log('ยื่นคำขอสร้างโครงการ', `${name} · ${totalMice} ตัว · ${request.groups.length} กลุ่ม`, name);
+    // A1 — the ethics office has something to review; the vet just needs to know
+    const newP = DB.projects[DB.projects.length - 1];
+    this.notify({ kind: 'request', title: 'มีคำขอสร้างโครงการใหม่ รอตรวจ',
+      detail: `${name} · สัตว์ทดลอง ${totalMice} ตัว`, project: newP,
+      to: [...this.nTo.position('AEC'), ...this.nTo.position('AV')],
+      link: { type: 'projectInfo' } });
     this.draft = null;
     this.toast(`ยื่นคำขอ "${name}" แล้ว — รอสำนักเลขาฯ จริยธรรมตรวจสอบ`);
     this.go('projects');
@@ -2236,6 +2447,14 @@ const App = {
       request: { ...(p.request || {}), protocolEndpoint: d.protocolEndpoint, humaneEndpoint: d.humaneEndpoint },
     });
     this.log('สร้างโครงการ (สัตวแพทย์)', `${p.name} · ${cages.length} กรง · ${diets.length} ชนิดอาหาร · ${groups.length} กลุ่มทดสอบ`, p.name);
+    // A5 — the project is live: everyone on it can start
+    this.notify({ kind: 'build', title: 'โครงการเริ่มแล้ว — จัดสรรพื้นที่เรียบร้อย',
+      detail: `${cages.length} กรง · รอชั่งน้ำหนักแรกเข้า`, project: p,
+      to: this.nTo.team(p), link: { type: 'dashboard' } });
+    // A6 — the staff AV appointed hear it as an appointment, not just a start
+    this.notify({ kind: 'member', title: 'คุณได้รับแต่งตั้งเข้าโครงการ',
+      detail: p.name, project: p,
+      to: d.appointments.map(a => a.userId), link: { type: 'dashboard' } });
     this.draft = null;
     this.toast(`สร้างโครงการ "${p.name}" เรียบร้อย — รอนักวิทยาศาสตร์ชั่งหนูเข้ากรง`);
     this.go('projects');
@@ -2685,6 +2904,12 @@ const App = {
         `${cage.code} · ${mice.length} ตัว (${selSex === 'M' ? '♂' : '♀'}) · น้ำ ${this.g(sup.water)} g · อาหาร ${this.g(sup.food)} g`, p.name);
       this.closeModal();
       this.toast(`นำหนู ${mice.length} ตัวเข้ากรง ${cage.code} แล้ว`);
+      // B2 — once no cage is left empty the researcher's turn begins
+      if (!p.cages.some(c => !c.mice.length)) {
+        this.notify({ kind: 'intake', title: 'นำหนูเข้าครบทุกกรงแล้ว — รอจัดกลุ่ม',
+          detail: `${p.cages.length} กรง — ถึงคิวกำหนดชนิดอาหารและกลุ่มทดสอบ`, project: p,
+          to: this.nResearchers(p), link: { type: 'dashboard' } });
+      }
       this.renderDashboard();
     };
 
@@ -2766,11 +2991,17 @@ const App = {
            <button class="btn" id="exitIntake">เสร็จสิ้น</button>
          </div>`
       : this.weighing
-      ? `<div class="weighing-banner">
+      ? (() => {
+          const total = p.cages.filter(c => c.mice.some(m => m.alive)).length;
+          const done = this.weighSession ? this.weighSession.done.size : 0;
+          return `<div class="weighing-banner">
            <span>⚖️ <b>โหมดชั่งน้ำหนัก</b> — แตะกรงที่ต้องการเริ่มบันทึก (กรงสีเขียว = บันทึกแล้ว)</span>
+           <span class="weigh-progress${done >= total && total ? ' full' : ''}">ชั่งแล้ว ${done} / ${total} กรง</span>
            <span class="spacer"></span>
            <button class="btn" id="exitWeighing">ออกจากโหมด</button>
-         </div>`
+           <button class="btn btn-green" id="finishWeighing" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้นรอบชั่งวันนี้</button>
+         </div>`;
+        })()
       : this.editing
       ? `<div class="edit-banner col">
            <div class="eb-top">
@@ -2817,6 +3048,9 @@ const App = {
           <span><i class="dot good"></i> น้ำหนักขึ้นปกติ</span>
           <span><i class="dot warn"></i> ขึ้นน้อยกว่ากำหนด</span>
           <span><i class="dot bad"></i> ลด/ไม่เพิ่ม</span>
+          <span><span class="treat-mark">+</span> กำลังรักษา</span>
+          <span><span class="flag-mark">!</span> แจ้งผิดปกติ</span>
+          <span><span class="frozen-mark">❄</span> ซากแช่แข็ง รอจัดการ</span>
         </div>
       </div>`
     );
@@ -2839,6 +3073,30 @@ const App = {
         this.weighing = false;
         this.weighSession = null;
         this.renderDashboard();
+      });
+      // B1 — closing the round is a deliberate act, not just leaving the mode:
+      // it is what tells the research team the day's data is ready.
+      this.el('finishWeighing').addEventListener('click', () => {
+        const total = p.cages.filter(c => c.mice.some(m => m.alive)).length;
+        const done = this.weighSession ? this.weighSession.done.size : 0;
+        const finish = () => {
+          this.log('เสร็จสิ้นรอบชั่งน้ำหนัก', `${done}/${total} กรง`, p.name);
+          this.notify({ kind: 'weigh', title: 'ชั่งน้ำหนักรอบวันนี้เสร็จแล้ว',
+            detail: `บันทึก ${done} จาก ${total} กรง${done < total ? ' (ยังไม่ครบ)' : ''}`,
+            project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
+          this.weighing = false;
+          this.weighSession = null;
+          this.toast(`ปิดรอบชั่งแล้ว — แจ้งผู้วิจัยเรียบร้อย`);
+          this.renderDashboard();
+        };
+        if (done < total) {
+          this.confirmDialog({
+            title: 'ยังชั่งไม่ครบทุกกรง',
+            body: `บันทึกไปแล้ว <b>${done}</b> จาก <b>${total}</b> กรง — ปิดรอบเลยหรือไม่?<br>
+                   ระบบจะแจ้งผู้วิจัยว่ารอบนี้ยังไม่ครบ`,
+            okLabel: 'ปิดรอบเลย', onOk: finish,
+          });
+        } else finish();
       });
     }
     if (!this.weighing && !this.editing && !this.intake) {
@@ -2932,7 +3190,16 @@ const App = {
       const apply = () => {
         const r = this.assignCageGroup(p, cage, target);
         if (!r.ok) { this.toast(r.msg); return; }
-        if (r.changed) this.log('กำหนดกลุ่มทดสอบ', `${cage.code} → ${(this.cageGroup(p, cage) || {}).name || 'เอาออกจากกลุ่ม'}`, p.name);
+        if (r.changed) {
+          this.log('กำหนดกลุ่มทดสอบ', `${cage.code} → ${(this.cageGroup(p, cage) || {}).name || 'เอาออกจากกลุ่ม'}`, p.name);
+          // B3 — all cages grouped: the operators can begin dosing
+          if (p.cages.length && p.cages.every(c => c.groupId)) {
+            this.notify({ kind: 'group', title: 'จัดกลุ่มทดสอบครบทุกกรงแล้ว',
+              detail: 'เริ่มให้สารตามโปรโตคอลได้', project: p,
+              to: [...this.nTo.roles(p, ['SCI', 'AHS']), ...this.nTo.position('SCI')],
+              link: { type: 'dashboard' } });
+          }
+        }
         this.renderDashboard();
       };
       const from = this.cageGroup(p, cage);                          // null ⇒ ยังไม่เคยจัดกลุ่ม
@@ -2962,7 +3229,12 @@ const App = {
 
     // reserve a dedicated badge lane only when this cage has a treatment mark,
     // so the weight column keeps full width in every other cage
-    const hasMarks = cage.mice.some(m => (m.treatments && m.treatments.length) || m.flagOpen);
+    // how many badges the busiest mouse in this cage carries — a treated animal that
+    // died and is now in the freezer shows two (+ ❄), so the id column must fit them
+    const maxMarks = cage.mice.reduce((n, m) => Math.max(n,
+      ((m.treatments && m.treatments.length) ? 1 : 0)
+      + ((m.flagOpen && m.alive) ? 1 : 0)
+      + ((!m.alive && m.death && m.death.carcass === 'frozen') ? 1 : 0)), 0);
 
     // per-mouse weight list — status shown by the coloured change value only
     const mouseList = cage.mice.map(m => {
@@ -2972,7 +3244,7 @@ const App = {
       const dead = !m.alive;
       const arrow = (dead || !weighed || chg == null) ? '' : `${chg >= 0 ? '▲' : '▼'}${this.g(Math.abs(chg))}`;
       return `<div class="mrow ${dead ? 'dead' : m.excluded ? 'stop' : ''}">
-        <span class="mid">${m.cageNo != null ? m.cageNo : m.code.split('-').slice(-1)[0]}${this.treatMark(m)}${this.flagMark(m)}</span>
+        <span class="mid">${m.cageNo != null ? m.cageNo : m.code.split('-').slice(-1)[0]}${this.treatMark(m)}${this.flagMark(m)}${this.frozenMark(m)}</span>
         <span class="mw">${dead ? '' : (weighed ? this.g(cur) : '–') + '<span class="unit">g</span>'}</span>
         <span class="chg ${weighed ? st : ''}">${arrow}</span>
       </div>`;
@@ -3009,7 +3281,7 @@ const App = {
         </div>
         ${diet && !isEmpty ? `<div class="cage-diet" style="--dc:${diet.color}">🍚 ${diet.name}</div>` : ''}
         <div class="cage-main">
-          <div class="cage-mice${hasMarks ? ' has-marks' : ''}">${mouseList || '<span class="empty-note">ไม่มีหนู</span>'}</div>
+          <div class="cage-mice" style="--marks:${maxMarks}">${mouseList || '<span class="empty-note">ไม่มีหนู</span>'}</div>
           <div class="cage-supply">
             ${supply('💧', cage.water.consumed, cage.water.consumed / n)}
             ${supply('🍚', cage.food.consumed, cage.food.consumed / n)}
@@ -3030,6 +3302,7 @@ const App = {
   openCagePopup(p, cage) {
     // IACUC/AUDIT may walk the dashboard but not open a cage's animals
     if (!this.can('viewCage', p)) { this.toast('ตำแหน่งของคุณดูรายละเอียดรายกรงไม่ได้'); return; }
+    this.refreshUnderlay(p);   // ผังกรงด้านหลังต้องตรงกับข้อมูลล่าสุดเสมอ
     // a cage the PI left empty at populate has NO group yet (groupId === null) —
     // it still renders on the dashboard, so every group read here must be guarded
     const group = Data.getGroup(p, cage.groupId);
@@ -3079,7 +3352,7 @@ const App = {
         : `<span style="color:var(--text-muted)">—</span>`;
       return `
         <tr class="${dead ? 'row-dead' : m.excluded ? 'row-stop' : ''}">
-          <td data-mouse="${m.id}"><b>${m.code}</b> ${this.tagChip(p, cage, m)}${this.treatMark(m)}<span class="mono" style="color:var(--text-muted)"> (${m.sex === 'M' ? '♂' : '♀'})</span> ${badges}</td>
+          <td data-mouse="${m.id}"><b>${m.code}</b> ${this.tagChip(p, cage, m)}${this.treatMark(m)}${this.frozenMark(m)}<span class="mono" style="color:var(--text-muted)"> (${m.sex === 'M' ? '♂' : '♀'})</span> ${badges}</td>
           <td class="num" data-mouse="${m.id}">${this.g(cur)} g</td>
           <td class="num" data-mouse="${m.id}"><span class="chg ${dead ? '' : chgClass}">${dead ? '–' : chgTxt}</span></td>
           <td class="num" data-mouse="${m.id}">${dead || m.excluded ? '—' : vsControl}</td>
@@ -3199,6 +3472,10 @@ const App = {
       mouse.flagOpen = true;
       mouse.flag = { by: this.el('flagBy').value.trim() || this.user.name, note, date: todayISO() };
       this.log('แจ้งหนูผิดปกติ', `${mouse.code} · ${note}`, p.name);
+      // C1 — an animal is flagged: the vet has to look at it
+      this.notify({ kind: 'flag', title: '⚠️ มีหนูถูกแจ้งผิดปกติ รอสัตวแพทย์ตรวจ',
+        detail: `${mouse.code} · ${note}`, project: p, to: this.nVets(p),
+        link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
       this.toast(`ปักธงผิดปกติที่ ${mouse.code} — รอ VET ตรวจสอบ`);
       this.openCagePopup(p, cage);
     };
@@ -3269,6 +3546,16 @@ const App = {
         handledBy: '', handledAt: '',
       };
       this.log('แจ้งหนูตาย', `${mouse.code} · ${this.deathLabel(mouse.death)}`, p.name);
+      // C5 — the death itself
+      this.notify({ kind: 'death', title: 'มีหนูตายในโครงการ',
+        detail: `${mouse.code} · ${this.deathLabel(mouse.death)}`, project: p,
+        to: [...this.nResearchers(p), ...this.nVets(p)],
+        link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
+      // C6 — and the carcass is now in the freezer waiting for dispose/necropsy
+      this.notify({ kind: 'carcass', title: '❄️ มีซากรอจัดการ (ทำลาย / ชันสูตร)',
+        detail: mouse.code, project: p,
+        to: [...this.nTo.roles(p, ['SCI', 'VET']), ...this.nTo.position('SCI'), ...this.nTo.position('AV')],
+        link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
       this.toast(`บันทึกแล้ว — ซากของ ${mouse.code} อยู่ระหว่างแช่แข็ง รอ Sci/VET จัดการ`);
       this.openCagePopup(p, cage);
     };
@@ -3337,6 +3624,7 @@ const App = {
   // Mouse detail (chart + history + treatment)
   // ---------------------------------------------------------
   openMouseDetail(p, cage, mouse) {
+    this.refreshUnderlay(p);   // ผังกรงด้านหลังต้องตรงกับข้อมูลล่าสุดเสมอ
     const operational = this.isOperational(p);        // no recording actions on waiting/rejected/closed
     const canTreat = this.can('treat', p) && operational;
     const canNecropsy = this.can('handleCarcass', p) && operational;   // SCI/VET perform the gross exam
@@ -3375,7 +3663,7 @@ const App = {
     this.openModal(`
       <div class="modal-head">
         <div>
-          <h3>หนู ${mouse.code} ${this.tagChip(p, cage, mouse)}${this.treatMark(mouse)}${this.flagMark(mouse)}</h3>
+          <h3>หนู ${mouse.code} ${this.tagChip(p, cage, mouse)}${this.treatMark(mouse)}${this.flagMark(mouse)}${this.frozenMark(mouse)}</h3>
           <div class="sub">📍 ${this.cageLocation(p, cage)} · เพศ ${mouse.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'}</div>
         </div>
         <span class="spacer"></span>
@@ -3476,6 +3764,10 @@ const App = {
         mouse.careOpen = false;
         mouse.remark = '';
         this.log('ปิดเคส', `${mouse.code} · รักษาเสร็จสิ้น`, p.name);
+        // C3 — recovered
+        this.notify({ kind: 'healed', title: 'ปิดเคสแล้ว — หนูหายดี',
+          detail: mouse.code, project: p, to: this.nResearchers(p),
+          link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
         this.toast(`ปิดเคสของ ${mouse.code} แล้ว`);
         this.openMouseDetail(p, cage, mouse);
       };
@@ -3579,6 +3871,11 @@ const App = {
         avComment: this.el('nAv').value.trim(),
       };
       this.log('บันทึกผลชันสูตร', `${mouse.code}${mouse.necropsy.abnormal ? ' · ' + mouse.necropsy.abnormal : ''}`, p.name);
+      // C7 — necropsy result is in
+      this.notify({ kind: 'necropsy', title: 'บันทึกผลชันสูตรซากแล้ว',
+        detail: `${mouse.code}${mouse.necropsy.abnormal ? ' · ' + mouse.necropsy.abnormal : ''}`, project: p,
+        to: [...this.nResearchers(p), ...this.nTo.position('AV')],
+        link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
       this.toast(`บันทึกผลการชันสูตรของ ${mouse.code} แล้ว`);
       this.openMouseDetail(p, cage, mouse);
     };
@@ -3613,6 +3910,11 @@ const App = {
       mouse.careOpen = true;
       mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved → humane order issued
       this.log('สั่ง Humane endpoint', `${mouse.code} · ${reason}`, p.name);
+      // C4 — an animal is to be euthanised: researchers and the head vet must know
+      this.notify({ kind: 'humane', title: '🛑 สั่ง Humane endpoint',
+        detail: `${mouse.code} · ${reason}`, project: p,
+        to: [...this.nResearchers(p), ...this.nTo.position('AV')],
+        link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
       this.toast(`ออกคำสั่ง Humane endpoint สำหรับ ${mouse.code}`);
       this.openMouseDetail(p, cage, mouse);
     };
@@ -3692,6 +3994,10 @@ const App = {
       mouse.careOpen = true;   // adding a treatment opens/keeps the case open
       mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved → case opened
       this.log('รายงานอาการป่วย', `${mouse.code} · ${dx}`, p.name);
+      // C2 — a case is open on one of their animals
+      this.notify({ kind: 'treat', title: 'สัตวแพทย์เปิดเคสรักษาหนูในโครงการ',
+        detail: `${mouse.code}${dx ? ' · ' + dx : ''}`, project: p, to: this.nResearchers(p),
+        link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
       this.toast('บันทึกรายงานอาการป่วยแล้ว');
       this.openMouseDetail(p, cage, mouse);
     };
@@ -3883,9 +4189,18 @@ const App = {
           const i = p.documents.findIndex(x => x.id === b.dataset.id);
           if (i < 0) return;
           const name = p.documents[i].name;
+          const cat = p.documents[i].category;
           if (p.documents[i].url) URL.revokeObjectURL(p.documents[i].url);
           p.documents.splice(i, 1);
           this.log('ลบเอกสาร', name, p.name);
+          // การแนบเพิ่มไม่ต้องแจ้ง แต่การ "เอาออก" คือการทำลายหลักฐานที่ AV ใช้ตรวจ
+          // จึงต้องแจ้งผู้วิจัยและสัตวแพทย์เสมอ
+          this.notify({
+            kind: 'doc', title: 'เอกสารโครงการถูกลบ',
+            detail: `${name} (${cat})`, project: p,
+            to: [...this.nResearchers(p), ...this.nTo.position('AV')],
+            link: { type: 'projectInfo' },
+          });
           this.openDocuments(p);
         };
       });
@@ -5113,6 +5428,8 @@ const App = {
       const uid = this.el('addUser').value;
       p.members.push({ userId: uid, roles: ['AHS'] });   // start as the basic operator role
       this.log('จัดการสมาชิก', `เพิ่ม ${DB.users.find(u => u.id === uid)?.name} (AHS)`, p.name);
+      this.notify({ kind: 'member', title: 'คุณถูกเพิ่มเข้าโครงการ',
+        detail: 'บทบาท AHS', project: p, to: [uid], link: { type: 'dashboard' } });
       refresh();
     };
   },
@@ -5224,6 +5541,22 @@ const App = {
   closeModal() {
     const o = this.el('overlay');
     if (o) o.remove();
+  },
+  // Repaint the page UNDER an open modal.
+  // Every recording action (แจ้งตาย · จัดการซาก · แจ้งผิดปกติ · เปิด/ปิดเคส ·
+  // humane · stop · ชันสูตร) ends by re-opening the cage popup or the mouse
+  // detail — but that only redraws the modal, so the cage card, its colour, the
+  // badges and the counters stayed stale until you left the project and came
+  // back. Calling this from the two popup openers means every one of those
+  // paths refreshes, and any future action gets it for free.
+  // Safe because the overlay is appended to <body>, NOT inside #root: rewriting
+  // #root cannot close the modal that is currently open.
+  refreshUnderlay(p) {
+    if (this.route.name !== 'dashboard') return;          // nothing to repaint
+    if (p && this.route.projectId !== p.id) return;       // never redraw a different project
+    const y = window.scrollY;
+    this.renderDashboard();
+    window.scrollTo(0, y);                                // keep the user where they were
   },
   toast(msg) {
     const old = this.el('toast'); if (old) old.remove();

@@ -38,9 +38,9 @@
 const POSITIONS = {
   ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewSupply', 'viewFinance'] },
   AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
-  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'viewCage', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewSupply'] },
+  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewSupply'] },
   // AEC = สำนักเลขานุการคณะกรรมการจริยธรรมการใช้สัตว์ทดลอง — like IACUC (read-only
   // across projects) but can approve/reject a PI's project REQUEST at stage 1.
   // AEC reviews the paperwork only: it reads a project's DETAILS (the info popup)
@@ -509,6 +509,11 @@ const DB = {
   ],
   // append-only activity log (visible to everyone for transparency)
   auditLog: [],
+  // ---- การแจ้งเตือน ----------------------------------------------------
+  // หนึ่งเหตุการณ์ = หนึ่งแถว มีรายชื่อผู้รับ (`to`) และคนที่อ่านแล้ว (`readBy`)
+  // ไม่ทำเป็นแถวต่อคน เพราะเหตุการณ์เดียวกันควรแก้/ลบทีเดียวได้
+  // { id, ts, kind, title, detail, projectId, projectName, to:[userId], readBy:[userId], link:{...} }
+  notifications: [],
 };
 
 // seed a few historical log entries that match the demo state
