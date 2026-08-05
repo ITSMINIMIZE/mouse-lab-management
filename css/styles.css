@@ -830,6 +830,75 @@ input, select { font-family: inherit; }
   font-size: 12px; font-weight: 700; line-height: 1;
 }
 /* ============================================================
+ * CAGE CARE ROUND (ACT) — ตรวจ Animals · Feed · Water · Cage
+ * ============================================================ */
+.weighing-banner.care { background: linear-gradient(90deg, #ecfeff, #f0fdfa); border-color: #99f6e4; }
+.care-ico { font-size: 34px; text-align: center; margin: 6px 0 2px; }
+.care-th { font-size: 14px; font-weight: 600; color: var(--text-muted); }
+/* breadcrumb of the four checkpoints, so ACT always knows where in the cage they are */
+.care-crumbs { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 10px 0 4px; }
+.cc-crumb {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  background: var(--surface-2); border-radius: 999px; padding: 3px 9px;
+}
+.cc-crumb.done { color: var(--green); background: var(--green-soft); }
+.cc-crumb.now { color: #fff; background: var(--primary); }
+.cc-crumb b { color: var(--red); }
+.cc-crumb.done b { color: var(--red); }
+
+.care-choice { display: flex; gap: 10px; margin: 16px 0 4px; }
+.care-choice.col { flex-direction: column; }
+.care-btn {
+  flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 3px;
+  padding: 14px 12px; border: 2px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); font-family: inherit; cursor: pointer; text-align: left;
+  transition: border-color .12s, background .12s;
+}
+.care-btn b { font-size: 15px; color: var(--text); }
+.care-btn span { font-size: 11.5px; color: var(--text-muted); line-height: 1.35; }
+.care-btn:hover { border-color: var(--primary); }
+.care-btn.on { border-color: var(--primary); background: var(--primary-soft); }
+.care-btn.ok:hover, .care-btn.ok.on { border-color: var(--green); background: var(--green-soft); }
+.care-btn.ok.on b { color: var(--green); }
+.care-btn.bad:hover, .care-btn.bad.on { border-color: var(--red); background: #fef2f2; }
+.care-btn.bad.on b { color: var(--red); }
+
+/* Animals · Abnormal — pick the animal, then hand it to the vet forms */
+.ca-list { display: flex; flex-direction: column; gap: 7px; margin: 14px 0 6px; }
+.ca-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+}
+.ca-row.acted { border-color: var(--green); background: var(--green-soft); }
+.ca-id { flex: 1 1 auto; min-width: 0; font-size: 12.5px; }
+.ca-id b { display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px;
+  border-radius: 5px; background: var(--surface-2); font-size: 11px; margin-right: 5px; }
+.ca-acts { display: flex; gap: 6px; flex: none; }
+.ca-state { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 1px 7px; margin-left: 6px; }
+.ca-state.dead { color: var(--red); background: #fef2f2; }
+.ca-state.flag { color: #c2410c; background: #fff7ed; }
+.ca-state.care { color: #a16207; background: #fefce8; }
+.ca-done { font-size: 12px; font-weight: 600; color: var(--green); text-align: center; margin-top: 4px; }
+.ca-hint { font-size: 12px; color: var(--text-muted); text-align: center; margin-top: 4px; }
+
+.care-review .rv-bad .v.bad { color: var(--red); font-weight: 700; }
+.care-review .v.ok { color: var(--green); font-weight: 700; }
+.care-review .rv-sub {
+  flex-basis: 100%; font-size: 11.5px; color: var(--text-muted);
+  padding: 3px 0 0 2px; line-height: 1.4;
+}
+
+/* latest inspection, shown in the cage popup */
+.care-last { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.cl-head { font-size: 12.5px; font-weight: 700; margin-bottom: 7px; }
+.cl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.care-chip {
+  font-size: 11px; font-weight: 600; border-radius: 999px; padding: 3px 9px;
+  color: var(--green); background: var(--green-soft);
+}
+.care-chip.bad { color: var(--red); background: #fef2f2; }
+
+/* ============================================================
  * CAGE-CARD PICKER — เลือกกรงที่จะพิมพ์ใบติดหน้ากรง
  * ============================================================ */
 .cs-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
@@ -1550,3 +1619,300 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   background: var(--surface); border-radius: 999px; padding: 4px 12px; white-space: nowrap;
 }
 .weigh-progress.full { background: var(--green-soft); color: var(--green); }
+
+/* ตรวจสุขภาพก่อนชั่ง (Sci) + สรุปในหน้าตรวจทาน */
+.wizard-flagged {
+  margin: 10px 0 0; padding: 8px 12px; border-radius: 10px;
+  font-size: 12.5px; font-weight: 600; color: #c2410c; background: #fff7ed;
+}
+.wizard-flagged.care { color: #a16207; background: #fefce8; }
+.hl-bad { font-size: 11px; font-weight: 700; color: var(--red); }
+.hl-ok { font-size: 11px; color: var(--green); }
+.review-list li.rv-bad { flex-wrap: wrap; }
+.review-list .rv-sub {
+  flex-basis: 100%; font-size: 11.5px; color: var(--text-muted);
+  padding: 3px 0 0 2px; line-height: 1.4;
+}
+
+/* ============================================================
+ * DOSING ROUND (AHS) — ให้สารทดสอบรายตัว
+ * ============================================================ */
+.weighing-banner.dose { background: linear-gradient(90deg, #fdf4ff, #faf5ff); border-color: #e9d5ff; }
+/* หน้ารวมของกรง: เลือกหนูทีละตัวหรือหลายตัว */
+.ds-list { display: flex; flex-direction: column; gap: 7px; }
+.ds-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 10px 12px; border: 1.5px solid var(--border); border-radius: 11px;
+  background: var(--surface); font-family: inherit; cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+.ds-row:hover { border-color: var(--primary); }
+.ds-row.on { border-color: var(--primary); background: var(--primary-soft); }
+.ds-row.did { opacity: .72; }
+.ds-check {
+  flex: none; width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff; background: var(--surface);
+}
+.ds-row.on .ds-check { background: var(--primary); border-color: var(--primary); }
+.ds-id { flex: 1 1 auto; min-width: 0; font-size: 12.5px; }
+.ds-id b {
+  display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px;
+  border-radius: 5px; background: var(--surface-2); font-size: 11px; margin-right: 5px;
+}
+.ds-go { flex: none; font-size: 11.5px; font-weight: 600; color: var(--primary); }
+.ds-go:hover { text-decoration: underline; }
+.ds-state { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 1px 7px; margin-left: 6px; }
+.ds-state.done { color: var(--green); background: var(--green-soft); }
+.ds-state.pause { color: #a16207; background: #fefce8; }
+.ds-state.routine { color: var(--primary); background: var(--primary-soft); }
+
+/* ฟอร์มกรอกรายการ */
+.dz-who { font-size: 13px; font-weight: 600; margin-bottom: 12px; }
+.dz-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.dz-item { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dz-n {
+  flex: none; width: 20px; height: 20px; border-radius: 6px; background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700;
+  color: var(--text-muted);
+}
+.dz-text {
+  flex: 1 1 200px; min-width: 0; padding: 8px 11px; font-family: inherit; font-size: 13px;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text);
+}
+.dz-text:focus { outline: none; border-color: var(--primary); }
+.dz-kind { display: flex; gap: 4px; flex: none; }
+.dz-k {
+  border: 1.5px solid var(--border); background: var(--surface); border-radius: 999px;
+  padding: 4px 11px; font-family: inherit; font-size: 11.5px; font-weight: 600;
+  color: var(--text-muted); cursor: pointer;
+}
+.dz-k.on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.dz-paused { border: 1.5px solid #fde68a; background: #fffbeb; border-radius: var(--radius); padding: 14px; }
+.dz-pt { font-size: 14px; font-weight: 700; color: #a16207; margin-bottom: 10px; }
+.btn.btn-warn { background: #fef3c7; border-color: #fde68a; color: #a16207; }
+.btn.btn-warn:hover { background: #fde68a; }
+
+/* ประวัติการให้สาร ในการ์ดหนูรายตัว */
+.dose-hist { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.dh-row { display: flex; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.dh-row:last-child { border-bottom: 0; }
+.dh-when { flex: none; width: 108px; color: var(--text-muted); font-size: 11.5px; }
+.dh-what { flex: 1 1 auto; min-width: 0; }
+.dh-what .dh-item { display: block; padding: 1px 0; }
+.dh-kind { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 0 6px; margin-left: 5px;
+  color: var(--primary); background: var(--primary-soft); }
+.dh-paused { color: #a16207; font-weight: 600; }
+
+/* เลือกหลายกรงจากผัง (AHS) + หน้าทำซ้ำรอบก่อน */
+.weighing-banner.dose.col { flex-direction: column; align-items: stretch; gap: 9px; }
+.gchip-label { font-size: 12px; font-weight: 600; color: var(--text-muted); align-self: center; }
+.btn.gchip { border-left: 3px solid var(--gc, var(--border)); }
+.btn.gchip.on { background: var(--primary-soft); border-color: var(--primary); color: var(--primary); }
+.btn.gchip b { font-weight: 700; }
+
+.rp-bucket {
+  border: 1.5px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px; margin-bottom: 10px; background: var(--surface);
+}
+.rp-hd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.rp-count {
+  font-size: 12px; font-weight: 700; color: #fff; background: var(--primary);
+  border-radius: 999px; padding: 2px 10px;
+}
+.rp-scope { font-size: 13px; font-weight: 600; }
+.rp-from { font-size: 11.5px; color: var(--text-muted); }
+.rp-from.stale { color: #c2410c; font-weight: 600; }
+.rp-items { margin: 0 0 9px; padding: 0 0 0 4px; list-style: none; }
+.rp-items li { font-size: 12.5px; padding: 2px 0; }
+.rp-act { display: flex; align-items: center; gap: 8px; }
+.rp-cages { font-size: 11px; color: var(--text-muted); }
+.rp-skip {
+  border: 1.5px solid #fde68a; background: #fffbeb;
+  border-radius: var(--radius); padding: 12px 14px; margin-top: 14px;
+}
+.rp-skip-hd { font-size: 12.5px; font-weight: 700; color: #a16207; margin-bottom: 8px; }
+.rp-skip-row {
+  display: flex; align-items: center; gap: 8px; font-size: 12px;
+  padding: 4px 0; border-bottom: 1px solid #fef3c7;
+}
+.rp-skip-row:last-child { border-bottom: 0; }
+.rp-why { color: #a16207; font-weight: 600; font-size: 11.5px; }
+
+/* ============================================================
+ * HEALTH SCORING — เกณฑ์ตรวจสุขภาพ (PI ตั้ง) + การให้คะแนน (Sci)
+ * ============================================================ */
+.hs-item { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 9px; }
+.hs-n {
+  flex: none; width: 21px; height: 21px; border-radius: 6px; background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center; margin-top: 7px;
+  font-size: 11px; font-weight: 700; color: var(--text-muted);
+}
+.hs-fields { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.hs-name, .hs-desc {
+  width: 100%; padding: 8px 11px; font-family: inherit; border: 1px solid var(--border);
+  border-radius: 9px; background: var(--surface); color: var(--text);
+}
+.hs-name { font-size: 13px; font-weight: 600; }
+.hs-desc { font-size: 12px; }
+.hs-name:focus, .hs-desc:focus { outline: none; border-color: var(--primary); }
+.hs-item .mini-btn { margin-top: 6px; }
+.hs-thresh { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 12px; }
+.hs-thresh label { font-size: 13px; font-weight: 600; }
+.hs-thresh input { width: 84px; padding: 8px 11px; font-family: inherit; font-size: 14px; font-weight: 700;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
+.hs-max { font-size: 12px; color: var(--text-muted); }
+
+/* การให้คะแนนใน wizard */
+.hsc-legend { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 4px 0 12px; }
+.hsc-lg { font-size: 10.5px; font-weight: 600; border-radius: 999px; padding: 2px 9px; background: var(--surface-2); color: var(--text-muted); }
+.hsc-lg.s0 { color: var(--green); background: var(--green-soft); }
+.hsc-lg.s2 { color: #a16207; background: #fefce8; }
+.hsc-lg.s3 { color: var(--red); background: #fef2f2; }
+.hsc-list { display: flex; flex-direction: column; gap: 8px; }
+.hsc-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 11px;
+  border: 1.5px solid var(--border); border-radius: 11px; background: var(--surface);
+}
+.hsc-row.set { border-color: var(--primary-soft); background: var(--surface-2); }
+.hsc-label { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.hsc-label b { font-size: 13px; }
+.hsc-label span { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+.hsc-btns { flex: none; display: flex; gap: 4px; }
+.hsc-b {
+  width: 36px; height: 36px; border-radius: 9px; border: 1.5px solid var(--border);
+  background: var(--surface); font-family: inherit; font-size: 15px; font-weight: 700;
+  color: var(--text-muted); cursor: pointer; transition: all .1s;
+}
+.hsc-b:hover { border-color: var(--primary); }
+.hsc-b.s0.on { background: var(--green); border-color: var(--green); color: #fff; }
+.hsc-b.s1.on { background: #fde68a; border-color: #fbbf24; color: #78350f; }
+.hsc-b.s2.on { background: #fb923c; border-color: #f97316; color: #fff; }
+.hsc-b.s3.on { background: var(--red); border-color: var(--red); color: #fff; }
+.hsc-total {
+  display: flex; align-items: baseline; gap: 6px; margin-top: 12px; padding: 10px 13px;
+  border-radius: 11px; background: var(--surface-2); font-size: 13px;
+}
+.hsc-total b { font-size: 20px; }
+.hsc-total.ok { background: var(--green-soft); color: var(--green); }
+.hsc-total.warn { background: #fffbeb; color: #a16207; }
+.hsc-total.bad { background: #fef2f2; color: var(--red); }
+.hsc-max { font-size: 12px; opacity: .75; }
+.hsc-th { font-size: 11.5px; color: var(--text-muted); }
+.hsc-alert {
+  margin-top: 10px; padding: 10px 13px; border-radius: 11px;
+  background: #fef2f2; border: 1.5px solid #fecaca; color: var(--red);
+  font-size: 12.5px; font-weight: 600; line-height: 1.45;
+}
+
+/* ไทม์ไลน์สุขภาพรายตัว */
+.ht-list { display: flex; flex-direction: column; }
+.ht-row { display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.ht-row:last-child { border-bottom: 0; }
+.ht-when { flex: none; width: 92px; font-size: 11.5px; font-weight: 600; }
+.ht-when span { font-weight: 400; color: var(--text-muted); }
+.ht-body { flex: 1 1 auto; min-width: 0; }
+.ht-top { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.ht-src { font-size: 12px; font-weight: 600; }
+.ht-st { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 1px 8px; background: var(--surface-2); color: var(--text-muted); }
+.ht-st.ok { color: var(--green); background: var(--green-soft); }
+.ht-st.warn { color: #a16207; background: #fefce8; }
+.ht-st.bad { color: var(--red); background: #fef2f2; }
+.ht-total { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+.ht-total.ok { color: var(--green); background: var(--green-soft); }
+.ht-total.warn { color: #a16207; background: #fefce8; }
+.ht-total.bad { color: #fff; background: var(--red); }
+.ht-by { font-size: 11px; color: var(--text-muted); }
+.ht-note { font-size: 12.5px; margin-top: 3px; line-height: 1.45; }
+.ht-scores { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.ht-sc { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px;
+  border-radius: 999px; padding: 1px 8px; background: var(--surface-2); color: var(--text-muted); }
+.ht-sc i { font-style: normal; }
+.ht-sc b { font-weight: 700; }
+.ht-sc.s1 { background: #fefce8; color: #a16207; }
+.ht-sc.s2 { background: #fff7ed; color: #c2410c; }
+.ht-sc.s3 { background: #fef2f2; color: var(--red); }
+
+/* หน้ารวมสุขภาพระดับโครงการ */
+.hb-summary { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 12px; }
+.hb-pill { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 4px 11px;
+  background: var(--surface-2); color: var(--text-muted); }
+.hb-pill b { font-weight: 700; }
+.hb-pill.ok { color: var(--green); background: var(--green-soft); }
+.hb-pill.warn { color: #a16207; background: #fefce8; }
+.hb-pill.bad { color: var(--red); background: #fef2f2; }
+.hb-pill.miss { color: #c2410c; background: #fff7ed; }
+.hb-items { font-size: 11.5px; color: var(--text-muted); margin-bottom: 12px; }
+.hb-items span { display: inline-block; background: var(--surface-2); border-radius: 999px; padding: 2px 9px; margin: 0 4px 4px 0; }
+.hb-tbl tbody tr { cursor: pointer; }
+.hb-tbl tbody tr:hover { background: var(--surface-2); }
+.hb-st { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 2px 9px; background: var(--surface-2); color: var(--text-muted); }
+.hb-st.ok { color: var(--green); background: var(--green-soft); }
+.hb-st.warn { color: #a16207; background: #fefce8; }
+.hb-st.bad { color: var(--red); background: #fef2f2; }
+.hb-score { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 8px; }
+.hb-score.ok { color: var(--green); background: var(--green-soft); }
+.hb-score.warn { color: #a16207; background: #fefce8; }
+.hb-score.bad { color: #fff; background: var(--red); }
+.hb-when { font-size: 11px; color: var(--text-muted); margin-left: 5px; }
+.hb-ok { font-size: 11.5px; font-weight: 600; color: var(--green); }
+.hb-miss { font-size: 11.5px; font-weight: 600; color: #c2410c; }
+
+/* Humane endpoint — ตัวแก้เกณฑ์ของ PI */
+.hu-crit { border: 1.5px solid var(--border); border-radius: var(--radius); padding: 11px 13px; margin-bottom: 10px; }
+.hu-crit.auto { border-color: #bfdbfe; background: #f8fafc; }
+.hu-head { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.hu-n { flex: none; width: 21px; height: 21px; border-radius: 6px; background: var(--surface-2);
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--text-muted); }
+.hu-name { flex: 1 1 auto; min-width: 0; padding: 7px 11px; font-family: inherit; font-size: 13px; font-weight: 600;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text); }
+.hu-name:focus { outline: none; border-color: var(--primary); }
+.hu-auto { flex: none; font-size: 10.5px; font-weight: 700; color: var(--primary); background: var(--primary-soft);
+  border-radius: 999px; padding: 2px 9px; }
+.hu-levels { display: flex; flex-direction: column; gap: 5px; }
+.hu-lv { display: flex; align-items: center; gap: 7px; }
+.hu-lvn { flex: none; width: 22px; height: 22px; border-radius: 6px; display: flex; align-items: center;
+  justify-content: center; font-size: 11.5px; font-weight: 700; }
+.hu-lvn.s0 { background: var(--green-soft); color: var(--green); }
+.hu-lvn.s1 { background: #fef9c3; color: #a16207; }
+.hu-lvn.s2 { background: #ffedd5; color: #c2410c; }
+.hu-lvn.s3 { background: #fee2e2; color: var(--red); }
+.hu-lvtext { flex: 1 1 auto; min-width: 0; padding: 6px 10px; font-family: inherit; font-size: 12px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.hu-lvtext:focus { outline: none; border-color: var(--primary); }
+.hu-other { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-muted); margin-top: 8px; }
+
+/* การให้คะแนนใน wizard — ส่วนเพิ่มจากของเดิม */
+.hsc-lvtext { font-size: 11px; color: var(--text); line-height: 1.35; }
+.hsc-row.auto { border-color: #bfdbfe; background: #f8fafc; }
+.hsc-autoval {
+  display: flex; align-items: center; justify-content: center; width: 36px; height: 36px;
+  border-radius: 9px; font-size: 15px; font-weight: 700; color: #fff; background: var(--text-muted);
+}
+.hsc-autoval.s0 { background: var(--green); }
+.hsc-autoval.s1 { background: #fbbf24; color: #78350f; }
+.hsc-autoval.s2 { background: #f97316; }
+.hsc-autoval.s3 { background: var(--red); }
+.hsc-hint { font-size: 10.5px; color: var(--text-muted); }
+.hsc-result { font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 10px; margin-left: 8px; }
+.hsc-result.ok { color: var(--green); background: var(--green-soft); }
+.hsc-result.bad { color: #fff; background: var(--red); }
+.ht-res { font-size: 10.5px; font-weight: 700; border-radius: 999px; padding: 1px 8px; }
+.ht-res.ok { color: var(--green); background: var(--green-soft); }
+.ht-res.bad { color: #fff; background: var(--red); }
+.ht-loss { font-size: 10.5px; color: #c2410c; }
+.hb-res { font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 7px; margin-left: 4px; }
+.hb-res.ok { color: var(--green); background: var(--green-soft); }
+.hb-res.bad { color: #fff; background: var(--red); }
+
+/* เกณฑ์น้ำหนัก — กรอกเป็นจุดตัด % คำอธิบายระบบสร้างให้ */
+.hu-cuts { font-size: 11.5px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.45; }
+.hu-cutrow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.hu-cutrow label { font-size: 12px; color: var(--text); }
+.hu-cut { width: 68px; padding: 6px 9px; font-family: inherit; font-size: 13px; font-weight: 700;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
+.hu-cut:focus { outline: none; border-color: var(--primary); }
+.hu-lvauto { flex: 1 1 auto; min-width: 0; padding: 6px 10px; font-size: 12px;
+  border: 1px dashed var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-muted); }
+.hu-cut.bad { border-color: var(--red); background: #fef2f2; }
+.hu-cutwarn { font-size: 11.5px; font-weight: 600; color: var(--red); margin-top: 6px; }

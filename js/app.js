@@ -8,6 +8,161 @@ const App = {
   route: { name: 'login', projectId: null },
   weighing: false,            // whole-system weighing mode toggle
   wizard: null,               // active weighing wizard state
+  caring: false,              // ACT cage-inspection round
+  careWiz: null,
+
+  // --- HUMANE ENDPOINT SCORING ------------------------------------------
+  // โครงสร้างมาจากเอกสาร "Humane endpoint and record" ของศูนย์ฯ — เกณฑ์ให้คะแนน
+  // ข้อละ 0–3 พร้อมนิยามทุกระดับ, การุณยฆาตเมื่อคะแนนรวมถึงเกณฑ์หรือน้ำหนักลดเกิน %
+  //
+  // แต่ "แต่ละโปรโตคอลมีเกณฑ์ไม่เหมือนกัน" — ชุดข้างล่างนี้จึงเป็นแค่ค่าตั้งต้นที่
+  // กรอกให้ตอนสร้างโครงการ PI แก้ชื่อ แก้นิยามทุกระดับ เพิ่ม/ลบข้อ และตั้งเกณฑ์เองได้
+  // ทั้งหมด สิ่งเดียวที่ระบบตรึงไว้คือมาตรวัด 0–3 เพื่อให้คะแนนเทียบกันได้
+  // Option terms are English verbatim from the paper form — technical, not translated.
+  HEALTH_SCALE: [
+    { v: 0, label: 'ปกติ' }, { v: 1, label: 'เล็กน้อย' },
+    { v: 2, label: 'ปานกลาง' }, { v: 3, label: 'รุนแรง' },
+  ],
+  MIN_HUMANE_CRITERIA: 2,
+  MAX_HUMANE_CRITERIA: 8,
+  // ค่าตั้งต้น (ตามเอกสาร 2569/RT-0007) — แก้ได้ทุกตัวอักษร
+  DEFAULT_HUMANE_CRITERIA: [
+    { name: 'Behavior and Physical appearance', auto: null, other: true,
+      levels: [
+        'Normal appearance, healthy with normal activity',
+        'Lack of grooming, Weakness, loss of appetite, Dehydration',
+        'Rough coat, Lethargy, Isolation, Porphyrin staining (Eye, Nose, Mouth)',
+        'Do not movement, Moribund, Inactivity, Hunched posture (± Clinical signs)',
+      ] },
+    // auto:'weight' — คะแนนข้อนี้ระบบคิดจากน้ำหนักที่ชั่ง จึงเก็บเป็น "จุดตัด %" (cuts)
+    // ไม่ใช่ข้อความอิสระ แล้วสร้างคำอธิบายจากตัวเลขนั้น: ข้อความกับการคำนวณจึงเป็น
+    // ค่าเดียวกันเสมอ ขัดกันไม่ได้ — PI แก้ตัวเลข ระบบแก้ข้อความตาม
+    { name: 'Body weight change', auto: 'weight', other: false, cuts: [10, 20] },
+    { name: 'Grimace scale', auto: null, other: false,
+      levels: ['Grimace score = 0', 'Grimace score = 0.1 – 0.9',
+               'Grimace score = 1.0 – 1.9', 'Grimace score ≥ 2.0'] },
+    // ตั้งต้นแค่ 3 ข้อที่ใช้ร่วมกันได้ทุกโครงการ — เกณฑ์เฉพาะโปรโตคอล (เช่น
+    // Protocol-related parameter) ให้ PI เพิ่มเองตามการทดลองของตัวเอง
+  ],
+  DEFAULT_HUMANE: { totalThreshold: 6, weightLossPct: 20, note: '' },
+  HUMANE_RESULT: {
+    N: { label: 'N', full: 'N — Normal', th: 'ปกติ ทำการทดลองต่อได้', tone: 'ok' },
+    E: { label: 'E', full: 'E — Euthanasia', th: 'ถึงเกณฑ์ต้องทำการุณยฆาต', tone: 'bad' },
+    D: { label: 'D', full: 'D — Death', th: 'พบตาย', tone: 'bad' },
+  },
+
+  humaneCfg(p) {
+    const c = (p && p.request && p.request.humaneScore) || {};
+    const crit = (c.criteria || []).filter(x => x && (x.name || '').trim());
+    return {
+      criteria: crit.length ? crit : this.DEFAULT_HUMANE_CRITERIA,
+      totalThreshold: +c.totalThreshold > 0 ? +c.totalThreshold : this.DEFAULT_HUMANE.totalThreshold,
+      weightLossPct: +c.weightLossPct > 0 ? +c.weightLossPct : this.DEFAULT_HUMANE.weightLossPct,
+      note: c.note || '',
+    };
+  },
+  humaneCriteria(p) { return this.humaneCfg(p).criteria; },
+  humaneMax(p) { return this.humaneCriteria(p).length * 3; },
+  // โครงการนี้ให้ระบบคิดคะแนนน้ำหนักให้หรือไม่ (ขึ้นกับว่า PI เก็บข้อ auto:'weight' ไว้)
+  hasAutoWeight(p) { return this.humaneCriteria(p).some(c => c.auto === 'weight'); },
+
+  // น้ำหนักสูงสุดที่สัตว์ตัวนี้เคยทำได้ — ใช้เป็นฐานคิด % ที่ลด (เข้มงวดกว่าน้ำหนัก
+  // แรกเข้า: จับการทรุดโทรมได้แม้หนูจะโตมาก่อนแล้วค่อยลด)
+  peakWeight(mouse) {
+    const w = (mouse.weights || []).map(x => x.weight).filter(v => v != null);
+    return w.length ? Math.max(...w) : null;
+  },
+  // % ที่ลดจากจุดสูงสุด — `at` = น้ำหนักที่กำลังจะบันทึก (ยังไม่เข้า weights)
+  weightLossPct(mouse, at = null) {
+    const peak = this.peakWeight(mouse);
+    const cur = at != null ? at : Data.latestWeight(mouse);
+    if (peak == null || cur == null || peak <= 0) return null;
+    return Math.max(0, Math.round(((peak - cur) / peak) * 1000) / 10);
+  },
+  DEFAULT_WEIGHT_CUTS: [10, 20],
+  weightCuts(c) {
+    const cu = (c && c.cuts) || this.DEFAULT_WEIGHT_CUTS;
+    const a = +cu[0], b = +cu[1];
+    return [Number.isFinite(a) && a > 0 ? a : 10, Number.isFinite(b) && b > a ? b : Math.max(20, a + 1)];
+  },
+  // คำอธิบาย 4 ระดับของเกณฑ์น้ำหนัก — สร้างจากจุดตัด ไม่ได้พิมพ์เอง
+  weightLevels(c) {
+    const [a, b] = this.weightCuts(c);
+    return ['Normal or Increase', `< ${a}% weight loss`, `${a} – ${b}% weight loss`, `> ${b}% weight loss`];
+  },
+  // คำอธิบายของเกณฑ์ข้อหนึ่ง — ข้อ auto ใช้ตัวที่สร้างจากจุดตัดเสมอ
+  critLevels(c) { return c.auto === 'weight' ? this.weightLevels(c) : (c.levels || ['', '', '', '']); },
+  weightScore(lossPct, c) {
+    if (lossPct == null) return null;
+    const [a, b] = this.weightCuts(c);
+    if (lossPct <= 0) return 0;
+    if (lossPct < a) return 1;
+    if (lossPct <= b) return 2;
+    return 3;
+  },
+  // ผลการประเมิน — การุณยฆาตเมื่อ "น้ำหนักลดถึง %" หรือ "คะแนนรวมถึงเกณฑ์" สองทางแยกกัน
+  humaneResult(p, total, lossPct) {
+    const cfg = this.humaneCfg(p);
+    if (this.hasAutoWeight(p) && lossPct != null && lossPct >= cfg.weightLossPct) return 'E';
+    if (total != null && total >= cfg.totalThreshold) return 'E';
+    return 'N';
+  },
+
+  // --- HEALTH TIMELINE ------------------------------------------------------
+  // One append-only history per animal. `flag` stays what it always was — the
+  // marker for "nobody has looked at this yet" — but it gets CLEARED when the vet
+  // decides, which used to destroy the observation with it. The timeline is the
+  // record: it is never cleared, so "Sci saw ขนหยอง on the 3rd, vet checked on the
+  // 4th and called it normal" survives, and so does "this animal was looked at
+  // every day for two weeks and was fine".
+  HEALTH_SOURCE: {
+    weigh:    { icon: '🩺', label: 'ตรวจก่อนชั่งน้ำหนัก' },
+    flag:     { icon: '⚠️', label: 'แจ้งผิดปกติ' },
+    cagecare: { icon: '🧹', label: 'พบตอนตรวจดูแลกรง' },
+    vet:      { icon: '🩹', label: 'สัตวแพทย์' },
+    humane:   { icon: '🛑', label: 'สั่งการุณยฆาต' },
+    death:    { icon: '✝',  label: 'บันทึกการตาย' },
+    necropsy: { icon: '🔬', label: 'ผลชันสูตร' },
+  },
+  HEALTH_STATUS: {
+    normal:   { label: 'ปกติ',        tone: 'ok' },
+    abnormal: { label: 'ผิดปกติ',      tone: 'warn' },
+    treating: { label: 'กำลังรักษา',   tone: 'warn' },
+    healed:   { label: 'หายดี',        tone: 'ok' },
+    critical: { label: 'วิกฤต',        tone: 'bad' },
+    dead:     { label: 'ตาย',          tone: 'bad' },
+  },
+  logHealth(mouse, entry) {
+    if (!mouse) return;
+    mouse.health = mouse.health || [];
+    const now = new Date();
+    mouse.health.push({
+      date: entry.date || todayISO(),
+      time: entry.time || `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+      by: entry.by || this.user.name,
+      source: entry.source, status: entry.status,
+      note: entry.note || '',
+      scores: entry.scores || null, total: entry.total ?? null, max: entry.max ?? null,
+      result: entry.result || null,        // N / E / D ตามแบบฟอร์ม
+      lossPct: entry.lossPct ?? null,      // % ที่ลดจากน้ำหนักสูงสุด
+    });
+  },
+  // สถานะสุขภาพ "ตอนนี้" ของหนูหนึ่งตัว — ใช้ทั้งหน้ารวมและการ์ดรายตัว
+  healthNow(mouse) {
+    if (!mouse.alive) return 'dead';
+    if (mouse.humaneOrder) return 'critical';
+    if (mouse.careOpen) return 'treating';
+    if (mouse.flagOpen) return 'abnormal';
+    const last = (mouse.health || []).slice(-1)[0];
+    return last && last.status === 'healed' ? 'healed' : 'normal';
+  },
+  // การตรวจให้คะแนนครั้งล่าสุด (เฉพาะที่มีคะแนน)
+  lastScored(mouse) {
+    return [...(mouse.health || [])].reverse().find(h => h.total != null) || null;
+  },
+  dosing: false,              // AHS dosing round
+  dosePick: false,            // …picking several cages off the rack layout
+  doseSel: new Set(),         // …the cage ids picked
 
   // --- Official lab forms (ศูนย์สัตว์ทดลอง มช.) -----------------------------
   // Sick Case Report (LA Guide-AF 11.1-02): clinical signs grouped by system.
@@ -254,7 +409,7 @@ const App = {
       if (click('.modal-foot [id$="Cancel"], .modal-foot [id^="cancel"]')) return;
       if (click('#wizClose')) return;      // weighing wizard: asks before discarding
       if (click('#closeModal')) return;    // standard ✕
-      if (!this.wizard) this.closeModal();
+      if (!this.wizard && !this.careWiz) this.closeModal();
       return;
     }
 
@@ -406,7 +561,7 @@ const App = {
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
     if (name === 'supply' || name === 'finance') return name;
-    if (['projects', 'dashboard', 'reports', 'create', 'build', 'cagecare', 'dosing', 'ochreport'].includes(name)) return 'projects';
+    if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport'].includes(name)) return 'projects';
     return '';
   },
   // where to land after login / when a route is not permitted
@@ -441,8 +596,6 @@ const App = {
       case 'supply':   this.go('supply'); break;
       case 'finance':  this.go('finance'); break;
       case 'build':
-      case 'cagecare':
-      case 'dosing':
       case 'ochreport': this.go(name, ds.projectId || this.route.projectId); break;
       case 'logout':   this.go('login'); break;
     }
@@ -452,6 +605,11 @@ const App = {
     this.route = { name, projectId };
     this.weighing = false;
     this.editing = false;
+    this.caring = false;
+    this.careWiz = null;
+    this.dosing = false;
+    this.dosePick = false;
+    this.doseSel = new Set();
     window.scrollTo(0, 0);
     if (name === 'login') return this.renderLogin();
     if (name === 'projects') return this.renderProjects();
@@ -481,10 +639,6 @@ const App = {
   // Per-project screens reserved for the next phase. Same idea as MODULES, but
   // these hang off a project, so they carry a projectId and a breadcrumb.
   PROJECT_MODULES: {
-    cagecare: { icon: '🧹', title: 'บันทึกการดูแลกรง', cap: 'cageCare',
-                desc: 'บันทึกรายกรงว่าวันนั้นทำอะไรไปบ้าง — เปลี่ยน/เติมวัสดุรองนอน ทำความสะอาด' },
-    dosing:   { icon: '💉', title: 'การให้สารทดสอบ',   cap: 'dosing',
-                desc: 'ชนิดสาร/ยา ปริมาณ วิธีให้ และหัตถการตามโปรโตคอลการทดลอง' },
     ochreport:{ icon: '🦺', title: 'รายงานความปลอดภัย', cap: 'ochReport',
                 desc: 'ตรวจหน้างานตามมาตรฐานชีวอนามัย และออกรายงานเมื่อพบสิ่งผิดปกติ' },
   },
@@ -608,6 +762,8 @@ const App = {
     build:    { icon: '🏗️', tone: 'ok' },
     member:   { icon: '👥', tone: 'info' },
     weigh:    { icon: '⚖️', tone: 'info' },
+    care:     { icon: '🧹', tone: 'info' },
+    dose:     { icon: '💉', tone: 'warn' },
     intake:   { icon: '🐭', tone: 'info' },
     group:    { icon: '💊', tone: 'info' },
     flag:     { icon: '⚠️', tone: 'warn' },
@@ -1042,6 +1198,16 @@ const App = {
       groups: (req.groups && req.groups.length ? req.groups : blank.groups)
         .map((g, i) => ({ name: g.name, isControl: g.isControl, plannedMice: g.plannedMice ?? '', color: g.color || this.GROUP_PALETTE[i % this.GROUP_PALETTE.length] })),
       plan: (req.plan || []).map(x => ({ _id: this.uid(), date: x.date || '', detail: x.detail || '' })),
+      humane: {
+        criteria: ((req.humaneScore && req.humaneScore.criteria) || []).length
+          ? req.humaneScore.criteria.map(c => ({ ...c,
+              levels: c.levels ? [...c.levels] : ['', '', '', ''], cuts: c.cuts ? [...c.cuts] : undefined }))
+          : this.DEFAULT_HUMANE_CRITERIA.map(c => ({ ...c,
+              levels: c.levels ? [...c.levels] : ['', '', '', ''], cuts: c.cuts ? [...c.cuts] : undefined })),
+        totalThreshold: (req.humaneScore && req.humaneScore.totalThreshold) ?? 8,
+        weightLossPct: (req.humaneScore && req.humaneScore.weightLossPct) ?? 20,
+        note: (req.humaneScore && req.humaneScore.note) || '',
+      },
       diagram: req.diagram || null,
       aup: req.aup || null,
       approvalDoc: req.approvalDoc || null,
@@ -1305,6 +1471,12 @@ const App = {
         { name: 'Treatment-1', color: '#2563eb', isControl: false, plannedMice: '' },
       ],
       plan: [],
+      // เกณฑ์ Humane endpoint — เริ่มจากชุดมาตรฐาน แก้ได้ทั้งหมด
+      humane: {
+        criteria: this.DEFAULT_HUMANE_CRITERIA.map(c => ({ ...c,
+          levels: c.levels ? [...c.levels] : ['', '', '', ''], cuts: c.cuts ? [...c.cuts] : undefined })),
+        ...this.DEFAULT_HUMANE,
+      },
       diagram: null, aup: null, approvalDoc: null,
       extraDocs: [],      // เอกสารเพิ่มเติมที่ PI แนบเองได้ไม่จำกัด [{_id,label,file}]
       appointments: [],
@@ -1423,6 +1595,32 @@ const App = {
           </div>
 
           <div class="form-card">
+            <div class="form-card-title">เกณฑ์หยุดการทดลอง (Humane endpoint)
+              <button class="btn btn-ghost btn-sm" id="cpAddHumane" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มเกณฑ์</button>
+            </div>
+            <p class="empty-note" style="margin-top:0">
+              นักวิทยาศาสตร์ให้คะแนนทุกเกณฑ์ <b>ก่อนชั่งน้ำหนักหนูแต่ละตัว</b> (ตามปกติคือรอบละสัปดาห์)
+              · ข้อละ <b>0–3</b> พร้อมนิยามแต่ละระดับ
+              · ชุดที่ให้มาเป็นค่าตั้งต้น <b>แก้ชื่อ แก้นิยาม เพิ่ม/ลบข้อได้ตามโปรโตคอลของโครงการ</b></p>
+            <div id="cpHumane"></div>
+            <div class="hs-thresh">
+              <label for="cpHumaneTh">การุณยฆาตเมื่อคะแนนรวม ≥</label>
+              <input type="number" id="cpHumaneTh" min="1" step="1" value="${d.humane.totalThreshold}">
+              <span class="hs-max">จากคะแนนเต็ม <b id="cpHumaneMax">—</b></span>
+            </div>
+            <div class="hs-thresh" id="cpWlRow">
+              <label for="cpHumaneWl">หรือเมื่อน้ำหนักลดจากน้ำหนักสูงสุด ≥</label>
+              <input type="number" id="cpHumaneWl" min="1" max="100" step="1" value="${d.humane.weightLossPct}">
+              <span class="hs-max">% (ระบบคิดให้เองจากน้ำหนักที่ชั่ง)</span>
+            </div>
+            <div class="field" style="margin-top:10px">
+              <label for="cpHumaneNote">หมายเหตุเพิ่มเติมของเกณฑ์ (ไม่บังคับ)</label>
+              <input type="text" id="cpHumaneNote" value="${esc(d.humane.note)}"
+                     placeholder="เช่น < 140 mg/dl of blood glucose in 2-hour after glucose loading">
+            </div>
+          </div>
+
+          <div class="form-card">
             <div class="form-card-title">แผนการใช้สัตว์ทดลอง
               <button class="btn btn-ghost btn-sm" id="cpAddPlan" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มรายการ</button>
             </div>
@@ -1463,6 +1661,7 @@ const App = {
     ['cpMale', 'cpFemale'].forEach(id => this.el(id).addEventListener('input', () => this.updateReqTotals()));
     this.renderReqDiets();
     this.renderReqGroups();
+    this.renderReqHumane();
     this.renderReqPlan();
     this.renderReqExtraDocs();
     this.renderReqPeople();
@@ -1500,11 +1699,19 @@ const App = {
       this.renderReqGroups();
     };
     this.el('cpAddPlan').onclick = () => { this.draft.plan.push({ _id: this.uid(), date: '', detail: '' }); this.renderReqPlan(true); };
+    this.el('cpAddHumane').onclick = () => {
+      this.captureReqHumane();
+      if (this.draft.humane.criteria.length >= this.MAX_HUMANE_CRITERIA) return;
+      this.draft.humane.criteria.push({ name: '', auto: null, other: false, levels: ['', '', '', ''] });
+      this.renderReqHumane(true);
+    };
+    ['cpHumaneTh', 'cpHumaneWl', 'cpHumaneNote'].forEach(id =>
+      this.el(id).addEventListener('input', () => this.captureReqHumane()));
     this.el('cpAddDoc').onclick = () => { this.draft.extraDocs.push({ _id: this.uid(), label: '', file: null }); this.renderReqExtraDocs(); };
     this.el('cpAddPerson').onclick = () => { this.captureReqPeople(); this.draft.appointments.push({ role: 'COPI', userId: '', name: '' }); this.renderReqPeople(); };
 
     // file pickers + clears — capture everything first, the whole page re-renders
-    const captureAll = () => { this.captureReqMeta(); this.captureReqDiets(); this.captureReqGroups(); this.captureReqPeople(); };
+    const captureAll = () => { this.captureReqMeta(); this.captureReqDiets(); this.captureReqGroups(); this.captureReqHumane(); this.captureReqPeople(); };
     // extraDocs labels are written to the draft on input, so nothing to capture there
     this.el('root').querySelectorAll('[data-file]').forEach(inp => {
       inp.onchange = (e) => {
@@ -1654,6 +1861,89 @@ const App = {
   sortReqPlan() {
     this.draft.plan.sort((a, b) => (a.date || '9999-99-99').localeCompare(b.date || '9999-99-99'));
   },
+  // ---- เกณฑ์ Humane endpoint ในฟอร์มคำขอของ PI ----
+  renderReqHumane(focusLast = false) {
+    const d = this.draft;
+    d.humane = d.humane || { criteria: [], ...this.DEFAULT_HUMANE };
+    const box = this.el('cpHumane');
+    if (!box) return;
+    box.innerHTML = d.humane.criteria.map((c, i) => `
+      <div class="hu-crit ${c.auto ? 'auto' : ''}" data-i="${i}">
+        <div class="hu-head">
+          <span class="hu-n">${i + 1}</span>
+          <input class="hu-name" type="text" data-i="${i}" value="${this.esc(c.name)}"
+                 placeholder="ชื่อเกณฑ์ เช่น Behavior and Physical appearance">
+          ${c.auto === 'weight' ? '<span class="hu-auto" title="ระบบคิดคะแนนให้จากน้ำหนักที่ชั่ง">⚙️ ระบบคิดให้</span>' : ''}
+          <button type="button" class="mini-btn danger hu-del" data-i="${i}"
+                  ${d.humane.criteria.length <= this.MIN_HUMANE_CRITERIA ? 'disabled' : ''}>ลบ</button>
+        </div>
+        <div class="hu-levels">
+          ${c.auto === 'weight' ? (() => {
+            const raw = c.cuts || this.DEFAULT_WEIGHT_CUTS;
+            const ca = raw[0], cb = raw[1];
+            const bad = !(Math.round(+ca) >= 1 && Math.round(+cb) > Math.round(+ca) && Math.round(+cb) <= 100);
+            return `
+            <div class="hu-cuts">
+              <span>ระบบคิดคะแนนจาก % ที่ลดจากน้ำหนักสูงสุด — กำหนดจุดตัดเป็นตัวเลข
+                    คำอธิบายจะถูกสร้างตามให้เอง ข้อความกับการคำนวณจึงตรงกันเสมอ</span>
+              <div class="hu-cutrow">
+                <label>ลดน้อยกว่า</label>
+                <input class="hu-cut ${bad ? 'bad' : ''}" type="number" min="1" max="100" step="1" data-i="${i}" data-c="0" value="${this.esc(ca)}">
+                <label>% = 1 คะแนน · ถึง</label>
+                <input class="hu-cut ${bad ? 'bad' : ''}" type="number" min="1" max="100" step="1" data-i="${i}" data-c="1" value="${this.esc(cb)}">
+                <label>% = 2 · เกินกว่านั้น = 3</label>
+              </div>
+              ${bad ? '<div class="hu-cutwarn">ตัวเลขที่สองต้องมากกว่าตัวแรก และไม่เกิน 100 — คำอธิบายด้านล่างยังไม่ถูกต้องจนกว่าจะแก้</div>' : ''}
+            </div>
+            ${this.weightLevels(c).map((lv, k) => `
+              <div class="hu-lv">
+                <span class="hu-lvn s${k}">${k}</span>
+                <span class="hu-lvauto">${this.esc(lv)}</span>
+              </div>`).join('')}`;
+          })() : c.levels.map((lv, k) => `
+            <div class="hu-lv">
+              <span class="hu-lvn s${k}">${k}</span>
+              <input class="hu-lvtext" type="text" data-i="${i}" data-k="${k}" value="${this.esc(lv)}"
+                     placeholder="อาการที่ถือว่าได้ ${k} คะแนน">
+            </div>`).join('')}
+        </div>
+        ${c.other ? '<label class="hu-other"><input type="checkbox" class="hu-oth" data-i="${i}" checked> มีช่อง Other ให้ระบุเพิ่ม</label>'.replace('${i}', i) : `<label class="hu-other"><input type="checkbox" class="hu-oth" data-i="${i}"> มีช่อง Other ให้ระบุเพิ่ม</label>`}
+      </div>`).join('');
+
+    if (this.el('cpHumaneMax')) this.el('cpHumaneMax').textContent = `${d.humane.criteria.length * 3} คะแนน`;
+    const add = this.el('cpAddHumane');
+    if (add) add.disabled = d.humane.criteria.length >= this.MAX_HUMANE_CRITERIA;
+    // แถวเกณฑ์น้ำหนักโผล่เฉพาะเมื่อยังมีข้อที่ให้ระบบคิดน้ำหนักอยู่
+    const wl = this.el('cpWlRow');
+    if (wl) wl.style.display = d.humane.criteria.some(c => c.auto === 'weight') ? '' : 'none';
+
+    box.querySelectorAll('.hu-name, .hu-lvtext, .hu-oth').forEach(i =>
+      i.addEventListener(i.type === 'checkbox' ? 'change' : 'input', () => this.captureReqHumane()));
+    // แก้จุดตัดแล้ววาดใหม่ทันที เพื่อให้เห็นคำอธิบายที่ระบบสร้างเปลี่ยนตาม
+    box.querySelectorAll('.hu-cut').forEach(i => i.addEventListener('change', () => {
+      this.captureReqHumane(); this.renderReqHumane();
+    }));
+    box.querySelectorAll('.hu-del').forEach(b => b.onclick = () => {
+      this.captureReqHumane(); d.humane.criteria.splice(+b.dataset.i, 1); this.renderReqHumane();
+    });
+    if (focusLast) { const last = box.querySelector('.hu-crit:last-child .hu-name'); if (last) last.focus(); }
+  },
+  captureReqHumane() {
+    const d = this.draft, box = this.el('cpHumane');
+    if (!box || !d.humane) return;
+    box.querySelectorAll('.hu-name').forEach(i => { d.humane.criteria[+i.dataset.i].name = i.value; });
+    box.querySelectorAll('.hu-lvtext').forEach(i => { d.humane.criteria[+i.dataset.i].levels[+i.dataset.k] = i.value; });
+    box.querySelectorAll('.hu-oth').forEach(i => { d.humane.criteria[+i.dataset.i].other = i.checked; });
+    box.querySelectorAll('.hu-cut').forEach(i => {
+      const c = d.humane.criteria[+i.dataset.i];
+      c.cuts = c.cuts ? [...c.cuts] : [...this.DEFAULT_WEIGHT_CUTS];
+      c.cuts[+i.dataset.c] = i.value;
+    });
+    const th = this.el('cpHumaneTh'); if (th) d.humane.totalThreshold = th.value;
+    const wl = this.el('cpHumaneWl'); if (wl) d.humane.weightLossPct = wl.value;
+    const nt = this.el('cpHumaneNote'); if (nt) d.humane.note = nt.value;
+  },
+
   renderReqPlan(focusLast = false) {
     this.sortReqPlan();
     const esc = v => (v || '').replace(/"/g, '&quot;');
@@ -1808,7 +2098,7 @@ const App = {
       id: 'M' + Math.random().toString(36).slice(2, 9),
       code, sex, groupNo, cageNo,
       weights: [{ date: todayISO(), weight: weight != null ? weight : Math.round((25 + rand(-2, 2)) * 10) / 10 }],
-      remark: '', treatments: [], excluded: false, alive: true, death: null, careOpen: false, flagOpen: false, flag: null, humaneOrder: null, necropsy: null,
+      remark: '', treatments: [], excluded: false, alive: true, death: null, careOpen: false, flagOpen: false, flag: null, humaneOrder: null, necropsy: null, doses: [], health: [],
     };
   },
 
@@ -1818,6 +2108,7 @@ const App = {
     this.captureReqMeta();
     this.captureReqDiets();
     this.captureReqGroups();
+    this.captureReqHumane();
     this.captureReqPeople();
     const d = this.draft, m = d.meta;
     const name = (m.name || '').trim();
@@ -1841,6 +2132,39 @@ const App = {
     if (d.plan.some(x => !x.date)) { this.toast('กรุณาเลือกวันที่ให้ครบทุกรายการในแผนการใช้สัตว์ทดลอง'); this.renderReqPlan(); return; }
     if (d.plan.some(x => !(x.detail || '').trim())) { this.toast('กรุณากรอกรายละเอียดให้ครบทุกรายการในแผนการใช้สัตว์ทดลอง'); this.renderReqPlan(); return; }
     this.sortReqPlan();
+    // เกณฑ์ตรวจสุขภาพ — อย่างน้อย MIN ข้อ ตั้งชื่อครบ และเกณฑ์รวมต้องอยู่ในช่วงที่เป็นไปได้
+    const hu = d.humane;
+    hu.criteria = (hu.criteria || []).filter(c => (c.name || '').trim() || c.levels.some(l => (l || '').trim()));
+    if (hu.criteria.length < this.MIN_HUMANE_CRITERIA) {
+      this.toast(`เกณฑ์ Humane endpoint ต้องมีอย่างน้อย ${this.MIN_HUMANE_CRITERIA} ข้อ`); this.renderReqHumane(); return;
+    }
+    if (hu.criteria.some(c => !(c.name || '').trim())) {
+      this.toast('กรุณาตั้งชื่อเกณฑ์ให้ครบทุกข้อ'); this.renderReqHumane(); return;
+    }
+    const blankLv = hu.criteria.find(c => !c.auto && (c.levels || []).some(l => !(l || '').trim()));
+    if (blankLv) {
+      this.toast(`กรุณากรอกนิยามให้ครบทั้ง 4 ระดับของ "${blankLv.name.trim()}"`); this.renderReqHumane(); return;
+    }
+    const badCut = hu.criteria.find(c => {
+      if (c.auto !== 'weight') return false;
+      const a = Math.round(+(c.cuts || [])[0]), b = Math.round(+(c.cuts || [])[1]);
+      return !Number.isFinite(a) || !Number.isFinite(b) || a < 1 || b <= a || b > 100;
+    });
+    if (badCut) {
+      this.toast('จุดตัด % ของเกณฑ์น้ำหนักต้องเรียงจากน้อยไปมาก และอยู่ระหว่าง 1–100');
+      this.renderReqHumane(); return;
+    }
+    const hMax = hu.criteria.length * 3;
+    const hTh = Math.round(+hu.totalThreshold);
+    if (!Number.isFinite(hTh) || hTh < 1 || hTh > hMax) {
+      this.el('cpHumaneTh')?.focus();
+      this.toast(`เกณฑ์คะแนนรวมต้องอยู่ระหว่าง 1 ถึง ${hMax}`); return;
+    }
+    const hWl = Math.round(+hu.weightLossPct);
+    if (hu.criteria.some(c => c.auto === 'weight') && (!Number.isFinite(hWl) || hWl < 1 || hWl > 100)) {
+      this.el('cpHumaneWl')?.focus();
+      this.toast('เกณฑ์น้ำหนักที่ลดต้องอยู่ระหว่าง 1–100%'); return;
+    }
     // validate requested appointments — an existing user must be picked, or a new
     // account must have a full name + a valid, unique email (AV adds the password)
     for (const a of d.appointments) {
@@ -1869,6 +2193,13 @@ const App = {
       diets: d.diets.map(x => ({ name: x.name.trim(), isDefault: x.isDefault, color: x.color, plannedMice: +x.plannedMice || 0 })),
       groups: d.groups.map(g => ({ name: g.name.trim(), isControl: g.isControl, color: g.color, plannedMice: +g.plannedMice || 0 })),
       plan: d.plan.map(x => ({ date: x.date, detail: x.detail.trim() })),
+      humaneScore: {
+        criteria: hu.criteria.map(c => c.auto === 'weight'
+          ? { name: c.name.trim(), auto: 'weight', other: !!c.other,
+              cuts: [Math.round(+c.cuts[0]), Math.round(+c.cuts[1])] }
+          : { name: c.name.trim(), auto: null, other: !!c.other, levels: c.levels.map(l => l.trim()) }),
+        totalThreshold: hTh, weightLossPct: hWl, note: (hu.note || '').trim(),
+      },
       diagram: d.diagram, aup: d.aup, approvalDoc: d.approvalDoc,
       extraDocs: (d.extraDocs || []).filter(x => x.file).map(x => ({ label: (x.label || '').trim() || x.file.name, file: x.file })),
       appointments: d.appointments.map(a => a.userId === '__new__'
@@ -2416,6 +2747,7 @@ const App = {
           rackNo: shelfRacks[s],
           shelf: s, position: ci + 1, mice: [],
           water: { remaining: 300, added: null, consumed: 0 }, food: { remaining: 100, added: null, consumed: 0 },
+          careLog: [],
           status: 'pending', lastRecordDate: todayISO(),
         });
       });
@@ -2718,11 +3050,17 @@ const App = {
     return parts.join(' · ');
   },
   // full physical location of a cage: ห้อง · แร็ค · ชั้น · กรง
+  // the shelf a cage sits on. The project's shelfNames map is the source of truth —
+  // cage.shelfLabel is only a cached copy and seeded cages may not carry one at all,
+  // so never read it directly.
+  shelfNameOf(p, cage) {
+    return (p.shelfNames && p.shelfNames[cage.shelf]) || cage.shelfLabel || cage.shelf || '—';
+  },
   cageLocation(p, cage, withCage = true) {
     const parts = [];
     const fac = this.facilityLine(p);
     if (fac) parts.push(fac);
-    const shelf = (p.shelfNames && p.shelfNames[cage.shelf]) || cage.shelfLabel || cage.shelf;
+    const shelf = this.shelfNameOf(p, cage);
     if (shelf) parts.push(`ชั้น ${shelf}`);
     if (withCage) parts.push(`กรง ${cage.code}`);
     return parts.join(' · ');
@@ -3125,12 +3463,18 @@ const App = {
     // weighing needs an operational project; cage/member/doc editing stays available to PI
     // on waiting/rejected so they can prepare/fix before (re)submitting.
     const canWeigh = operational && this.can('weigh', p);
+    // ACT ตรวจดูแลกรงได้เมื่อมีหนูอยู่จริงแล้ว (กรงว่างไม่มีอะไรให้ตรวจ)
+    const canCare = operational && this.can('cageCare', p) && !this.isEmptyProject(p);
+    // AHS ให้สารทดสอบรายตัว — ต้องมีหนูอยู่แล้วเช่นกัน
+    const canDose = operational && this.can('dosing', p) && !this.isEmptyProject(p);
     const canEdit = !closed && this.can('editProject', p);
     const canMembers = this.can('manageMembers', p);
     // การชั่งครั้งแรก: Sci ชั่งหนูแล้วนำเข้ากรงที่ยังว่าง — ทำได้ตราบใดที่ยังมีกรงว่าง
     const emptyCages = p.cages.filter(c => !c.mice.length);
     const canIntake = canWeigh && emptyCages.length > 0;
     if (this.editing && !canEdit) this.editing = false;
+    if (this.caring && !canCare) this.caring = false;
+    if (this.dosing && !canDose) this.dosing = false;
     if (this.weighing && !canWeigh) this.weighing = false;
     if (this.intake && !canIntake) this.intake = false;
 
@@ -3190,6 +3534,60 @@ const App = {
            <button class="btn btn-green" id="finishWeighing" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้นรอบชั่งวันนี้</button>
          </div>`;
         })()
+      : this.caring
+      ? (() => {
+          const total = p.cages.filter(c => c.mice.length).length;
+          const done = this.careSession ? this.careSession.done.size : 0;
+          return `<div class="weighing-banner care">
+           <span>🧹 <b>โหมดตรวจดูแลกรง</b> — แตะกรงเพื่อตรวจ Animals · Feed · Water · Cage (กรงสีเขียว = ตรวจแล้ว)</span>
+           <span class="weigh-progress${done >= total && total ? ' full' : ''}">ตรวจแล้ว ${done} / ${total} กรง</span>
+           <span class="spacer"></span>
+           <button class="btn" id="exitCare">ออกจากโหมด</button>
+           <button class="btn btn-green" id="finishCare" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้นรอบตรวจวันนี้</button>
+         </div>`;
+        })()
+      : this.dosing
+      ? (() => {
+          const mice = p.cages.flatMap(c => c.mice.filter(m => m.alive));
+          const done = this.doseSession ? this.doseSession.done.size : 0;
+          // เลือกหลายกรงจากผัง — ชิปกลุ่มทดสอบเป็นแค่ทางลัดในการเลือก ไม่ใช่คนละกลไก
+          if (this.dosePick) {
+            const picked = [...(this.doseSel || [])];
+            const nMice = picked.reduce((s, id) => {
+              const c = p.cages.find(x => x.id === id);
+              return s + (c ? c.mice.filter(m => m.alive).length : 0);
+            }, 0);
+            const chips = (p.groups || []).map(g => {
+              const cages = p.cages.filter(c => c.groupId === g.id && c.mice.some(m => m.alive));
+              if (!cages.length) return '';
+              const all = cages.every(c => this.doseSel.has(c.id));
+              return `<button class="btn btn-sm gchip ${all ? 'on' : ''}" data-gpick="${g.id}"
+                       style="--gc:${g.color}">${g.name} <b>${cages.length}</b></button>`;
+            }).join('');
+            return `<div class="weighing-banner dose col">
+             <div class="eb-top">
+               <span>☑️ <b>เลือกหลายกรง</b> — แตะกรงบนผังเพื่อเลือก แล้วบันทึกครั้งเดียวให้ทุกตัวที่เลือก</span>
+               <span class="weigh-progress${nMice ? ' full' : ''}">เลือกแล้ว ${picked.length} กรง · ${nMice} ตัว</span>
+               <span class="spacer" style="flex:1"></span>
+               <button class="btn" id="cancelPick">ยกเลิก</button>
+               <button class="btn btn-primary" id="doseSelected" ${nMice ? '' : 'disabled'}>บันทึก ${nMice} ตัว →</button>
+             </div>
+             <div class="eb-modes">
+               <span class="gchip-label">เลือกทั้งกลุ่ม:</span>${chips}
+               <button class="btn btn-sm" id="pickNone">ล้างที่เลือก</button>
+             </div>
+           </div>`;
+          }
+          return `<div class="weighing-banner dose">
+           <span>💉 <b>โหมดให้สารทดสอบ</b> — แตะกรงเพื่อเลือกหนูในกรงนั้น</span>
+           <span class="weigh-progress${done >= mice.length && mice.length ? ' full' : ''}">บันทึกแล้ว ${done} / ${mice.length} ตัว</span>
+           <span class="spacer"></span>
+           <button class="btn" id="doseRepeat">🔁 ทำเหมือนรอบที่แล้ว</button>
+           <button class="btn" id="startPick">☑️ เลือกหลายกรง</button>
+           <button class="btn" id="exitDose">ออกจากโหมด</button>
+           <button class="btn btn-green" id="finishDose" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้นรอบนี้</button>
+         </div>`;
+        })()
       : this.editing
       ? `<div class="edit-banner col">
            <div class="eb-top">
@@ -3206,12 +3604,13 @@ const App = {
          </div>`
       : `<div class="mode-bar">
            <span style="flex:1"></span>
+           <button class="btn" id="healthBoard">🩺 สุขภาพสัตว์</button>
            <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
            <button class="btn" id="deathReport">✝ รายงานการตาย</button>
            ${this.can('cageCard', p) && p.cages.length ? `<button class="btn" id="cageCards">🏷️ ใบติดหน้ากรง</button>` : ''}
            ${this.can('viewReports', p) ? `<button class="btn" data-nav="reports">📈 กราฟ</button>` : ''}
-           ${operational && this.can('cageCare', p) ? `<button class="btn" data-nav="cagecare" data-project-id="${p.id}">🧹 ดูแลกรง</button>` : ''}
-           ${operational && this.can('dosing', p) ? `<button class="btn" data-nav="dosing" data-project-id="${p.id}">💉 ให้สารทดสอบ</button>` : ''}
+           ${canCare ? `<button class="btn btn-primary" id="startCare">🧹 ตรวจดูแลกรง</button>` : ''}
+           ${canDose ? `<button class="btn btn-primary" id="startDose">💉 ให้สารทดสอบ</button>` : ''}
            ${canIntake ? `<button class="btn btn-primary" id="startIntake">🐭 รับหนูเข้าโครงการ (${emptyCages.length} กรงว่าง)</button>` : ''}
            ${canWeigh && !this.isEmptyProject(p) ? `<button class="btn btn-primary" id="startWeighing">⚖️ ชั่งน้ำหนัก</button>` : ''}
          </div>`;
@@ -3244,15 +3643,117 @@ const App = {
       </div>`
     );
 
-    if (canWeigh && !this.isEmptyProject(p) && !this.weighing && !this.editing && !this.intake) {
+    if (canWeigh && !this.isEmptyProject(p) && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
       this.el('startWeighing').addEventListener('click', () => {
         this.weighing = true;
         this.weighSession = { done: new Set() };   // no cage weighed yet this round
         this.renderDashboard();
       });
     }
-    if (canIntake && !this.weighing && !this.editing && !this.intake) {
+    if (canIntake && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
       this.el('startIntake').addEventListener('click', () => { this.intake = true; this.renderDashboard(); });
+    }
+    if (canCare && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
+      this.el('startCare').addEventListener('click', () => {
+        this.caring = true;
+        this.careSession = { done: new Set() };
+        this.renderDashboard();
+      });
+    }
+    if (canDose && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
+      this.el('startDose').addEventListener('click', () => {
+        this.dosing = true;
+        this.doseSession = { done: new Set() };
+        this.renderDashboard();
+      });
+    }
+    if (this.dosing && this.dosePick) {
+      this.el('cancelPick').onclick = () => { this.dosePick = false; this.doseSel = new Set(); this.renderDashboard(); };
+      this.el('pickNone').onclick = () => { this.doseSel = new Set(); this.renderDashboard(); };
+      document.querySelectorAll('[data-gpick]').forEach(b => b.onclick = () => {
+        const cages = p.cages.filter(c => c.groupId === b.dataset.gpick && c.mice.some(m => m.alive));
+        const all = cages.every(c => this.doseSel.has(c.id));
+        cages.forEach(c => (all ? this.doseSel.delete(c.id) : this.doseSel.add(c.id)));
+        this.renderDashboard();
+      });
+      this.el('doseSelected').onclick = () => {
+        const cages = p.cages.filter(c => this.doseSel.has(c.id));
+        const mice = cages.flatMap(c => c.mice.filter(m => m.alive));
+        if (!mice.length) return;
+        this.openDoseForm(p, mice, {
+          where: `${cages.length} กรง (${cages.map(c => c.code).join(', ')})`,
+          back: () => { this.dosePick = false; this.doseSel = new Set(); this.closeModal(); this.renderDashboard(); },
+        });
+      };
+    }
+    if (this.dosing && !this.dosePick) {
+      this.el('startPick').addEventListener('click', () => {
+        this.dosePick = true; this.doseSel = new Set(); this.renderDashboard();
+      });
+      this.el('doseRepeat').addEventListener('click', () => this.openDoseRepeat(p));
+    }
+    if (this.dosing) {
+      this.el('exitDose')?.addEventListener('click', () => {
+        this.dosing = false; this.doseSession = null;
+        this.dosePick = false; this.doseSel = new Set();
+        this.renderDashboard();
+      });
+      this.el('finishDose')?.addEventListener('click', () => {
+        const mice = p.cages.flatMap(c => c.mice.filter(m => m.alive));
+        const done = this.doseSession ? this.doseSession.done.size : 0;
+        const today = todayISO();
+        const paused = mice.filter(m => (m.doses || []).some(d => d.date === today && d.paused)).length;
+        const finish = () => {
+          this.log('เสร็จสิ้นรอบให้สารทดสอบ', `${done}/${mice.length} ตัว${paused ? ` · พัก ${paused} ตัว` : ''}`, p.name);
+          this.notify({ kind: 'dose', title: 'ให้สารทดสอบรอบวันนี้เสร็จแล้ว',
+            detail: `บันทึก ${done} จาก ${mice.length} ตัว${done < mice.length ? ' (ยังไม่ครบ)' : ''}`
+              + (paused ? ` · พักการทดสอบ ${paused} ตัว` : ''),
+            project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
+          this.dosing = false; this.doseSession = null;
+          this.toast('ปิดรอบให้สารแล้ว — แจ้งผู้วิจัยเรียบร้อย');
+          this.renderDashboard();
+        };
+        if (done < mice.length) {
+          this.confirmDialog({
+            title: 'ยังบันทึกไม่ครบทุกตัว',
+            body: `บันทึกไปแล้ว <b>${done}</b> จาก <b>${mice.length}</b> ตัว — ปิดรอบเลยหรือไม่?<br>
+                   ระบบจะแจ้งผู้วิจัยว่ารอบนี้ยังไม่ครบ`,
+            okLabel: 'ปิดรอบเลย', onOk: finish,
+          });
+        } else finish();
+      });
+    }
+    if (this.caring) {
+      this.el('exitCare').addEventListener('click', () => {
+        this.caring = false; this.careSession = null; this.renderDashboard();
+      });
+      // B4 — closing the round is what tells the research team the cages were
+      // checked today, and how many turned up something wrong
+      this.el('finishCare').addEventListener('click', () => {
+        const cages = p.cages.filter(c => c.mice.length);
+        const done = this.careSession ? this.careSession.done.size : 0;
+        const today = todayISO();
+        const bad = cages.filter(c => (c.careLog || []).some(r =>
+          r.date === today && this.CARE_ITEMS.some(it => r.items[it.key].status === 'abnormal'))).length;
+        const finish = () => {
+          this.log('เสร็จสิ้นรอบตรวจดูแลกรง', `${done}/${cages.length} กรง · ผิดปกติ ${bad} กรง`, p.name);
+          this.notify({ kind: 'care', title: 'ตรวจดูแลกรงรอบวันนี้เสร็จแล้ว',
+            detail: `ตรวจ ${done} จาก ${cages.length} กรง${done < cages.length ? ' (ยังไม่ครบ)' : ''}`
+              + (bad ? ` · พบผิดปกติ ${bad} กรง` : ' · ปกติทุกกรง'),
+            project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
+          this.caring = false; this.careSession = null;
+          this.toast('ปิดรอบตรวจแล้ว — แจ้งผู้วิจัยเรียบร้อย');
+          this.renderDashboard();
+        };
+        if (done < cages.length) {
+          this.confirmDialog({
+            title: 'ยังตรวจไม่ครบทุกกรง',
+            body: `ตรวจไปแล้ว <b>${done}</b> จาก <b>${cages.length}</b> กรง — ปิดรอบเลยหรือไม่?<br>
+                   ระบบจะแจ้งผู้วิจัยว่ารอบนี้ยังไม่ครบ`,
+            okLabel: 'ปิดรอบเลย', onOk: finish,
+          });
+        } else finish();
+      });
     }
     if (this.intake) {
       this.el('exitIntake').addEventListener('click', () => { this.intake = false; this.renderDashboard(); });
@@ -3288,7 +3789,8 @@ const App = {
         } else finish();
       });
     }
-    if (!this.weighing && !this.editing && !this.intake) {
+    if (!this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
+      this.el('healthBoard').addEventListener('click', () => this.openHealthBoard(p));
       this.el('sickReport').addEventListener('click', () => this.openSickReport(p));
       this.el('deathReport').addEventListener('click', () => this.openDeathReport(p));
       const cc = this.el('cageCards');
@@ -3343,6 +3845,18 @@ const App = {
           this.openIntakeCage(p, cage);
         }
         else if (this.weighing) this.startWizard(p, cage);
+        else if (this.caring) {
+          if (!cage.mice.length) { this.toast(`กรง ${cage.code} ยังไม่มีหนู — ไม่ต้องตรวจ`); return; }
+          this.startCareWizard(p, cage);
+        }
+        else if (this.dosing) {
+          if (this.dosePick) {
+            if (!cage.mice.some(m => m.alive)) { this.toast(`กรง ${cage.code} ไม่มีหนู`); return; }
+            this.doseSel.has(cage.id) ? this.doseSel.delete(cage.id) : this.doseSel.add(cage.id);
+            return this.renderDashboard();
+          }
+          this.openDoseCage(p, cage);
+        }
         else if (this.can('viewCage', p)) this.openCagePopup(p, cage);
         // IACUC / AUDIT see the layout but never open a cage's animals
       });
@@ -3451,13 +3965,24 @@ const App = {
     // status colour: weighing mode → gray (not weighed) / green (done); otherwise care/normal.
     // In intake mode the empty cages are the targets, so they glow and the filled ones dim.
     const isEmpty = !cage.mice.length;
+    const cared = this.caring && this.careSession && this.careSession.done.has(cage.id);
+    // กรงเขียวเมื่อหนูที่ยังมีชีวิตในกรงถูกบันทึกครบทุกตัวแล้ว
+    const dosed = this.dosing && this.doseSession
+      && cage.mice.filter(m => m.alive).length > 0
+      && cage.mice.filter(m => m.alive).every(m => this.doseSession.done.has(m.id));
     const cageStatus = this.weighing ? (weighed ? 'done' : 'normal')
       : this.intake ? (isEmpty ? 'normal' : 'done')
+      : this.caring ? (cared ? 'done' : 'normal')
+      : this.dosing ? (this.dosePick ? 'normal' : (dosed ? 'done' : 'normal'))
       : this.cageStatus(cage);
     // จัดการกรง: only cages that can receive the current action look interactive
     const assignable = this.editing && (this.editMode === 'diet' || this.editMode === 'group') && !isEmpty;
-    const noOpen = !this.weighing && !this.intake && !this.editing && !this.can('viewCage', p);
+    const noOpen = !this.weighing && !this.intake && !this.editing && !this.caring && !this.dosing && !this.can('viewCage', p);
     const modeCls = this.weighing ? 'selectable'
+      : this.caring ? (isEmpty ? 'intake-filled' : 'selectable')
+      : this.dosing ? (cage.mice.some(m => m.alive)
+          ? (this.dosePick && this.doseSel.has(cage.id) ? 'selectable move-picked' : 'selectable')
+          : 'intake-filled')
       : this.intake ? (isEmpty ? 'selectable intake-target' : 'intake-filled')
       : assignable ? 'selectable'
       : this.editing && this.editMode === 'move' ? (this.moveCageId === cage.id ? 'selectable move-picked' : 'selectable')
@@ -3576,6 +4101,7 @@ const App = {
           <tbody>${rows}</tbody>
         </table>
         <p class="empty-note">แตะที่หนูเพื่อดูกราฟน้ำหนัก ประวัติ${canTreat ? ' และเพิ่มการรักษา' : ' และการรักษา'}</p>
+        ${this.lastCarePanel(cage)}
       </div>
       <div class="modal-foot">
         ${this.can('cageCard', p) ? `<button class="btn" id="printCard">🏷️ ใบติดหน้ากรง</button>` : ''}
@@ -3660,20 +4186,21 @@ const App = {
         <button class="btn btn-primary" id="saveFlag">🚩 แจ้งผิดปกติ</button>
       </div>
     `);
-    this.el('closeModal').onclick = () => this.openCagePopup(p, cage);
-    this.el('cancelFlag').onclick = () => this.openCagePopup(p, cage);
+    this.el('closeModal').onclick = () => this.afterMouseForm(p, cage);
+    this.el('cancelFlag').onclick = () => this.afterMouseForm(p, cage);
     this.el('saveFlag').onclick = () => {
       const note = this.el('flagNote').value.trim();
       if (!note) { this.el('flagNote').focus(); this.toast('กรุณาระบุลักษณะที่ผิดปกติ'); return; }
       mouse.flagOpen = true;
       mouse.flag = { by: this.el('flagBy').value.trim() || this.user.name, note, date: todayISO() };
+      this.logHealth(mouse, { source: 'flag', status: 'abnormal', note });
       this.log('แจ้งหนูผิดปกติ', `${mouse.code} · ${note}`, p.name);
       // C1 — an animal is flagged: the vet has to look at it
       this.notify({ kind: 'flag', title: '⚠️ มีหนูถูกแจ้งผิดปกติ รอสัตวแพทย์ตรวจ',
         detail: `${mouse.code} · ${note}`, project: p, to: this.nVets(p),
         link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
       this.toast(`ปักธงผิดปกติที่ ${mouse.code} — รอ VET ตรวจสอบ`);
-      this.openCagePopup(p, cage);
+      this.afterMouseForm(p, cage);
     };
   },
 
@@ -3722,8 +4249,8 @@ const App = {
       };
     });
 
-    this.el('closeModal').onclick = () => this.openCagePopup(p, cage);
-    this.el('cancelDeath').onclick = () => this.openCagePopup(p, cage);
+    this.el('closeModal').onclick = () => this.afterMouseForm(p, cage);
+    this.el('cancelDeath').onclick = () => this.afterMouseForm(p, cage);
     this.el('saveDeath').onclick = () => {
       if (!type) { this.toast('กรุณาเลือกลักษณะการตาย'); return; }
       mouse.alive = false;
@@ -3741,6 +4268,9 @@ const App = {
         reporter: this.el('deathReporter').value.trim(),
         handledBy: '', handledAt: '',
       };
+      this.logHealth(mouse, { source: 'death', status: 'dead',
+        note: `${type === 'humane' ? 'การุณยฆาตตามคำสั่งสัตวแพทย์' : 'พบตายในกรง'}${mouse.death.note ? ' — ' + mouse.death.note : ''}`,
+        date: mouse.death.date, time: mouse.death.time });
       this.log('แจ้งหนูตาย', `${mouse.code} · ${this.deathLabel(mouse.death)}`, p.name);
       // C5 — the death itself
       this.notify({ kind: 'death', title: 'มีหนูตายในโครงการ',
@@ -3753,7 +4283,7 @@ const App = {
         to: [...this.nTo.roles(p, ['SCI', 'VET']), ...this.nTo.position('SCI'), ...this.nTo.position('AV')],
         link: { type: 'mouse', cageId: cage.id, mouseId: mouse.id } });
       this.toast(`บันทึกแล้ว — ซากของ ${mouse.code} อยู่ระหว่างแช่แข็ง รอ Sci/VET จัดการ`);
-      this.openCagePopup(p, cage);
+      this.afterMouseForm(p, cage);
     };
   },
 
@@ -3904,6 +4434,15 @@ const App = {
             <div class="section-title">รายงานอาการป่วย & การรักษา</div>
             ${treatments}
           </div>
+          <div>
+            <div class="section-title">🩺 ประวัติสุขภาพ</div>
+            ${this.renderHealthTimeline(p, mouse)}
+          </div>
+          ${(mouse.doses || []).length ? `
+          <div>
+            <div class="section-title">💉 การให้สารทดสอบ / หัตถการ</div>
+            ${this.renderDoseHistory(mouse)}
+          </div>` : ''}
           ${!mouse.alive && mouse.death && mouse.death.disposition === 'necropsy' ? `
           <div>
             <div class="section-title">🔬 ผลการชันสูตร (Necropsy Record)</div>
@@ -3949,7 +4488,11 @@ const App = {
     if (canTreat && mouse.alive) this.el('addTreat').onclick = () => this.openTreatForm(p, cage, mouse);
     if (canTreat && mouse.alive && mouse.flagOpen) {
       this.el('clearFlagBtn').onclick = () => {
+        // เก็บข้อความที่เคยแจ้งไว้ก่อนล้างธง — เดิมตรงนี้คือจุดที่ข้อสังเกตหายถาวร
+        const prevFlagNote = (mouse.flag && mouse.flag.note) || '';
         mouse.flagOpen = false; mouse.flag = null;
+        this.logHealth(mouse, { source: 'vet', status: 'normal',
+          note: `สัตวแพทย์ตรวจแล้วปกติ${prevFlagNote ? ' (จากที่แจ้งไว้: ' + prevFlagNote + ')' : ''}` });
         this.log('ยกเลิกแจ้งผิดปกติ (ปกติ)', `${mouse.code}`, p.name);
         this.toast(`${mouse.code} — ระบุว่าปกติ กลับสถานะเดิม`);
         this.openMouseDetail(p, cage, mouse);
@@ -3959,6 +4502,7 @@ const App = {
       this.el('closeCase').onclick = () => {
         mouse.careOpen = false;
         mouse.remark = '';
+        this.logHealth(mouse, { source: 'vet', status: 'healed', note: 'ปิดเคส — รักษาเสร็จสิ้น หายดี' });
         this.log('ปิดเคส', `${mouse.code} · รักษาเสร็จสิ้น`, p.name);
         // C3 — recovered
         this.notify({ kind: 'healed', title: 'ปิดเคสแล้ว — หนูหายดี',
@@ -4066,6 +4610,8 @@ const App = {
         abnormal: this.el('nAbnormal').value.trim(),
         avComment: this.el('nAv').value.trim(),
       };
+      this.logHealth(mouse, { source: 'necropsy', status: 'dead',
+        note: mouse.necropsy.abnormal ? `ผลชันสูตร — ${mouse.necropsy.abnormal}` : 'บันทึกผลชันสูตรแล้ว' });
       this.log('บันทึกผลชันสูตร', `${mouse.code}${mouse.necropsy.abnormal ? ' · ' + mouse.necropsy.abnormal : ''}`, p.name);
       // C7 — necropsy result is in
       this.notify({ kind: 'necropsy', title: 'บันทึกผลชันสูตรซากแล้ว',
@@ -4105,6 +4651,7 @@ const App = {
       mouse.humaneOrder = { reason, vet: this.el('humaneVet').value.trim(), date: todayISO() };
       mouse.careOpen = true;
       mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved → humane order issued
+      this.logHealth(mouse, { source: 'humane', status: 'critical', note: `สั่งการุณยฆาต — ${reason}` });
       this.log('สั่ง Humane endpoint', `${mouse.code} · ${reason}`, p.name);
       // C4 — an animal is to be euthanised: researchers and the head vet must know
       this.notify({ kind: 'humane', title: '🛑 สั่ง Humane endpoint',
@@ -4189,6 +4736,7 @@ const App = {
       mouse.remark = this.el('tRemark').value.trim();
       mouse.careOpen = true;   // adding a treatment opens/keeps the case open
       mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved → case opened
+      this.logHealth(mouse, { source: 'vet', status: 'treating', note: `เปิดเคส — ${dx}` });
       this.log('รายงานอาการป่วย', `${mouse.code} · ${dx}`, p.name);
       // C2 — a case is open on one of their animals
       this.notify({ kind: 'treat', title: 'สัตวแพทย์เปิดเคสรักษาหนูในโครงการ',
@@ -4745,6 +5293,8 @@ const App = {
         waterRemaining: null,
         foodRemaining: null,
         mouseWeights: mice.map(() => null),
+        // ตรวจสุขภาพก่อนชั่งทีละตัว — คะแนน 0–3 ต่อข้อ ตามเกณฑ์ที่ PI ตั้งไว้
+        health: mice.map(() => ({ scores: this.humaneCriteria(p).map(() => null), note: '' })),
         waterAdded: null,
         foodAdded: null,
       },
@@ -4755,10 +5305,125 @@ const App = {
   },
 
   // total steps = 2 (water/food remaining) + N alive mice + 2 (water/food added) + 1 review
+  // Each animal takes TWO steps: look at it first, then weigh it. Sci already has
+  // the mouse in hand at that moment, so the health check costs nothing extra and
+  // catches things a number never would.
   wizardStepMeta() {
     const w = this.wizard;
     const n = w.mice.length;
-    return { water0: 0, food0: 1, mouse0: 2, mouseN: 2 + n - 1, waterAdd: 2 + n, foodAdd: 3 + n, review: 4 + n, total: 5 + n };
+    const block = n * 2;
+    return { water0: 0, food0: 1, mouse0: 2, mouseN: 2 + block - 1,
+             waterAdd: 2 + block, foodAdd: 3 + block, review: 4 + block, total: 5 + block };
+  },
+  // which animal a mouse-block step belongs to, and whether it is the health half
+  wizardMouseAt(s) {
+    const meta = this.wizardStepMeta();
+    const off = s - meta.mouse0;
+    return { idx: Math.floor(off / 2), health: off % 2 === 0 };
+  },
+
+  // ตรวจสุขภาพก่อนชั่ง — Normal ผ่านไปชั่งเลย · Abnormal ต้องบอกว่าเป็นอย่างไร
+  // และหมายเหตุนั้นจะกลายเป็น "แจ้งผิดปกติ" ให้สัตวแพทย์ตรวจต่อ (ดู wizardSave)
+  renderWizardHealth(segs) {
+    const w = this.wizard;
+    const { idx } = this.wizardMouseAt(w.step);
+    w.mouseIndex = idx;
+    const m = w.mice[idx];
+    const h = w.data.health[idx];
+    const crit = this.humaneCriteria(w.p);
+    const cfg = this.humaneCfg(w.p);
+    const max = crit.length * 3;
+
+    // น้ำหนักของรอบนี้ยังไม่ได้ชั่ง (ขั้นชั่งอยู่ถัดไป) — ใช้ค่าล่าสุดที่มีไปก่อน
+    // แล้วคิดใหม่ตอนบันทึกด้วยน้ำหนักจริงของรอบนี้
+    const lossPct = this.weightLossPct(m);
+    const wCrit = crit.find(c => c.auto === 'weight');
+    const autoScore = this.weightScore(lossPct, wCrit);
+    crit.forEach((c, i) => { if (c.auto === 'weight') h.scores[i] = autoScore ?? 0; });
+
+    const manual = crit.map((c, i) => c.auto ? null : i).filter(i => i !== null);
+    const done = manual.every(i => h.scores[i] != null);
+    const total = h.scores.reduce((a, b) => a + (b || 0), 0);
+    const result = done ? this.humaneResult(w.p, total, lossPct) : null;
+    const escalate = result === 'E';
+    const needOther = crit.some((c, i) => c.other && (h.scores[i] || 0) > 0);
+
+    const rows = crit.map((c, i) => {
+      const v = h.scores[i];
+      if (c.auto === 'weight') {
+        return `<div class="hsc-row auto set">
+          <div class="hsc-label"><b>${i + 1}. ${this.esc(c.name)}</b>
+            <span>${lossPct == null ? 'ยังไม่มีน้ำหนักให้เทียบ'
+              : `น้ำหนักสูงสุดที่เคยทำได้ ${this.g(this.peakWeight(m))} g → ตอนนี้ ${this.g(Data.latestWeight(m))} g · ลด ${lossPct}%`}</span>
+            <span class="hsc-lvtext">${this.esc(this.critLevels(c)[v ?? 0])}</span></div>
+          <div class="hsc-btns"><span class="hsc-autoval s${v ?? 0}">${v ?? 0}</span></div>
+        </div>`;
+      }
+      return `<div class="hsc-row ${v != null ? 'set' : ''}">
+        <div class="hsc-label"><b>${i + 1}. ${this.esc(c.name)}</b>
+          ${v != null ? `<span class="hsc-lvtext">${this.esc(this.critLevels(c)[v])}</span>`
+            : `<span>${this.esc(this.critLevels(c)[0])}</span>`}</div>
+        <div class="hsc-btns">
+          ${this.HEALTH_SCALE.map(sc => `
+            <button type="button" class="hsc-b s${sc.v} ${v === sc.v ? 'on' : ''}"
+                    data-i="${i}" data-v="${sc.v}" title="${this.esc(this.critLevels(c)[sc.v])}">${sc.v}</button>`).join('')}
+        </div>
+      </div>`;
+    }).join('');
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>🩺 ประเมิน Humane endpoint — ${m.code}</h3>
+          <div class="sub">กรง ${w.cage.code} · หนูตัวที่ ${idx + 1} จาก ${w.mice.length} · ให้คะแนนก่อนชั่งน้ำหนัก</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="wizClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="wizard-steps">${segs}</div>
+        ${m.flagOpen ? '<div class="wizard-flagged">มีการแจ้งผิดปกติค้างอยู่ — รอสัตวแพทย์ตรวจ</div>' : ''}
+        ${m.careOpen ? '<div class="wizard-flagged care">อยู่ระหว่างการรักษาของสัตวแพทย์</div>' : ''}
+        <div class="hsc-legend">${this.HEALTH_SCALE.map(sc =>
+          `<span class="hsc-lg s${sc.v}"><b>${sc.v}</b> ${sc.label}</span>`).join('')}
+          <span class="hsc-hint">แตะเลขเพื่อดูนิยามแต่ละระดับ</span></div>
+        <div class="hsc-list">${rows}</div>
+        <div class="hsc-total ${!done ? '' : escalate ? 'bad' : total > 0 ? 'warn' : 'ok'}">
+          <span>Total score</span>
+          <b>${done ? total : '—'}</b><span class="hsc-max">/ ${max}</span>
+          ${done ? `<span class="hsc-result ${this.HUMANE_RESULT[result].tone}">${this.HUMANE_RESULT[result].full}</span>` : ''}
+          <span class="spacer" style="flex:1"></span>
+          <span class="hsc-th">เกณฑ์: รวม ≥ ${cfg.totalThreshold}${
+            this.hasAutoWeight(w.p) ? ` · หรือน้ำหนักลด ≥ ${cfg.weightLossPct}%` : ''}</span>
+        </div>
+        ${cfg.note ? `<p class="empty-note" style="margin:8px 0 0">${this.esc(cfg.note)}</p>` : ''}
+        ${escalate ? `<div class="hsc-alert">
+          ${lossPct != null && lossPct >= cfg.weightLossPct
+            ? `น้ำหนักลด <b>${lossPct}%</b> ถึงเกณฑ์ <b>${cfg.weightLossPct}%</b>`
+            : `คะแนนรวมถึงเกณฑ์ <b>${cfg.totalThreshold}/${max}</b>`}
+          — ผลประเมิน <b>E (Euthanasia)</b> · ระบบจะแจ้งสัตวแพทย์ทันที และต้องระบุสิ่งที่พบ</div>` : ''}
+        ${done && (total > 0 || needOther) ? `
+          <div class="field" style="margin-top:12px">
+            <label for="wizHNote">Other, please specify ${escalate ? '<span class="req-star">*</span>' : '<span class="muted-note">(ไม่บังคับ)</span>'}</label>
+            <textarea id="wizHNote" rows="2" placeholder="ระบุอาการหรือสิ่งที่พบเพิ่มเติม">${this.esc(h.note)}</textarea>
+          </div>` : ''}
+        <div class="wizard-nav">
+          <button class="btn" id="wizBack">← ย้อนกลับ</button>
+          <button class="btn btn-primary" id="wizNext" ${done ? '' : 'disabled'}>
+            ${done && total === 0 ? 'N — ปกติ · ไปชั่งน้ำหนัก →' : 'ถัดไป →'}</button>
+        </div>
+      </div>
+    `, { compact: true });
+
+    document.querySelectorAll('.hsc-b').forEach(b => b.onclick = () => {
+      const note = this.el('wizHNote'); if (note) h.note = note.value;
+      h.scores[+b.dataset.i] = +b.dataset.v;
+      const allDone = manual.every(i => h.scores[i] != null);
+      if (allDone && h.scores.every(v => (v || 0) === 0)) return this.wizardNext();
+      this.renderWizardStep();
+    });
+    this.el('wizNext').onclick = () => this.wizardNext();
+    this.el('wizBack').onclick = () => this.wizardBack();
+    this.el('wizClose').onclick = () => this.confirmExitWizard('ข้อมูลที่กรอกไว้จะไม่ถูกบันทึก');
+    const note = this.el('wizHNote');
+    if (note) note.focus({ preventScroll: true });
   },
 
   renderWizardStep() {
@@ -4771,6 +5436,11 @@ const App = {
     const segs = Array.from({ length: segCount }, (_, i) =>
       `<div class="wstep ${i < s ? 'done' : i === s ? 'active' : ''}"></div>`).join('');
 
+    // the health half of a mouse block is a look, not a measurement — no numpad
+    if (s >= meta.mouse0 && s <= meta.mouseN && this.wizardMouseAt(s).health) {
+      return this.renderWizardHealth(segs);
+    }
+
     let title = '', hint = '', bodyExtra = '', value = '', unit = 'กรัม (g)', progress = '', icon = '⚖️';
 
     if (s === meta.water0) {
@@ -4782,15 +5452,22 @@ const App = {
       hint = `ชั่งอาหารคงเหลือของกรง ${w.cage.code}`;
       value = w.data.foodRemaining ?? '';
     } else if (s >= meta.mouse0 && s <= meta.mouseN) {
-      const idx = s - meta.mouse0;
+      const idx = this.wizardMouseAt(s).idx;
       w.mouseIndex = idx;
       const m = w.mice[idx];
       const last = Data.latestWeight(m);
+      const h = w.data.health[idx];
       icon = '🐭'; title = `ชั่งหนู ${m.code}`;
       const tag = this.mouseTag(w.p, w.cage, m);
       hint = `${tag ? tag + ' · ' : ''}เพศ ${m.sex === 'M' ? 'ผู้ ♂' : 'เมีย ♀'} · กรอกน้ำหนักปัจจุบัน`;
       progress = `<div class="mouse-progress">หนูตัวที่ ${idx + 1} จาก ${w.mice.length}</div>`;
-      bodyExtra = `<div class="wizard-prev">น้ำหนักครั้งก่อน: <b>${this.g(last)} g</b></div>`;
+      const hTotal = h.scores.reduce((a, b) => a + (b || 0), 0);
+      const peak = this.peakWeight(m);
+      bodyExtra = `${hTotal > 0
+        ? `<div class="wizard-flagged">🩺 Humane score ${hTotal}/${h.scores.length * 3}${
+            h.note ? ' — ' + this.esc(h.note) : ''}</div>` : ''}
+        <div class="wizard-prev">น้ำหนักครั้งก่อน: <b>${this.g(last)} g</b>${
+          peak != null ? ` · สูงสุดที่เคยทำได้ <b>${this.g(peak)} g</b>` : ''}</div>`;
       value = w.data.mouseWeights[idx] ?? '';
     } else if (s === meta.waterAdd) {
       icon = '💧'; title = 'น้ำหนักน้ำที่เติม';
@@ -4857,17 +5534,45 @@ const App = {
 
   captureInput() {
     const w = this.wizard, meta = this.wizardStepMeta(), s = w.step;
+    // health steps hold a note, not a number
+    if (s >= meta.mouse0 && s <= meta.mouseN && this.wizardMouseAt(s).health) {
+      const note = this.el('wizHNote');
+      if (note) w.data.health[this.wizardMouseAt(s).idx].note = note.value;
+      return;
+    }
     const raw = this.el('wizInput')?.value;
     const val = raw === '' || raw == null ? null : parseFloat(raw);
     if (s === meta.water0) w.data.waterRemaining = val;
     else if (s === meta.food0) w.data.foodRemaining = val;
-    else if (s >= meta.mouse0 && s <= meta.mouseN) w.data.mouseWeights[s - meta.mouse0] = val;
+    else if (s >= meta.mouse0 && s <= meta.mouseN) w.data.mouseWeights[this.wizardMouseAt(s).idx] = val;
     else if (s === meta.waterAdd) w.data.waterAdded = val;
     else if (s === meta.foodAdd) w.data.foodAdded = val;
   },
 
   wizardNext() {
-    const w = this.wizard, meta = this.wizardStepMeta();
+    const w = this.wizard, meta = this.wizardStepMeta(), s = w.step;
+    // health step: needs a verdict, and Abnormal must say what is wrong
+    if (s >= meta.mouse0 && s <= meta.mouseN && this.wizardMouseAt(s).health) {
+      const { idx } = this.wizardMouseAt(s);
+      const h = w.data.health[idx];
+      const note = this.el('wizHNote');
+      if (note) h.note = note.value;
+      const crit = this.humaneCriteria(w.p);
+      const manual = crit.map((c, i) => c.auto ? null : i).filter(i => i !== null);
+      if (!manual.every(i => h.scores[i] != null)) {
+        this.toast('กรุณาให้คะแนนให้ครบทุกข้อ');
+        return;
+      }
+      const total = h.scores.reduce((a, b) => a + (b || 0), 0);
+      const escalate = this.humaneResult(w.p, total, this.weightLossPct(w.mice[idx])) === 'E';
+      if (escalate && !(h.note || '').trim()) {
+        if (note) { note.focus(); note.style.borderColor = 'var(--red)'; }
+        this.toast('ถึงเกณฑ์ต้องแจ้งสัตวแพทย์ — กรุณาระบุสิ่งที่พบ');
+        return;
+      }
+      w.step = Math.min(s + 1, meta.review);
+      return this.renderWizardStep();
+    }
     const raw = this.el('wizInput')?.value;
     if ((raw === '' || raw == null) && w.step <= meta.foodAdd) {
       this.el('wizInput').focus();
@@ -4897,7 +5602,21 @@ const App = {
       const nw = w.data.mouseWeights[i];
       const d = (prev != null && nw != null) ? Math.round((nw - prev) * 10) / 10 : null;
       const cls = d == null ? '' : d >= 0 ? 'up' : 'down';
-      return `<li><span class="k">🐭 ${m.code}</span><span class="v">${this.g(nw)} g <span class="chg ${cls}">${d == null ? '' : this.gs(d)}</span></span></li>`;
+      const h = w.data.health[i];
+      const maxS = h.scores.length * 3;
+      // คะแนนน้ำหนักคิดใหม่ด้วยน้ำหนักของรอบนี้ที่เพิ่งกรอก
+      const crit = this.humaneCriteria(w.p);
+      const lp = this.weightLossPct(m, nw);
+      const sc = h.scores.map((v, k) => crit[k] && crit[k].auto === 'weight' ? (this.weightScore(lp, crit[k]) ?? 0) : (v || 0));
+      const tot = sc.reduce((a, b) => a + b, 0);
+      const res = this.humaneResult(w.p, tot, lp);
+      const R = this.HUMANE_RESULT[res];
+      return `<li class="${tot > 0 ? 'rv-bad' : ''}"><span class="k">🐭 ${m.code}
+        <span class="hl-${R.tone === 'ok' ? 'ok' : 'bad'}">${R.label} · ${tot}/${maxS}</span></span>
+        <span class="v">${this.g(nw)} g <span class="chg ${cls}">${d == null ? '' : this.gs(d)}</span></span>
+        ${tot > 0 || lp > 0 ? `<div class="rv-sub">${lp != null ? `น้ำหนักลดจากจุดสูงสุด ${lp}%` : ''}${
+          h.note ? ' · ' + this.esc(h.note) : ''}${
+          res === 'E' ? ' — <b>ถึงเกณฑ์ E (Euthanasia) จะแจ้งสัตวแพทย์</b>' : ''}</div>` : ''}</li>`;
     }).join('');
 
     this.openModal(`
@@ -4928,6 +5647,46 @@ const App = {
   wizardSave() {
     const w = this.wizard, cage = w.cage;
     const today = todayISO();
+    // ทุกการประเมินลงไทม์ไลน์ รวมทั้งครั้งที่ผลปกติ — "ดูทุกสัปดาห์แล้วปกติ" คือ
+    // หลักฐานที่ผู้ตรวจถาม เฉพาะครั้งที่ผลออกมาเป็น E เท่านั้นที่ส่งต่อเข้าสายสัตวแพทย์
+    const crit = this.humaneCriteria(w.p);
+    const cfg = this.humaneCfg(w.p);
+    const maxScore = crit.length * 3;
+    const flagged = [];
+    w.mice.forEach((m, i) => {
+      const h = w.data.health[i];
+      const manual = crit.map((c, k) => c.auto ? null : k).filter(k => k !== null);
+      if (!m.alive || !manual.every(k => h.scores[k] != null)) return;
+      // คิดคะแนนน้ำหนักด้วยน้ำหนักของรอบนี้ (ตอนให้คะแนนยังไม่ได้ชั่ง)
+      const nw = w.data.mouseWeights[i];
+      const lossPct = this.weightLossPct(m, nw);
+      const scores = h.scores.map((v, k) => crit[k].auto === 'weight' ? (this.weightScore(lossPct, crit[k]) ?? 0) : (v || 0));
+      const total = scores.reduce((a, b) => a + b, 0);
+      const result = this.humaneResult(w.p, total, lossPct);
+      this.logHealth(m, {
+        source: 'weigh',
+        status: result === 'E' ? 'critical' : total === 0 ? 'normal' : 'abnormal',
+        note: h.note.trim(),
+        scores: crit.map((c, k) => ({ name: c.name, v: scores[k] })),
+        total, max: maxScore, result, lossPct,
+      });
+      if (result !== 'E') return;
+      if (m.flagOpen || m.careOpen || m.humaneOrder) return;   // สัตวแพทย์รับเรื่องไว้แล้ว
+      m.flagOpen = true;
+      const why = lossPct != null && lossPct >= cfg.weightLossPct
+        ? `น้ำหนักลด ${lossPct}% (เกณฑ์ ${cfg.weightLossPct}%)`
+        : `Humane score ${total}/${maxScore} (เกณฑ์ ${cfg.totalThreshold})`;
+      m.flag = { by: this.user.name, note: h.note.trim() ? `${why} — ${h.note.trim()}` : why, date: today };
+      flagged.push({ m, total, why });
+      this.log('ถึงเกณฑ์ Humane endpoint', `${m.code} · ${why}`, w.p.name);
+    });
+    if (flagged.length) {
+      this.notify({ kind: 'flag', title: '🛑 พบสัตว์ถึงเกณฑ์ Humane endpoint (ผล E)',
+        detail: flagged.map(x => `${x.m.code} — ${x.why}`).join(' · '),
+        project: w.p, to: this.nVets(w.p),
+        link: { type: 'mouse', cageId: cage.id, mouseId: flagged[0].m.id } });
+    }
+
     // commit new weights (alive mice only — dead mice were skipped)
     w.mice.forEach((m, i) => {
       const nw = w.data.mouseWeights[i];
@@ -4958,8 +5717,904 @@ const App = {
     this.log('ชั่งน้ำหนัก', `บันทึกกรง ${cage.code}`, w.p.name);
     this.wizard = null;
     this.closeModal();
-    this.toast(`บันทึกกรง ${cage.code} แล้ว ✓`);
+    this.toast(flagged.length
+      ? `บันทึกกรง ${cage.code} — ถึงเกณฑ์ E ${flagged.length} ตัว แจ้งสัตวแพทย์แล้ว`
+      : `บันทึกกรง ${cage.code} แล้ว ✓`);
     this.renderDashboard();
+  },
+
+  // ---------------------------------------------------------
+  // 3b. CAGE CARE ROUND  (ACT — เจ้าหน้าที่ดูแลสัตว์ทดลอง)
+  // ---------------------------------------------------------
+  // Same shape as the Sci weighing round — walk the rack cage by cage, each cage
+  // turns green when it is done — but the job is an INSPECTION, not a measurement.
+  // Four checkpoints, each simply Normal or Abnormal. Normal ends the checkpoint;
+  // Abnormal is what opens work, and the work differs per checkpoint:
+  //   Animals → hand over to the existing แจ้งผิดปกติ / แจ้งหนูตาย forms, so a sick
+  //             animal enters the vet chain instead of dying in a maintenance note
+  //   Feed    → topping up records what went IN; replacing must also weigh what came
+  //   Water     OUT first, otherwise the consumption figure silently becomes a lie
+  //   Cage    → no weighing, just which kind of change was done
+  CARE_ITEMS: [
+    { key: 'animals', icon: '🐭', en: 'Animals', th: 'สัตว์ทดลอง',
+      hint: 'ดูหนูทุกตัวในกรง — ท่าทาง การเคลื่อนไหว ขน บาดแผล และมีตัวไหนตายหรือไม่' },
+    { key: 'feed', icon: '🍚', en: 'Feed', th: 'อาหาร',
+      hint: 'อาหารเพียงพอหรือไม่ · ขึ้นรา เปียกชื้น หรือปนเปื้อนหรือไม่' },
+    { key: 'water', icon: '💧', en: 'Water', th: 'น้ำ',
+      hint: 'น้ำเพียงพอหรือไม่ · ขวดรั่ว จุกตัน หรือน้ำขุ่นหรือไม่' },
+    { key: 'cage', icon: '🧹', en: 'Cage', th: 'กรง / วัสดุรองนอน',
+      hint: 'วัสดุรองนอนเปียกชื้น สกปรก มีกลิ่น หรือตัวกรง/ฝากรงชำรุดหรือไม่' },
+  ],
+  CARE_CHANGE: {
+    full:   { label: 'Full change', th: 'เปลี่ยนตัวกรง ฝากรง และวัสดุรองนอน' },
+    bottom: { label: 'Change Bottom/Pan', th: 'เปลี่ยนเฉพาะวัสดุรองนอน' },
+  },
+  CARE_MODE: {
+    add:     { icon: '➕', label: 'เติมเพิ่ม', hint: 'ของเดิมยังใช้ได้ เติมเข้าไปอีก' },
+    replace: { icon: '♻️', label: 'เปลี่ยนใหม่', hint: 'เอาของเดิมออกทิ้ง แล้วใส่ของใหม่' },
+  },
+
+  startCareWizard(p, cage) {
+    this.careWiz = {
+      p, cage,
+      step: 0,       // 0..3 = the four checkpoints · 4 = review
+      sub: null,     // screen within a checkpoint (see renderCareStep)
+      pending: null, // a mouse form we handed off to, so we can tell what it did
+      data: {
+        animals: { status: null, actions: [] },
+        feed:    { status: null, mode: null, discarded: null, amount: null },
+        water:   { status: null, mode: null, discarded: null, amount: null },
+        cage:    { status: null, change: null },
+      },
+    };
+    this.renderCareStep();
+  },
+
+  // escape user-typed text before it goes into a template string
+  esc(v) { return String(v ?? '').replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); },
+
+  careItem() { return this.CARE_ITEMS[this.careWiz.step]; },
+
+  // the latest inspection, shown inside the cage popup so anyone opening a cage
+  // can see when it was last checked and what was wrong
+  lastCarePanel(cage) {
+    const log = cage.careLog || [];
+    if (!log.length) return '';
+    const r = log[log.length - 1];
+    const chips = this.CARE_ITEMS.map(it => {
+      const d = r.items[it.key];
+      const bad = d.status === 'abnormal';
+      let extra = '';
+      if (bad && (it.key === 'feed' || it.key === 'water')) {
+        const m = this.CARE_MODE[d.mode];
+        extra = m ? ` ${m.label} ${this.g(d.amount)} g` : '';
+      } else if (bad && it.key === 'cage') {
+        extra = ` ${(this.CARE_CHANGE[d.change] || {}).label || ''}`;
+      } else if (bad && it.key === 'animals') {
+        extra = ` ${d.actions.length} ตัว`;
+      }
+      return `<span class="care-chip ${bad ? 'bad' : 'ok'}">${it.icon} ${it.en}${bad ? '<b> !</b>' + extra : ' ✓'}</span>`;
+    }).join('');
+    return `<div class="care-last">
+      <div class="cl-head">🧹 ตรวจดูแลกรงล่าสุด <span class="muted-note">${this.thaiDate(r.date)} ${r.time} · ${r.by}</span></div>
+      <div class="cl-chips">${chips}</div>
+    </div>`;
+  },
+
+  renderCareStep() {
+    const w = this.careWiz;
+    if (!w) return;
+    if (w.step >= this.CARE_ITEMS.length) return this.renderCareReview();
+
+    const it = this.careItem();
+    const d = w.data[it.key];
+    const total = this.CARE_ITEMS.length + 1;
+    const segs = Array.from({ length: total }, (_, i) =>
+      `<div class="wstep ${i < w.step ? 'done' : i === w.step ? 'active' : ''}"></div>`).join('');
+
+    // ---- the sub-screens an Abnormal answer opens ----
+    let body;
+    if (d.status !== 'abnormal' || w.sub === null) {
+      body = `
+        <div class="care-ico">${it.icon}</div>
+        <div class="wizard-title">${it.en} <span class="care-th">${it.th}</span></div>
+        <div class="wizard-hint">${it.hint}</div>
+        <div class="care-choice">
+          <button class="care-btn ok ${d.status === 'normal' ? 'on' : ''}" data-st="normal">
+            <b>Normal</b><span>ปกติ — ไม่ต้องทำอะไรต่อ</span></button>
+          <button class="care-btn bad ${d.status === 'abnormal' ? 'on' : ''}" data-st="abnormal">
+            <b>Abnormal</b><span>ผิดปกติ — ต้องดำเนินการต่อ</span></button>
+        </div>`;
+    } else if (it.key === 'animals') {
+      body = this.careAnimalsPanel();
+    } else if (it.key === 'cage') {
+      body = `
+        <div class="care-ico">🧹</div>
+        <div class="wizard-title">เปลี่ยนวัสดุรองนอนแบบไหน</div>
+        <div class="wizard-hint">เลือกให้ตรงกับที่ทำจริง — เป็นคนละงานกัน</div>
+        <div class="care-choice col">
+          ${Object.entries(this.CARE_CHANGE).map(([k, v]) => `
+            <button class="care-btn ${d.change === k ? 'on' : ''}" data-change="${k}">
+              <b>${v.label}</b><span>${v.th}</span></button>`).join('')}
+        </div>`;
+    } else {
+      body = this.careSupplyPanel(it, d);
+    }
+
+    const canNext = this.careStepReady();
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>🧹 ตรวจดูแลกรง — ${w.cage.code}</h3>
+          <div class="sub">ชั้น ${this.shelfNameOf(w.p, w.cage)} · ${w.cage.mice.filter(m => m.alive).length} ตัว · ตรวจจุดที่ ${w.step + 1} จาก ${this.CARE_ITEMS.length}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="careClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="wizard-steps">${segs}</div>
+        <div class="care-crumbs">${this.CARE_ITEMS.map((x, i) =>
+          `<span class="cc-crumb ${i < w.step ? 'done' : i === w.step ? 'now' : ''}">${x.icon} ${x.en}${
+            i < w.step && w.data[x.key].status === 'abnormal' ? ' <b>!</b>' : ''}</span>`).join('')}</div>
+        ${body}
+        <div class="wizard-nav">
+          <button class="btn" id="careBack">${w.step === 0 && !w.sub ? 'ยกเลิก' : '← ย้อนกลับ'}</button>
+          <button class="btn btn-primary" id="careNext" ${canNext ? '' : 'disabled'}>
+            ${w.step === this.CARE_ITEMS.length - 1 && this.careSubDone() ? 'ตรวจสอบ →' : 'ถัดไป →'}</button>
+        </div>
+      </div>
+    `, { compact: true });
+
+    this.el('careClose').onclick = () => this.confirmDialog({
+      title: 'ออกจากการตรวจกรงนี้?', body: 'สิ่งที่กรอกไว้ในกรงนี้จะไม่ถูกบันทึก',
+      okLabel: 'ออก', danger: true,
+      onOk: () => { this.careWiz = null; this.closeModal(); this.renderDashboard(); },
+      onCancel: () => this.renderCareStep(),
+    });
+    this.el('careBack').onclick = () => this.careBack();
+    this.el('careNext').onclick = () => this.careNext();
+    this.bindCareControls();
+  },
+
+  // Animals · Abnormal → pick the animal, then hand it to the real form so the
+  // sick case / death record is the official one, not a maintenance side-note
+  careAnimalsPanel() {
+    const w = this.careWiz;
+    const done = w.data.animals.actions;
+    const rows = w.cage.mice.map(m => {
+      const acted = done.find(a => a.mouseId === m.id);
+      const state = !m.alive ? '<span class="ca-state dead">แจ้งตายแล้ว</span>'
+        : m.flagOpen ? '<span class="ca-state flag">แจ้งผิดปกติแล้ว</span>'
+        : m.careOpen ? '<span class="ca-state care">อยู่ระหว่างรักษา</span>' : '';
+      return `<div class="ca-row ${acted ? 'acted' : ''}">
+        <div class="ca-id"><b>${m.cageNo}</b> ${m.code}${state}</div>
+        ${m.alive ? `<div class="ca-acts">
+          <button class="mini-btn" data-flag="${m.id}">⚠️ แจ้งผิดปกติ</button>
+          <button class="mini-btn danger" data-death="${m.id}">✝ แจ้งตาย</button>
+        </div>` : '<span class="muted-note">—</span>'}
+      </div>`;
+    }).join('') || '<p class="empty-note">กรงนี้ไม่มีหนู</p>';
+
+    return `
+      <div class="care-ico">🐭</div>
+      <div class="wizard-title">พบความผิดปกติที่ตัวไหน</div>
+      <div class="wizard-hint">เลือกหนูแล้วบันทึกตามอาการ — ระบบจะส่งต่อให้สัตวแพทย์เอง</div>
+      <div class="ca-list">${rows}</div>
+      ${done.length ? `<div class="ca-done">บันทึกแล้ว ${done.length} รายการในกรงนี้</div>`
+        : '<div class="ca-hint">ต้องบันทึกอย่างน้อย 1 รายการ จึงจะไปขั้นถัดไปได้</div>'}`;
+  },
+
+  // Feed / Water · Abnormal → เติมเพิ่ม or เปลี่ยนใหม่.
+  // Replacing asks for the discarded weight FIRST: the amount thrown away is real
+  // consumption data that would otherwise be lost, and without it the next round's
+  // "consumed" figure would count the fresh refill as eaten.
+  careSupplyPanel(it, d) {
+    const w = this.careWiz;
+    const cur = it.key === 'feed' ? w.cage.food.remaining : w.cage.water.remaining;
+    if (!d.mode) {
+      return `
+        <div class="care-ico">${it.icon}</div>
+        <div class="wizard-title">จัดการ${it.th}อย่างไร</div>
+        <div class="wizard-hint">ในระบบตอนนี้มี${it.th} <b>${this.g(cur)} g</b></div>
+        <div class="care-choice col">
+          ${Object.entries(this.CARE_MODE).map(([k, v]) => `
+            <button class="care-btn ${d.mode === k ? 'on' : ''}" data-mode="${k}">
+              <b>${v.icon} ${v.label}</b><span>${v.hint}</span></button>`).join('')}
+        </div>`;
+    }
+    const askDiscard = d.mode === 'replace' && w.sub === 'discard';
+    const label = askDiscard ? `น้ำหนัก${it.th}เดิมที่เอาออกทิ้ง`
+      : d.mode === 'add' ? `น้ำหนัก${it.th}ที่เติมเพิ่ม` : `น้ำหนัก${it.th}ใหม่ที่ใส่เข้ากรง`;
+    const hint = askDiscard
+      ? `ชั่งของเดิมที่รื้อออกก่อนทิ้ง — ใช้คำนวณว่ากินไปเท่าไหร่จริง`
+      : d.mode === 'add' ? `ชั่ง${it.th}ที่เติมเพิ่มเข้าไป` : `ชั่ง${it.th}ใหม่ที่ใส่แทนของเดิม`;
+    const value = (askDiscard ? d.discarded : d.amount) ?? '';
+    return `
+      <div class="care-ico">${it.icon}</div>
+      <div class="wizard-title">${label}</div>
+      <div class="wizard-hint">${hint}</div>
+      <input class="big-input" id="careInput" type="text" inputmode="none" value="${value}" placeholder="0.0">
+      <div class="input-unit">กรัม (g)</div>
+      <div class="numpad" id="careNumpad">
+        ${['1','2','3','4','5','6','7','8','9','.','0','back'].map(k =>
+          `<button class="numkey ${k === 'back' ? 'fn' : ''}" data-k="${k}">${k === 'back' ? '⌫' : k}</button>`).join('')}
+      </div>`;
+  },
+
+  bindCareControls() {
+    const w = this.careWiz;
+    const it = this.careItem();
+    const d = w.data[it.key];
+
+    document.querySelectorAll('[data-st]').forEach(b => b.onclick = () => {
+      d.status = b.dataset.st;
+      if (d.status === 'normal') {                 // ปกติ = จบตรงนี้ ไม่ถามอะไรต่อ
+        w.sub = null;
+        this.careNext();
+      } else {
+        w.sub = it.key === 'feed' || it.key === 'water' ? 'mode' : it.key === 'cage' ? 'change' : 'pick';
+        this.renderCareStep();
+      }
+    });
+    document.querySelectorAll('[data-change]').forEach(b => b.onclick = () => {
+      d.change = b.dataset.change; this.renderCareStep();
+    });
+    document.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => {
+      d.mode = b.dataset.mode;
+      w.sub = d.mode === 'replace' ? 'discard' : 'amount';
+      this.renderCareStep();
+    });
+    document.querySelectorAll('[data-flag]').forEach(b => b.onclick = () => {
+      const m = w.cage.mice.find(x => x.id === b.dataset.flag);
+      this.careHandOff('flag', m);
+    });
+    document.querySelectorAll('[data-death]').forEach(b => b.onclick = () => {
+      const m = w.cage.mice.find(x => x.id === b.dataset.death);
+      this.careHandOff('death', m);
+    });
+
+    const input = this.el('careInput');
+    if (!input) return;
+    const normalize = () => { input.value = input.value.replace(/^0+(?=\d)/, ''); };
+    // preventScroll: the numpad is tall, and a plain focus() scrolls the step
+    // indicator and breadcrumb out of view — ACT loses track of where they are
+    input.focus({ preventScroll: true }); input.select();
+    input.addEventListener('input', normalize);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); this.careNext(); } });
+    this.el('careNumpad').addEventListener('click', e => {
+      const k = e.target.closest('.numkey'); if (!k) return;
+      if (k.dataset.k === 'back') input.value = input.value.slice(0, -1);
+      else if (k.dataset.k === '.') { if (!input.value.includes('.')) input.value += (input.value === '' ? '0.' : '.'); }
+      else input.value += k.dataset.k;
+      normalize(); input.focus();
+    });
+  },
+
+  // hand the animal to the real vet-chain form, remembering enough to tell
+  // afterwards whether the user actually recorded something or backed out
+  careHandOff(kind, mouse) {
+    const w = this.careWiz;
+    w.pending = { mouseId: mouse.id, kind, wasFlagged: !!mouse.flagOpen, wasAlive: mouse.alive };
+    if (kind === 'flag') this.openFlagForm(w.p, w.cage, mouse);
+    else this.openDeathForm(w.p, w.cage, mouse);
+  },
+
+  // every mouse form returns through here: back to the care round if that is where
+  // it was opened from, otherwise to the cage popup as before
+  afterMouseForm(p, cage) {
+    const w = this.careWiz;
+    if (!w) return this.openCagePopup(p, cage);
+    const pend = w.pending; w.pending = null;
+    if (pend) {
+      const m = cage.mice.find(x => x.id === pend.mouseId);
+      const didFlag = m && !pend.wasFlagged && m.flagOpen;
+      const didDie = m && pend.wasAlive && !m.alive;
+      if (didFlag || didDie) {
+        const kind = didDie ? 'death' : 'flag';
+        const acts = w.data.animals.actions;
+        if (!acts.some(a => a.mouseId === m.id && a.kind === kind)) {
+          acts.push({ mouseId: m.id, mouseCode: m.code, cageNo: m.cageNo, kind });
+        }
+      }
+    }
+    this.renderCareStep();
+  },
+
+  captureCareInput() {
+    const w = this.careWiz, it = this.careItem(), d = w.data[it.key];
+    const raw = this.el('careInput')?.value;
+    if (raw == null) return;
+    const val = raw === '' ? null : parseFloat(raw);
+    if (w.sub === 'discard') d.discarded = val; else d.amount = val;
+  },
+
+  // can the current screen advance?
+  careStepReady() {
+    const w = this.careWiz, it = this.careItem(), d = w.data[it.key];
+    if (!d.status) return false;
+    if (d.status === 'normal') return true;
+    if (it.key === 'animals') return d.actions.length > 0;
+    if (it.key === 'cage') return !!d.change;
+    if (!d.mode) return false;
+    return true;   // the numeric screens validate on Next (empty = ยังไม่ได้ชั่ง)
+  },
+  // is the whole checkpoint finished (so "ถัดไป" would leave it)?
+  careSubDone() {
+    const w = this.careWiz, it = this.careItem(), d = w.data[it.key];
+    if (d.status !== 'abnormal') return true;
+    if (it.key === 'feed' || it.key === 'water') return w.sub === 'amount';
+    return true;
+  },
+
+  careNext() {
+    const w = this.careWiz, it = this.careItem(), d = w.data[it.key];
+    if (!this.careStepReady()) return;
+    // numeric screens: require a number before moving on
+    if (this.el('careInput')) {
+      const raw = this.el('careInput').value;
+      if (raw === '' || isNaN(parseFloat(raw))) {
+        this.el('careInput').style.borderColor = 'var(--red)';
+        this.el('careInput').focus();
+        return;
+      }
+      this.captureCareInput();
+      if (w.sub === 'discard') { w.sub = 'amount'; return this.renderCareStep(); }
+    }
+    w.sub = null;
+    w.step += 1;
+    if (w.step >= this.CARE_ITEMS.length) return this.renderCareReview();
+    this.renderCareStep();
+  },
+
+  careBack() {
+    const w = this.careWiz, it = this.careItem(), d = w.data[it.key];
+    if (this.el('careInput')) this.captureCareInput();
+    if (w.sub === 'amount' && d.mode === 'replace') { w.sub = 'discard'; return this.renderCareStep(); }
+    if (w.sub === 'amount' || w.sub === 'discard') { d.mode = null; w.sub = 'mode'; return this.renderCareStep(); }
+    if (w.sub) { w.sub = null; d.status = null; return this.renderCareStep(); }
+    if (w.step === 0) { this.careWiz = null; this.closeModal(); return this.renderDashboard(); }
+    w.step -= 1;
+    const prev = this.careItem(), pd = w.data[prev.key];
+    w.sub = pd.status === 'abnormal'
+      ? (prev.key === 'animals' ? 'pick' : prev.key === 'cage' ? 'change' : 'amount') : null;
+    this.renderCareStep();
+  },
+
+  renderCareReview() {
+    const w = this.careWiz, cage = w.cage;
+    const total = this.CARE_ITEMS.length + 1;
+    const segs = Array.from({ length: total }, (_, i) =>
+      `<div class="wstep ${i < total - 1 ? 'done' : 'active'}"></div>`).join('');
+
+    const line = it => {
+      const d = w.data[it.key];
+      if (d.status === 'normal') {
+        return `<li><span class="k">${it.icon} ${it.en}</span><span class="v ok">✓ Normal</span></li>`;
+      }
+      let detail = '';
+      if (it.key === 'animals') {
+        detail = d.actions.map(a =>
+          `<div class="rv-sub">${a.kind === 'death' ? '✝ แจ้งตาย' : '⚠️ แจ้งผิดปกติ'} · ตัวที่ ${a.cageNo} (${a.mouseCode})</div>`).join('');
+      } else if (it.key === 'cage') {
+        const c = this.CARE_CHANGE[d.change];
+        detail = `<div class="rv-sub">${c.label} — ${c.th}</div>`;
+      } else {
+        const m = this.CARE_MODE[d.mode];
+        detail = `<div class="rv-sub">${m.icon} ${m.label}`
+          + (d.mode === 'replace' ? ` · เอาออกทิ้ง ${this.g(d.discarded)} g` : '')
+          + ` · ใส่เข้ากรง ${this.g(d.amount)} g</div>`;
+      }
+      return `<li class="rv-bad"><span class="k">${it.icon} ${it.en}</span><span class="v bad">! Abnormal</span>${detail}</li>`;
+    };
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>✅ ตรวจสอบก่อนบันทึก — กรง ${cage.code}</h3>
+          <div class="sub">ผลการตรวจดูแลกรงรอบนี้</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="careClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="wizard-steps">${segs}</div>
+        <ul class="review-list care-review">${this.CARE_ITEMS.map(line).join('')}</ul>
+        <div class="wizard-nav">
+          <button class="btn" id="careBack">← ย้อนกลับ</button>
+          <button class="btn btn-green" id="careSave">💾 บันทึกการตรวจ</button>
+        </div>
+      </div>
+    `);
+    this.el('careClose').onclick = () => this.confirmDialog({
+      title: 'ออกจากการตรวจกรงนี้?', body: 'สิ่งที่กรอกไว้ในกรงนี้จะไม่ถูกบันทึก',
+      okLabel: 'ออก', danger: true,
+      onOk: () => { this.careWiz = null; this.closeModal(); this.renderDashboard(); },
+      onCancel: () => this.renderCareReview(),
+    });
+    this.el('careBack').onclick = () => { w.step = this.CARE_ITEMS.length - 1; w.sub = null; this.renderCareStep(); };
+    this.el('careSave').onclick = () => this.careSave();
+  },
+
+  careSave() {
+    const w = this.careWiz, cage = w.cage, d = w.data;
+    const now = new Date();
+    const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    // apply what physically changed in the cage
+    const apply = (key, store) => {
+      const x = d[key];
+      if (x.status !== 'abnormal' || !x.mode) return;
+      if (x.mode === 'add') {
+        store.remaining = Math.round((store.remaining + (x.amount || 0)) * 10) / 10;
+        store.added = x.amount;
+      } else {
+        // ของเดิมที่เอาออกทิ้ง = ส่วนที่เหลือจริง ๆ ที่ยังไม่ถูกกิน
+        store.consumed = Math.max(0, Math.round((store.remaining - (x.discarded || 0)) * 10) / 10);
+        store.remaining = x.amount || 0;
+        store.added = x.amount;
+      }
+    };
+    apply('feed', cage.food);
+    apply('water', cage.water);
+
+    cage.careLog = cage.careLog || [];
+    cage.careLog.push({
+      date: todayISO(), time, by: this.user.name,
+      items: JSON.parse(JSON.stringify(d)),
+    });
+    cage.lastCareDate = todayISO();
+    if (this.careSession) this.careSession.done.add(cage.id);
+
+    const abnormal = this.CARE_ITEMS.filter(it => d[it.key].status === 'abnormal');
+    this.log('ตรวจดูแลกรง', abnormal.length
+      ? `${cage.code} · ผิดปกติ: ${abnormal.map(x => x.en).join(', ')}`
+      : `${cage.code} · ปกติทุกจุด`, w.p.name);
+
+    this.careWiz = null;
+    this.closeModal();
+    this.toast(abnormal.length
+      ? `บันทึกกรง ${cage.code} — พบผิดปกติ ${abnormal.length} จุด`
+      : `บันทึกกรง ${cage.code} — ปกติทุกจุด ✓`);
+    this.renderDashboard();
+  },
+
+  // ---------------------------------------------------------
+  // 3c. DOSING ROUND  (AHS — ให้สารทดสอบ / หัตถการตามโปรโตคอล)
+  // ---------------------------------------------------------
+  // Walks the rack like the other two rounds, but the record is PER ANIMAL, not
+  // per cage: two mice in one cage can be on different arms of the protocol.
+  // One layer of data — what was done — as free text, because a protocol step is
+  // prose ("ป้อนสาร A 10 mg/kg", "เจาะเลือดหางข้างซ้าย") and forcing it into fields
+  // would only lose detail.
+  //   ประจำ  = carries forward: it reappears pre-filled next round, delete to drop it
+  //   ชั่วคราว = this round only
+  // Tapping a cage opens its animals; several can be selected and given the SAME
+  // entry in one go, which is the normal case when a whole cage shares an arm.
+  DOSE_KIND: {
+    routine: { label: 'ประจำ', hint: 'ขึ้นให้อัตโนมัติในครั้งถัดไป' },
+    once:    { label: 'ชั่วคราว', hint: 'ครั้งนี้ครั้งเดียว' },
+  },
+
+  // the routine items an animal carries into the next round
+  routineItems(mouse) {
+    const last = (mouse.doses || []).filter(d => !d.paused).slice(-1)[0];
+    if (!last) return [];
+    return last.items.filter(i => i.kind === 'routine').map(i => ({ ...i }));
+  },
+  lastDose(mouse) { return (mouse.doses || []).slice(-1)[0] || null; },
+
+  // ---- หน้ารวมสุขภาพระดับโครงการ ----
+  // ตอบคำถามเดียว: ตอนนี้สัตว์ในโครงการนี้เป็นอย่างไรบ้าง และมีตัวไหนที่วันนี้ยังไม่มีใครดู
+  openHealthBoard(p) {
+    const cfg = this.humaneCfg(p);
+    const today = todayISO();
+    const rows = [];
+    p.cages.forEach(c => c.mice.forEach(m => {
+      const st = this.healthNow(m);
+      const last = this.lastScored(m);
+      const checkedToday = (m.health || []).some(h => h.date === today && h.source === 'weigh');
+      rows.push({ c, m, st, last, checkedToday });
+    }));
+    const order = { critical: 0, treating: 1, abnormal: 2, dead: 3, healed: 4, normal: 5 };
+    rows.sort((a, b) => (order[a.st] - order[b.st])
+      || ((b.last ? b.last.total : -1) - (a.last ? a.last.total : -1))
+      || a.m.code.localeCompare(b.m.code));
+
+    const alive = rows.filter(r => r.m.alive);
+    const tally = {};
+    rows.forEach(r => { tally[r.st] = (tally[r.st] || 0) + 1; });
+    const unchecked = alive.filter(r => !r.checkedToday).length;
+
+    const pills = Object.entries(this.HEALTH_STATUS).map(([k, v]) =>
+      tally[k] ? `<span class="hb-pill ${v.tone}">${v.label} <b>${tally[k]}</b></span>` : '').join('');
+
+    const body = rows.map(r => {
+      const v = this.HEALTH_STATUS[r.st];
+      const score = r.last
+        ? `<span class="hb-score ${r.last.result === 'E' ? 'bad' : r.last.total > 0 ? 'warn' : 'ok'}">${r.last.total}/${r.last.max}</span>
+           ${r.last.result ? `<span class="hb-res ${this.HUMANE_RESULT[r.last.result].tone}">${r.last.result}</span>` : ''}
+           <span class="hb-when">${this.thaiDate(r.last.date)}</span>`
+        : '<span class="muted-note">ยังไม่เคยให้คะแนน</span>';
+      return `<tr data-mid="${r.m.id}" data-cid="${r.c.id}">
+        <td><b>${r.m.code}</b><br><span class="muted-note">กรง ${r.c.code}</span></td>
+        <td>${this.tagChip(p, r.c, r.m)}</td>
+        <td><span class="hb-st ${v.tone}">${v.label}</span></td>
+        <td>${score}</td>
+        <td>${!r.m.alive ? '<span class="muted-note">—</span>'
+          : r.checkedToday ? '<span class="hb-ok">✓ ตรวจแล้ว</span>'
+          : '<span class="hb-miss">ยังไม่ได้ตรวจ</span>'}</td>
+      </tr>`;
+    }).join('');
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>🩺 สุขภาพสัตว์ทดลอง</h3>
+          <div class="sub">${p.name} · ${alive.length} ตัวที่มีชีวิต · เกณฑ์ E: รวม ≥ ${cfg.totalThreshold}/${this.humaneMax(p)}${
+            this.hasAutoWeight(p) ? ` หรือน้ำหนักลด ≥ ${cfg.weightLossPct}%` : ''}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="hb-summary">${pills}
+          ${unchecked ? `<span class="hb-pill miss">วันนี้ยังไม่ได้ตรวจ <b>${unchecked}</b></span>` : ''}</div>
+        <div class="hb-items">เกณฑ์ที่ใช้: ${this.humaneCriteria(p).map((x, i) =>
+          `<span>${i + 1}. ${this.esc(x.name)}${x.auto === 'weight' ? ' ⚙️' : ''}</span>`).join('')}</div>
+        <div class="table-wrap">
+          <table class="tbl hb-tbl">
+            <thead><tr><th>หนู</th><th>กลุ่ม</th><th>สถานะ</th><th>คะแนนล่าสุด</th><th>ตรวจวันนี้</th></tr></thead>
+            <tbody>${body || '<tr><td colspan="5"><p class="empty-note">ยังไม่มีหนูในโครงการ</p></td></tr>'}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-foot"><button class="btn" id="hbClose">ปิด</button></div>
+    `, { wide: true });
+
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('hbClose').onclick = () => this.closeModal();
+    document.querySelectorAll('.hb-tbl tbody tr[data-mid]').forEach(tr => tr.onclick = () => {
+      const cage = p.cages.find(c => c.id === tr.dataset.cid);
+      const m = cage && cage.mice.find(x => x.id === tr.dataset.mid);
+      if (m && this.can('viewCage', p)) this.openMouseDetail(p, cage, m);
+    });
+  },
+
+  // ---- ไทม์ไลน์สุขภาพรายตัว ----
+  renderHealthTimeline(p, mouse) {
+    const log = mouse.health || [];
+    if (!log.length) return '<p class="empty-note">ยังไม่มีบันทึกสุขภาพ</p>';
+    const cfg = this.humaneCfg(p);
+    const rows = [...log].reverse().map(h => {
+      const src = this.HEALTH_SOURCE[h.source] || { icon: '•', label: h.source };
+      const st = this.HEALTH_STATUS[h.status] || { label: h.status, tone: '' };
+      const bars = h.scores ? `<div class="ht-scores">${h.scores.map(s => `
+        <span class="ht-sc s${s.v}" title="${this.esc(s.name)}: ${s.v}">
+          <i>${this.esc(s.name)}</i><b>${s.v}</b></span>`).join('')}</div>` : '';
+      const R = h.result ? this.HUMANE_RESULT[h.result] : null;
+      const tot = h.total != null
+        ? `<span class="ht-total ${h.result === 'E' ? 'bad' : h.total > 0 ? 'warn' : 'ok'}">${h.total}/${h.max}</span>`
+          + (R ? `<span class="ht-res ${R.tone}">${R.label}</span>` : '')
+          + (h.lossPct != null && h.lossPct > 0 ? `<span class="ht-loss">น้ำหนักลด ${h.lossPct}%</span>` : '')
+        : '';
+      return `<div class="ht-row ${st.tone}">
+        <div class="ht-when">${this.thaiDate(h.date)}<br><span>${h.time}</span></div>
+        <div class="ht-body">
+          <div class="ht-top">
+            <span class="ht-src">${src.icon} ${src.label}</span>
+            <span class="ht-st ${st.tone}">${st.label}</span>${tot}
+            <span class="spacer" style="flex:1"></span>
+            <span class="ht-by">${this.esc(h.by)}</span>
+          </div>
+          ${h.note ? `<div class="ht-note">${this.esc(h.note)}</div>` : ''}
+          ${bars}
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="ht-list">${rows}</div>`;
+  },
+
+  // newest first — what was done to this animal, round by round
+  renderDoseHistory(mouse) {
+    return `<div class="dose-hist">${[...(mouse.doses || [])].reverse().map(d => `
+      <div class="dh-row">
+        <span class="dh-when">${this.thaiDate(d.date)}<br>${d.time} · ${this.esc(d.by)}</span>
+        <span class="dh-what">${d.paused
+          ? `<span class="dh-paused">⏸️ พักการทดสอบ</span> — ${this.esc(d.pauseReason)}`
+          : d.items.map(i => `<span class="dh-item">• ${this.esc(i.text)}<span class="dh-kind">${this.DOSE_KIND[i.kind].label}</span></span>`).join('')}
+        </span>
+      </div>`).join('')}</div>`;
+  },
+
+  // ---- ทำเหมือนรอบที่แล้ว ----------------------------------
+  // A dosing protocol is the same thing every day, so retyping it 24 times is how
+  // records stop getting written at all. But one button that stamps "done" on 45
+  // animals is a record nobody observed — and this system is audited.
+  //
+  // The middle ground: the repeat is just "apply everyone's ประจำ items", grouped
+  // BY WHAT WOULD BE WRITTEN. Four arms of a study collapse to four confirmations —
+  // one real decision each — instead of 24 keystroke-chores or 1 blind click.
+  // Anything that needs a human to think is pulled out and never swept in.
+  doseSkipReason(m) {
+    if (m.humaneOrder) return 'สั่งการุณยฆาตไว้';
+    if (m.careOpen) return 'กำลังรักษา — รอสัตวแพทย์';
+    if (m.flagOpen) return 'แจ้งผิดปกติ รอสัตวแพทย์ตรวจ';
+    const last = this.lastDose(m);
+    if (last && last.date === todayISO()) return 'บันทึกรอบนี้ไปแล้ว';
+    if (last && last.paused) return 'พักการทดสอบไว้รอบก่อน';
+    if (!last) return 'ยังไม่เคยมีบันทึก';
+    if (!this.routineItems(m).length) return 'รอบก่อนเป็นรายการชั่วคราวล้วน';
+    return null;
+  },
+  doseRepeatPlan(p) {
+    const buckets = new Map();
+    const skip = [];
+    p.cages.forEach(c => c.mice.filter(m => m.alive).forEach(m => {
+      const reason = this.doseSkipReason(m);
+      if (reason) return skip.push({ m, cage: c, reason });
+      const items = this.routineItems(m);
+      const sig = JSON.stringify(items.map(i => i.text));
+      if (!buckets.has(sig)) buckets.set(sig, { items, mice: [], cages: new Set(), dates: new Set(), groups: new Set() });
+      const b = buckets.get(sig);
+      b.mice.push(m); b.cages.add(c.code); b.dates.add(this.lastDose(m).date);
+      b.groups.add((this.cageGroup(p, c) || {}).name || 'ยังไม่จัดกลุ่ม');
+    }));
+    return { buckets: [...buckets.values()].sort((a, b) => b.mice.length - a.mice.length), skip };
+  },
+
+  openDoseRepeat(p) {
+    const draw = () => {
+      const { buckets, skip } = this.doseRepeatPlan(p);
+      const today = todayISO();
+      const rows = buckets.map((b, i) => {
+        const dates = [...b.dates].sort();
+        const newest = dates[dates.length - 1];
+        const days = Math.round((new Date(today) - new Date(newest)) / 86400000);
+        const stale = days > 2;
+        return `<div class="rp-bucket">
+          <div class="rp-hd">
+            <span class="rp-count">${b.mice.length} ตัว</span>
+            <span class="rp-scope">${[...b.groups].join(' · ')} <span class="muted-note">(${b.cages.size} กรง)</span></span>
+            <span class="spacer" style="flex:1"></span>
+            <span class="rp-from ${stale ? 'stale' : ''}">จากรอบ ${this.thaiDate(newest)}${
+              stale ? ` · ผ่านมา ${days} วัน` : ''}</span>
+          </div>
+          <ul class="rp-items">${b.items.map(it => `<li>• ${this.esc(it.text)}</li>`).join('')}</ul>
+          <div class="rp-act">
+            <span class="rp-cages">${[...b.cages].join(', ')}</span>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn btn-green mini" data-bucket="${i}">✓ ยืนยันชุดนี้</button>
+          </div>
+        </div>`;
+      }).join('') || '<p class="empty-note">ไม่มีรายการประจำที่ทำซ้ำได้ในรอบนี้</p>';
+
+      const skipRows = skip.length ? `
+        <div class="rp-skip">
+          <div class="rp-skip-hd">⚠️ ต้องตัดสินใจเอง — ไม่รวมอยู่ในการทำซ้ำ (${skip.length} ตัว)</div>
+          ${skip.map(s => `<div class="rp-skip-row">
+            <b>${s.m.code}</b> <span class="muted-note">กรง ${s.cage.code}</span>
+            <span class="spacer" style="flex:1"></span><span class="rp-why">${s.reason}</span></div>`).join('')}
+        </div>` : '';
+
+      this.openModal(`
+        <div class="modal-head">
+          <div><h3>🔁 ทำเหมือนรอบที่แล้ว</h3>
+            <div class="sub">${p.name} · ระบบจัดกลุ่มตามสิ่งที่จะบันทึก — ยืนยันทีละชุด</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="empty-note" style="margin-top:0">ทำซ้ำเฉพาะรายการที่ทำเครื่องหมาย <b>ประจำ</b> ไว้ — รายการชั่วคราวไม่ตามมา</p>
+          ${rows}
+          ${skipRows}
+        </div>
+        <div class="modal-foot"><button class="btn" id="rpClose">ปิด</button></div>
+      `, { wide: true });
+
+      const done = () => { this.closeModal(); this.renderDashboard(); };
+      this.el('closeModal').onclick = done;
+      this.el('rpClose').onclick = done;
+      document.querySelectorAll('[data-bucket]').forEach(btn => btn.onclick = () => {
+        const b = buckets[+btn.dataset.bucket];
+        const now = new Date();
+        const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        b.mice.forEach(m => {
+          m.doses.push({ date: today, time, by: this.user.name,
+            items: b.items.map(i => ({ text: i.text, kind: 'routine' })),
+            paused: false, pauseReason: '' });
+          if (this.doseSession) this.doseSession.done.add(m.id);
+        });
+        this.log('ให้สารทดสอบ (ทำซ้ำรอบก่อน)',
+          `${b.mice.length} ตัว · ${b.items.map(i => i.text).join(' · ')}`, p.name);
+        this.toast(`บันทึก ${b.mice.length} ตัวแล้ว ✓`);
+        this.refreshUnderlay(p);
+        draw();
+      });
+    };
+    draw();
+  },
+
+  // ---- หน้ารวมของกรง: เลือกหนูที่จะบันทึกพร้อมกัน ----
+  openDoseCage(p, cage) {
+    const live = cage.mice.filter(m => m.alive);
+    if (!live.length) { this.toast(`กรง ${cage.code} ไม่มีหนูที่ต้องให้สาร`); return; }
+    const sel = new Set();
+
+    const draw = () => {
+      const rows = live.map(m => {
+        const last = this.lastDose(m);
+        const doneToday = last && last.date === todayISO();
+        const routine = this.routineItems(m);
+        const state = doneToday
+          ? (last.paused ? '<span class="ds-state pause">พักการทดสอบ</span>'
+                         : `<span class="ds-state done">บันทึกแล้ววันนี้</span>`)
+          : routine.length ? `<span class="ds-state routine">มีรายการประจำ ${routine.length} ข้อ</span>` : '';
+        const tag = this.tagChip(p, cage, m);
+        return `<button class="ds-row ${sel.has(m.id) ? 'on' : ''} ${doneToday ? 'did' : ''}" data-mid="${m.id}">
+          <span class="ds-check">${sel.has(m.id) ? '✓' : ''}</span>
+          <span class="ds-id"><b>${m.cageNo}</b> ${m.code} ${tag}${state}</span>
+          <span class="ds-go" data-solo="${m.id}">บันทึกตัวนี้ →</span>
+        </button>`;
+      }).join('');
+
+      this.openModal(`
+        <div class="modal-head">
+          <div><h3>💉 ให้สารทดสอบ — กรง ${cage.code}</h3>
+            <div class="sub">ชั้น ${this.shelfNameOf(p, cage)} · ${live.length} ตัว · เลือกหลายตัวเพื่อบันทึกเหมือนกันทีเดียว</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="cs-bar">
+            <button class="btn mini" id="dsAll">เลือกทั้งหมด</button>
+            <button class="btn mini" id="dsNone">ล้างที่เลือก</button>
+            <span class="spacer" style="flex:1"></span>
+            <span class="count-chip">เลือกแล้ว ${sel.size} / ${live.length} ตัว</span>
+          </div>
+          <div class="ds-list">${rows}</div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="dsClose">ปิด</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-primary" id="dsGo" ${sel.size ? '' : 'disabled'}>
+            บันทึกพร้อมกัน ${sel.size} ตัว →</button>
+        </div>
+      `, { wide: true });
+
+      this.el('closeModal').onclick = () => { this.closeModal(); this.renderDashboard(); };
+      this.el('dsClose').onclick = () => { this.closeModal(); this.renderDashboard(); };
+      this.el('dsAll').onclick = () => { live.forEach(m => sel.add(m.id)); draw(); };
+      this.el('dsNone').onclick = () => { sel.clear(); draw(); };
+      document.querySelectorAll('.ds-row').forEach(b => b.onclick = (e) => {
+        const solo = e.target.closest('[data-solo]');
+        if (solo) return this.openDoseForm(p, [live.find(m => m.id === solo.dataset.solo)],
+          { where: `กรง ${cage.code}`, back: () => this.openDoseCage(p, cage) });
+        const id = b.dataset.mid;
+        sel.has(id) ? sel.delete(id) : sel.add(id);
+        draw();
+      });
+      this.el('dsGo').onclick = () => {
+        if (!sel.size) return;
+        this.openDoseForm(p, live.filter(m => sel.has(m.id)),
+          { where: `กรง ${cage.code}`, back: () => this.openDoseCage(p, cage) });
+      };
+    };
+    draw();
+  },
+
+  // ---- ฟอร์มกรอกรายการ (ใช้ได้ทั้งตัวเดียวและหลายตัวพร้อมกัน) ----
+  // `back` is how we return when the form closes — a single cage goes back to its
+  // animal list, a cross-cage selection goes back to the rack
+  openDoseForm(p, mice, opts = {}) {
+    const bulk = mice.length > 1;
+    const back = opts.back || (() => this.renderDashboard());
+    const where = opts.where || '';
+    // the tag needs the cage the animal sits in — derived, because a cross-cage
+    // selection has no single cage to pass in
+    const cageOf = m => p.cages.find(c => c.mice.includes(m)) || null;
+    // รายการประจำของตัวแรกถูกดึงขึ้นมาให้ก่อน — ลบทิ้งได้ถ้ารอบนี้ไม่ทำ
+    const st = {
+      items: this.routineItems(mice[0]),
+      paused: false,
+      reason: '',
+    };
+    if (!st.items.length) st.items.push({ text: '', kind: 'once' });
+
+    const draw = () => {
+      const rows = st.items.map((it, i) => `
+        <div class="dz-item" data-i="${i}">
+          <span class="dz-n">${i + 1}</span>
+          <input class="dz-text" type="text" value="${this.esc(it.text)}" data-i="${i}"
+                 placeholder="ทำอะไรกับหนูตัวนี้ เช่น ป้อนสาร A 10 mg/kg · เจาะเลือดหาง">
+          <div class="dz-kind">
+            ${Object.entries(this.DOSE_KIND).map(([k, v]) => `
+              <button type="button" class="dz-k ${it.kind === k ? 'on' : ''}" data-kind="${k}" data-i="${i}"
+                      title="${v.hint}">${v.label}</button>`).join('')}
+          </div>
+          <button type="button" class="mini-btn danger dz-del" data-i="${i}">ลบ</button>
+        </div>`).join('');
+
+      const who = bulk
+        ? `<div class="dz-who">บันทึกพร้อมกัน <b>${mice.length} ตัว</b> — ${mice.map(m => m.code).join(' · ')}</div>`
+        : `<div class="dz-who">${mice[0].code} ${this.tagChip(p, cageOf(mice[0]), mice[0])}</div>`;
+
+      this.openModal(`
+        <div class="modal-head">
+          <div><h3>💉 ให้สารทดสอบ${where ? ' — ' + where : ''}</h3>
+            <div class="sub">บันทึกว่าทำอะไรกับหนู — เพิ่มได้หลายรายการ</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          ${who}
+          ${st.paused ? `
+            <div class="dz-paused">
+              <div class="dz-pt">⏸️ พักการทดสอบรอบนี้</div>
+              <div class="field">
+                <label for="dzReason">เหตุผลที่พัก <span class="req-star">*</span></label>
+                <textarea id="dzReason" rows="3" placeholder="เช่น หนูน้ำหนักลดต่อเนื่อง รอสัตวแพทย์ประเมินก่อน">${this.esc(st.reason)}</textarea>
+              </div>
+              <button class="btn mini" id="dzUnpause">← กลับไปกรอกรายการ</button>
+            </div>`
+          : `
+            <div class="dz-list">${rows}</div>
+            <button class="btn mini" id="dzAdd">+ เพิ่มรายการ</button>
+            <p class="empty-note" style="margin:10px 0 0">
+              <b>ประจำ</b> = ครั้งถัดไปจะขึ้นให้อัตโนมัติ (ลบทิ้งได้) · <b>ชั่วคราว</b> = ครั้งนี้ครั้งเดียว</p>`}
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="dzCancel">ยกเลิก</button>
+          <span class="spacer" style="flex:1"></span>
+          ${st.paused ? '' : '<button class="btn btn-warn" id="dzPause">⏸️ พักการทดสอบ</button>'}
+          <button class="btn btn-green" id="dzSave">💾 บันทึก</button>
+        </div>
+      `, { wide: true });
+
+      const capture = () => {
+        document.querySelectorAll('.dz-text').forEach(inp => { st.items[+inp.dataset.i].text = inp.value; });
+        const r = this.el('dzReason'); if (r) st.reason = r.value;
+      };
+      this.el('closeModal').onclick = back;
+      this.el('dzCancel').onclick = back;
+      if (this.el('dzAdd')) this.el('dzAdd').onclick = () => {
+        capture(); st.items.push({ text: '', kind: 'once' }); draw();
+      };
+      if (this.el('dzPause')) this.el('dzPause').onclick = () => { capture(); st.paused = true; draw(); };
+      if (this.el('dzUnpause')) this.el('dzUnpause').onclick = () => { capture(); st.paused = false; draw(); };
+      document.querySelectorAll('.dz-del').forEach(b => b.onclick = () => {
+        capture(); st.items.splice(+b.dataset.i, 1);
+        if (!st.items.length) st.items.push({ text: '', kind: 'once' });
+        draw();
+      });
+      document.querySelectorAll('.dz-k').forEach(b => b.onclick = () => {
+        capture(); st.items[+b.dataset.i].kind = b.dataset.kind; draw();
+      });
+      this.el('dzSave').onclick = () => { capture(); this.saveDose(p, mice, st, opts); };
+      const first = document.querySelector('.dz-text, #dzReason');
+      if (first) first.focus({ preventScroll: true });
+    };
+    draw();
+  },
+
+  saveDose(p, mice, st, opts = {}) {
+    if (st.paused) {
+      if (!st.reason.trim()) { this.el('dzReason')?.focus(); this.toast('กรุณาระบุเหตุผลที่พักการทดสอบ'); return; }
+    } else {
+      st.items = st.items.filter(i => i.text.trim());
+      if (!st.items.length) { this.toast('กรุณากรอกอย่างน้อย 1 รายการ'); return; }
+    }
+    const now = new Date();
+    const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const rec = {
+      date: todayISO(), time, by: this.user.name,
+      items: st.paused ? [] : st.items.map(i => ({ text: i.text.trim(), kind: i.kind })),
+      paused: st.paused, pauseReason: st.paused ? st.reason.trim() : '',
+    };
+    mice.forEach(m => {
+      m.doses = m.doses || [];
+      m.doses.push(JSON.parse(JSON.stringify(rec)));
+      if (this.doseSession) this.doseSession.done.add(m.id);
+    });
+
+    const who = mice.length > 1 ? `${mice.length} ตัว${opts.where ? ' · ' + opts.where : ''}` : mice[0].code;
+    this.log(st.paused ? 'พักการให้สารทดสอบ' : 'ให้สารทดสอบ',
+      st.paused ? `${who} · ${rec.pauseReason}` : `${who} · ${rec.items.map(i => i.text).join(' · ')}`, p.name);
+    if (st.paused) {
+      this.notify({ kind: 'dose', title: '⏸️ พักการให้สารทดสอบ',
+        detail: `${who} — ${rec.pauseReason}`, project: p,
+        to: [...this.nResearchers(p), ...this.nVets(p)], link: { type: 'dashboard' } });
+    }
+    this.toast(st.paused ? `พักการทดสอบ ${who} แล้ว` : `บันทึก ${who} แล้ว ✓`);
+    this.refreshUnderlay(p);   // ตัวนับบนแถบและสีกรงต้องขยับทันที
+    (opts.back || (() => this.renderDashboard()))();
   },
 
   // ---------------------------------------------------------
@@ -5690,7 +7345,7 @@ const App = {
     overlay.id = 'overlay';
     overlay.innerHTML = `<div class="modal ${opts.wide ? 'wide' : ''} ${opts.compact ? 'compact' : ''}">${html}</div>`;
     overlay.addEventListener('mousedown', (e) => {
-      if (e.target === overlay && !this.wizard) this.closeModal();
+      if (e.target === overlay && !this.wizard && !this.careWiz) this.closeModal();
     });
     document.body.appendChild(overlay);
   },

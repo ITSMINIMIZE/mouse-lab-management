@@ -215,6 +215,12 @@ function makeMouse(code, sex, baseline, trend, groupNo = null, cageNo = null) {
     flagOpen: false,           // "looks abnormal" flag raised by any member → orange !, awaits VET review
     flag: null,                // { by, note, date } — who reported and how it looks abnormal
     humaneOrder: null,         // vet order to euthanise: { reason, vet, date }
+    // การให้สารทดสอบ/หัตถการของ AHS — หนึ่งรายการต่อการบันทึกหนึ่งครั้ง
+    // { date, time, by, items:[{text, kind:'routine'|'once'}], paused, pauseReason }
+    doses: [],
+    // ไทม์ไลน์สุขภาพ — เขียนต่อท้ายอย่างเดียว ไม่มีการลบ ทุกคนที่สังเกตเห็นอะไรลงที่นี่
+    // { date, time, by, source, status, note, scores?, total?, max? } — ดู App.HEALTH_SOURCE
+    health: [],
     necropsy: null,            // Necropsy Record (only when death.disposition==='necropsy'):
                                //   { date, time, examiner, results:{ [organ]:{v:'N'|'A'|'X', note} }, abnormal, avComment }
   };
@@ -232,6 +238,8 @@ function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
     groupId,
     dietId: opts.dietId ?? null,
     shelf,
+    // ชื่อชั้นที่แสดง — สำเนาไว้เหมือนที่ submitBuildProject ทำ (ตัวจริงคือ p.shelfNames)
+    shelfLabel: opts.shelfLabel ?? null,
     rackNo: opts.rackNo ?? null,   // แร็คที่ชั้นนี้อยู่ (โครงการหนึ่งมีได้หลายแร็ค)
     position,
     mice,
@@ -246,6 +254,9 @@ function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
       added: null,
       consumed: opts.foodConsumed ?? rand(3.5, 5.5) * (mice.length || 1),
     },
+    // บันทึกการตรวจดูแลกรงของ ACT — หนึ่งรายการต่อการตรวจหนึ่งรอบ
+    // { date, time, by, items: { animals, feed, water, cage } } — ดู App.CARE_ITEMS
+    careLog: opts.careLog ?? [],
     status: opts.status ?? 'pending',             // 'done' | 'pending' | 'alert'
     lastRecordDate: opts.lastRecordDate ?? isoDaysAgo(1),
   };
@@ -308,7 +319,7 @@ for (let si = 0; si < 4; si++) {
         prof.trend + rand(-0.05, 0.05), gno, k));
     }
     cagesP1.push(makeCage(nextCageId(), code, groupId, si + 1, pos, mice, {
-      dietId, lastRecordDate: isoDaysAgo(1),
+      dietId, shelfLabel: letter, rackNo: si < 2 ? 'R3' : 'R4', lastRecordDate: isoDaysAgo(1),
     }));
   }
 }
@@ -458,7 +469,7 @@ for (let si = 0; si < 2; si++) {
     cagesDone.push(makeCage(nextCageId(), code, groupId, si + 1, pos, [
       makeMouse(mouseCode('P3', code, 1), cageSex, 26.5 + rand(-1, 1), si === 0 ? 0.28 : 0.16, g1, 1),
       makeMouse(mouseCode('P3', code, 2), cageSex, 25.5 + rand(-1, 1), si === 0 ? 0.26 : 0.15, g2, 2),
-    ], { dietId: 'DD1', lastRecordDate: isoDaysAgo(96) }));
+    ], { dietId: 'DD1', shelfLabel: letter, rackNo: 'R1', lastRecordDate: isoDaysAgo(96) }));
   }
 }
 
@@ -487,6 +498,26 @@ const DB = {
         species: 'Mus musculus', strain: 'C57BL/6',
         sexes: ['M', 'F'], ageMin: 6, ageMax: 8, weightMin: 20, weightMax: 25,
         maleCount: 24, femaleCount: 24, totalMice: 48,
+        // เกณฑ์ Humane endpoint — ตั้งค่าตอน PI ยื่นคำขอ แต่ละโครงการต่างกันได้
+        humaneScore: {
+          criteria: [
+            { name: 'Behavior and Physical appearance', auto: null, other: true, levels: [
+              'Normal appearance, healthy with normal activity',
+              'Lack of grooming, Weakness, loss of appetite, Dehydration',
+              'Rough coat, Lethargy, Isolation, Porphyrin staining (Eye, Nose, Mouth)',
+              'Do not movement, Moribund, Inactivity, Hunched posture (± Clinical signs)'] },
+            // เก็บเป็นจุดตัด % — คำอธิบายระบบสร้างให้เอง ขัดกับการคำนวณไม่ได้
+            { name: 'Body weight change', auto: 'weight', other: false, cuts: [10, 20] },
+            { name: 'Grimace scale', auto: null, other: false, levels: [
+              'Grimace score = 0', 'Grimace score = 0.1 – 0.9',
+              'Grimace score = 1.0 – 1.9', 'Grimace score ≥ 2.0'] },
+            { name: 'Protocol-related parameter', auto: null, other: true, levels: [
+              'Normal urination, Normal activity', 'Polydipsia, Polyuria',
+              'Paw edema, Loss of appetite', 'Foot ulcer, Blindness'] },
+          ],
+          totalThreshold: 8, weightLossPct: 20,
+          note: '< 140 mg/dl of blood glucose in 2-hour after glucose loading',
+        },
         objective: 'ศึกษาผลของอาหารไขมันสูงและยาต่อภาวะไขมันพอกตับในหนู C57BL/6',
         // แผนการใช้สัตว์ทดลอง — รายการสุดท้ายคือ "End" บนใบติดหน้ากรง
         plan: [
@@ -530,6 +561,23 @@ const DB = {
         species: 'Mus musculus', strain: 'BALB/c',
         sexes: ['M', 'F'], ageMin: 8, ageMax: 10, weightMin: 22, weightMax: 28,
         maleCount: 6, femaleCount: 6, totalMice: 12,
+        // เกณฑ์ Humane endpoint — ตั้งค่าตอน PI ยื่นคำขอ แต่ละโครงการต่างกันได้
+        humaneScore: {
+          criteria: [
+            { name: 'Behavior and Physical appearance', auto: null, other: true, levels: [
+              'Normal appearance, healthy with normal activity',
+              'Lack of grooming, Weakness, loss of appetite, Dehydration',
+              'Rough coat, Lethargy, Isolation, Porphyrin staining (Eye, Nose, Mouth)',
+              'Do not movement, Moribund, Inactivity, Hunched posture (± Clinical signs)'] },
+            // เก็บเป็นจุดตัด % — คำอธิบายระบบสร้างให้เอง ขัดกับการคำนวณไม่ได้
+            { name: 'Body weight change', auto: 'weight', other: false, cuts: [10, 20] },
+            { name: 'Grimace scale', auto: null, other: false, levels: [
+              'Grimace score = 0', 'Grimace score = 0.1 – 0.9',
+              'Grimace score = 1.0 – 1.9', 'Grimace score ≥ 2.0'] },
+          ],
+          totalThreshold: 6, weightLossPct: 20,
+          note: '< 140 mg/dl of blood glucose in 2-hour after glucose loading',
+        },
         objective: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
         plan: [
           { date: '2026-01-02', detail: 'รับสัตว์เข้าห้องกักกันโรค' },
@@ -638,6 +686,7 @@ const DB = {
         protocolEndpoint: req.protocolEndpoint || '',
         humaneEndpoint: req.humaneEndpoint || '',
         plan: req.plan || [],                  // แผนการใช้สัตว์ทดลอง [{date:'YYYY-MM-DD', detail}] — sorted by date
+        humaneScore: req.humaneScore || null,  // เกณฑ์หยุดการทดลองที่ PI เสนอมา
         diagram: req.diagram || null,          // experiment diagram (image)
         aup: req.aup || null,                  // Animal Use Protocol (pdf)
         approvalDoc: req.approvalDoc || null,  // ethics approval (pdf)
@@ -661,6 +710,22 @@ const DB = {
     maleCount: 12, femaleCount: 12,
     protocolEndpoint: 'สิ้นสุดเมื่อครบ 12 สัปดาห์ของการให้สารทดสอบ หรือเมื่อเก็บตัวอย่างครบตามแผน',
     humaneEndpoint: 'น้ำหนักลดเกิน 20% ของน้ำหนักเริ่มต้น · ไม่กินอาหาร/น้ำเกิน 24 ชม. · ขนหยองซึม ไม่ตอบสนองต่อสิ่งเร้า · หายใจลำบาก · มีแผลติดเชื้อลุกลาม — ให้ทำการุณยฆาตทันที',
+    // เกณฑ์ Humane endpoint — ตั้งค่าตอน PI ยื่นคำขอ แต่ละโครงการต่างกันได้
+    humaneScore: {
+      criteria: [
+        { name: 'Behavior and Physical appearance', auto: null, other: true, levels: [
+          'Normal appearance, healthy with normal activity',
+          'Lack of grooming, Weakness, loss of appetite, Dehydration',
+          'Rough coat, Lethargy, Isolation, Porphyrin staining (Eye, Nose, Mouth)',
+          'Do not movement, Moribund, Inactivity, Hunched posture (± Clinical signs)'] },
+        { name: 'Body weight change', auto: 'weight', other: false, cuts: [10, 20] },
+        { name: 'Grimace scale', auto: null, other: false, levels: [
+          'Grimace score = 0', 'Grimace score = 0.1 – 0.9',
+          'Grimace score = 1.0 – 1.9', 'Grimace score ≥ 2.0'] },
+      ],
+      totalThreshold: 6, weightLossPct: 20,
+      note: '< 140 mg/dl of blood glucose in 2-hour after glucose loading',
+    },
     totalMice: 24, objective: 'ประเมินความปลอดภัยต่อระบบหัวใจของสารทดสอบในหนูทดลอง',
     diets: [
       { name: 'อาหารทั่วไป', isDefault: true, plannedMice: 12 },
@@ -737,6 +802,7 @@ const DB = {
           shelf: row.shelf, position: i + 1, mice: [],
           water: { remaining: 300, added: null, consumed: 0 },
           food:  { remaining: 100, added: null, consumed: 0 },
+          careLog: [],
           status: 'pending', lastRecordDate: todayISO(),
         });
       });
@@ -753,6 +819,23 @@ const DB = {
         species: 'Mus musculus', strain: 'ICR',
         sexes: ['M', 'F'], ageMin: 7, ageMax: 9, weightMin: 22, weightMax: 28,
         maleCount: 6, femaleCount: 4,
+        // เกณฑ์ Humane endpoint — ตั้งค่าตอน PI ยื่นคำขอ แต่ละโครงการต่างกันได้
+        humaneScore: {
+          criteria: [
+            { name: 'Behavior and Physical appearance', auto: null, other: true, levels: [
+              'Normal appearance, healthy with normal activity',
+              'Lack of grooming, Weakness, loss of appetite, Dehydration',
+              'Rough coat, Lethargy, Isolation, Porphyrin staining (Eye, Nose, Mouth)',
+              'Do not movement, Moribund, Inactivity, Hunched posture (± Clinical signs)'] },
+            // เก็บเป็นจุดตัด % — คำอธิบายระบบสร้างให้เอง ขัดกับการคำนวณไม่ได้
+            { name: 'Body weight change', auto: 'weight', other: false, cuts: [10, 20] },
+            { name: 'Grimace scale', auto: null, other: false, levels: [
+              'Grimace score = 0', 'Grimace score = 0.1 – 0.9',
+              'Grimace score = 1.0 – 1.9', 'Grimace score ≥ 2.0'] },
+          ],
+          totalThreshold: 6, weightLossPct: 20,
+          note: '< 140 mg/dl of blood glucose in 2-hour after glucose loading',
+        },
         totalMice: 10, objective: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
         diets: [ { name: 'อาหารทั่วไป', isDefault: true, plannedMice: 10 }, { name: 'ไขมันสูง', isDefault: false, plannedMice: 6 } ],
         groups: [ { name: 'Control', isControl: true, plannedMice: 4 }, { name: 'Treatment', isControl: false, plannedMice: 6 } ],
@@ -786,6 +869,79 @@ const DB = {
 // demo: give every project the same team so the members list is consistent when
 // switching personas. PI/CoPI/AHS are the working research team; Sci/VET/ACT are
 // the per-project appointments of the service positions.
+// AHS dosing history for the running project, so "ทำเหมือนรอบที่แล้ว" has something
+// to repeat FROM. Each arm gets its own routine line — that is what makes the repeat
+// screen collapse 24 cages into one confirmation per arm — plus a one-off here and
+// there that must NOT carry forward.
+(function seedDoses() {
+  const p1 = DB.projects.find(p => p.id === 'P1');
+  if (!p1) return;
+  const routineByGroup = {
+    G1: 'ป้อน vehicle (0.5% CMC) 10 mL/kg ทางปาก',
+    G2: 'ป้อนสาร A 10 mg/kg ทางปาก (oral gavage)',
+    G3: 'ป้อนสาร A 30 mg/kg ทางปาก (oral gavage)',
+    G4: 'ป้อนสาร A 30 mg/kg ทางปาก + วัดอุณหภูมิร่างกาย',
+  };
+  const AHS = 'AHS — นักวิจัยปฏิบัติการ';
+  p1.cages.forEach(c => {
+    const line = routineByGroup[c.groupId];
+    if (!line) return;
+    c.mice.forEach(m => {
+      if (!m.alive) return;
+      // สองรอบก่อนหน้า — รอบล่าสุด (เมื่อวาน) คือรอบที่ปุ่มทำซ้ำจะหยิบมาใช้
+      [3, 1].forEach(ago => {
+        const items = [{ text: line, kind: 'routine' }];
+        // รายการชั่วคราวของรอบก่อน ต้องไม่ตามมาในการทำซ้ำ
+        if (ago === 1 && m.cageNo === 1 && c.code === 'B-03') {
+          items.push({ text: 'เจาะเลือดหางข้างซ้าย 100 µL', kind: 'once' });
+        }
+        m.doses.push({ date: isoDaysAgo(ago), time: ago === 1 ? '09:15' : '09:05', by: AHS,
+          items, paused: false, pauseReason: '' });
+      });
+    });
+  });
+  // หนึ่งตัวถูกพักไว้เมื่อวาน — ต้องถูกคัดออกจากการทำซ้ำ ไม่ใช่กวาดไปด้วย
+  const c04 = p1.cages.find(c => c.code === 'C-04');
+  const paused = c04 && c04.mice.find(m => m.alive);
+  if (paused) {
+    paused.doses.push({ date: isoDaysAgo(1), time: '09:20', by: AHS, items: [],
+      paused: true, pauseReason: 'น้ำหนักลดต่อเนื่อง 3 วัน รอสัตวแพทย์ประเมินก่อน' });
+  }
+})();
+
+// ประวัติการประเมิน Humane endpoint ย้อนหลังของโครงการที่กำลังเดิน
+// ส่วนใหญ่ N (ปกติ) ทุกสัปดาห์ — นั่นคือประเด็น: บันทึกไว้ว่ามีคนประเมินจริง
+// และมีบางตัวที่คะแนนไต่ขึ้น ซึ่งเป็นที่มาของเคสที่ค้างอยู่ตอนนี้
+(function seedHealth() {
+  const p1 = DB.projects.find(p => p.id === 'P1');
+  if (!p1) return;
+  const crit = p1.request.humaneScore.criteria;
+  const cfg = p1.request.humaneScore;
+  const SCI = 'Sci — นักวิทยาศาสตร์';
+  const mk = (date, scores, note) => {
+    const total = scores.reduce((a, b) => a + b, 0);
+    const result = total >= cfg.totalThreshold ? 'E' : 'N';
+    return { date, time: '09:30', by: SCI, source: 'weigh',
+      status: result === 'E' ? 'critical' : total === 0 ? 'normal' : 'abnormal',
+      note: note || '',
+      scores: crit.map((c, i) => ({ name: c.name, v: scores[i] })),
+      total, max: crit.length * 3, result, lossPct: 0 };
+  };
+  const zeros = crit.map(() => 0);
+  p1.cages.forEach(c => c.mice.forEach(m => {
+    // ประเมินรายสัปดาห์ — ย้อนหลัง 2 รอบ
+    [14, 7].forEach(d => m.health.push(mk(isoDaysAgo(d), zeros)));
+  }));
+  // ตัวที่ตอนนี้ยังมีเรื่องค้างอยู่ — คะแนนไต่ขึ้นก่อนหน้านั้น
+  [['A-04', 1], ['B-03', 1]].forEach(([code, no]) => {
+    const cage = p1.cages.find(x => x.code === code);
+    const m = cage && cage.mice.find(x => x.cageNo === no);
+    if (!m) return;
+    m.health.push(mk(isoDaysAgo(3), [1, 0, 0, 0], 'Lack of grooming เริ่มเห็นชัด'));
+    m.health.push(mk(isoDaysAgo(1), [2, 1, 1, 1], 'Rough coat, lethargy · เริ่มแยกตัวจากกลุ่ม'));
+  });
+})();
+
 (function seedTeam() {
   const TEAM = [
     { userId: 'u_pi',     roles: ['PI'] },
@@ -824,7 +980,7 @@ const REQUEST_SHAPE = {
   ageMin: '', ageMax: '', weightMin: '', weightMax: '',
   maleCount: 0, femaleCount: 0, totalMice: 0,
   objective: '', protocolEndpoint: '', humaneEndpoint: '',
-  diets: [], groups: [], plan: [],
+  diets: [], groups: [], plan: [], humaneScore: null,
   diagram: null, aup: null, approvalDoc: null, extraDocs: [], appointments: [],
 };
 (function normalizeRequests() {
