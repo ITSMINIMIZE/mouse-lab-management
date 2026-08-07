@@ -135,10 +135,10 @@ const App = {
   logHealth(mouse, entry) {
     if (!mouse) return;
     mouse.health = mouse.health || [];
-    const now = new Date();
-    mouse.health.push({
-      date: entry.date || todayISO(),
-      time: entry.time || `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
+    this.pushDated(mouse.health, {
+      ...this.recStamp(),                  // ⏱ ย้อนหลัง — เก็บวัน-เวลาที่กรอกจริงไว้คู่กัน
+      date: entry.date || this.recDate(),
+      time: entry.time != null ? entry.time : this.recTime(),
       by: entry.by || this.user.name,
       source: entry.source, status: entry.status,
       note: entry.note || '',
@@ -236,6 +236,197 @@ const App = {
     const dt = new Date(y + 1, m - 1, d);
     dt.setDate(dt.getDate() - 1);
     return this.isoOf(dt.getFullYear(), dt.getMonth() + 1, dt.getDate());
+  },
+
+  // ---------------------------------------------------------
+  // BACKDATED ENTRY — บันทึกย้อนหลัง
+  // ---------------------------------------------------------
+  // A round happens on the floor, not at a keyboard. No signal in the animal room,
+  // a flat tablet, a power cut — the work gets written on paper and typed in the
+  // next day. Refusing to accept that does not produce a cleaner record, it produces
+  // a WRONG one: every entry stamped with the day somebody found a computer.
+  //
+  // So two dates are kept, never one:
+  //   rec.date  → the date of the EVENT — what every save stamps
+  //   late{}    → the ENTRY — who typed it, at what real date/time, and why late
+  // They travel together on the saved record, so a reviewer can always separate
+  // "when it happened" from "when we wrote it down". A reason is compulsory: a
+  // backdated record with no explanation is precisely what an audit flags.
+  //
+  // Off by default, and cleared on leaving the project or logging out — a mode this
+  // quiet must never survive into the next thing the user does.
+  rec: { date: null, time: '', why: '', pid: null },
+  recOn() { return !!this.rec.date; },
+  // the date every save stamps — today unless backdating
+  recDate() { return this.rec.date || todayISO(); },
+  // the time it happened. While backdating this may legitimately be '' — the person
+  // noted the day in a notebook, not the minute. Blank beats inventing a clock time.
+  recTime() { return this.recOn() ? (this.rec.time || '') : nowHM(); },
+  // audit stamp merged into every record saved while backdating — spread it in.
+  // `key` lets a two-stage record (death → carcass) stamp each stage separately.
+  recStamp(key = 'late') {
+    if (!this.recOn()) return {};
+    return { [key]: { at: todayISO(), atTime: nowHM(), by: this.user.name, why: this.rec.why } };
+  },
+  // the marker shown wherever such a record is listed
+  lateChip(r, key = 'late') {
+    const l = r && r[key];
+    if (!l) return '';
+    return `<span class="late-chip" title="กรอกย้อนหลังเมื่อ ${this.thaiDate(l.at)} ${l.atTime || ''} โดย ${this.esc(l.by)} — เหตุผล: ${this.esc(l.why)}">⏱ ย้อนหลัง</span>`;
+  },
+  recReset() { this.rec = { date: null, time: '', why: '', pid: null }; },
+  // every capability that writes a dated record — drives who sees the control
+  REC_CAPS: ['weigh', 'cageCare', 'dosing', 'treat', 'flag', 'reportDeath', 'handleCarcass'],
+
+  // ---- ORDER-SAFE INSERTS -------------------------------------------------
+  // Every history in the app is read positionally: latestWeight/prevWeight take the
+  // last two weights, healthNow/lastDose/lastCarePanel take slice(-1), treatments[0]
+  // is the newest. That was safe while records could only ever be added for TODAY.
+  // Backdating breaks it — a round typed in for last Tuesday would append itself
+  // after today's and become "the latest". So a backdated record is INSERTED at its
+  // place in the timeline instead of pushed onto the end.
+  recKey(r) { return `${r.date || ''} ${r.time || ''}`; },
+  // arrays kept oldest → newest (health, doses, careLog)
+  pushDated(arr, row) {
+    const i = arr.findIndex(r => this.recKey(r) > this.recKey(row));
+    if (i < 0) arr.push(row); else arr.splice(i, 0, row);
+    return row;
+  },
+  // arrays kept newest → oldest (treatments)
+  unshiftDated(arr, row) {
+    const i = arr.findIndex(r => this.recKey(r) < this.recKey(row));
+    if (i < 0) arr.push(row); else arr.splice(i, 0, row);
+    return row;
+  },
+  // one weight per date: replace the entry for that day, otherwise insert in order
+  putWeight(mouse, date, weight) {
+    const at = mouse.weights.findIndex(w => w.date === date);
+    if (at >= 0) { mouse.weights[at].weight = weight; Object.assign(mouse.weights[at], this.recStamp()); return; }
+    this.pushDated(mouse.weights, { date, weight, ...this.recStamp() });
+  },
+  // "ล่าสุด" markers must never move backwards because someone filled in an old day
+  bumpDate(cur, d) { return cur && cur > d ? cur : d; },
+  // a round is "รอบวันนี้" only when it really is today — a notification telling the
+  // team that today's round is finished, when the data is last Tuesday's, is a lie
+  recRoundLabel() { return this.recOn() ? `รอบวันที่ ${this.thaiDate(this.rec.date)}` : 'รอบวันนี้'; },
+
+  REC_REASONS: [
+    'ไม่มีสัญญาณอินเทอร์เน็ตในห้องเลี้ยงสัตว์',
+    'อุปกรณ์ไม่พร้อม / แบตเตอรี่หมด',
+    'จดใส่กระดาษไว้ก่อน แล้วมากรอกภายหลัง',
+    'ระบบขัดข้อง เข้าใช้งานไม่ได้ในวันนั้น',
+    'กรอกแทนผู้ปฏิบัติงานที่ไม่ได้เข้าระบบ',
+  ],
+
+  // the button that lives at the right end of the project-name row: it shows the
+  // date/time the next save will carry, which is the whole point of putting it there.
+  recBtn() {
+    if (this.recOn()) {
+      return `<button class="recbtn on" id="recDateBtn" title="กำลังบันทึกย้อนหลัง — กดเพื่อแก้ไขหรือกลับมาบันทึกวันนี้">
+          <span class="rb-ico">⏱</span>
+          <span class="rb-txt">บันทึกย้อนหลัง · <b>${this.thaiDate(this.rec.date)}</b>${this.rec.time ? ' ' + this.rec.time : ''}</span>
+        </button>`;
+    }
+    return `<button class="recbtn" id="recDateBtn" title="วันที่ที่ระบบจะบันทึก — กดเพื่อบันทึกย้อนหลังเมื่อวันนั้นกรอกไม่ได้">
+        <span class="rb-ico">📅</span>
+        <span class="rb-txt">${this.thaiDate(todayISO())}</span>
+        <span class="rb-time" id="recClock">${nowHM()}</span>
+      </button>`;
+  },
+
+  // ตั้งค่าวันที่บันทึก — วันที่ + เวลา (ถ้าทราบ) + เหตุผล
+  openRecDate(p) {
+    let d = this.rec.date || '';
+    let t = this.rec.time || '';
+    let why = this.rec.why || '';
+    const today = todayISO();
+    const min = p && p.startDate ? p.startDate : '';
+
+    const draw = () => {
+      const picked = d && d !== today;
+      this.setModal(`
+        <div class="modal-head">
+          <div><h3>🗓️ วันที่ที่จะบันทึก</h3>
+            <div class="sub">${p ? p.name : ''}</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <p class="empty-note" style="margin-top:0">
+            ตามปกติทุกอย่างจะถูกบันทึกเป็น <b>วันนี้</b> — ใช้หน้านี้เฉพาะเมื่อ<b>วันที่เกิดเหตุจริงกรอกไม่ได้</b>
+            (เช่น ไม่มีสัญญาณ อุปกรณ์ไม่พร้อม) แล้วนำมากรอกทีหลัง<br>
+            ระบบจะยังเก็บ<b>วัน–เวลาที่กรอกจริง</b>ไว้คู่กันเสมอ และทำเครื่องหมาย <span class="late-chip">⏱ ย้อนหลัง</span> ที่รายการนั้น
+          </p>
+
+          <div class="rd-grid">
+            <div class="field">
+              <label>วันที่เกิดเหตุ <span style="color:var(--red)">*</span></label>
+              ${this.dateChip('rdDate', picked ? d : '', 'วันนี้ (' + this.thaiDate(today) + ')')}
+            </div>
+            <div class="field">
+              <label>เวลา <span class="muted-lbl">(ถ้าไม่ทราบ เว้นว่างได้)</span></label>
+              <input id="rdTime" value="${this.esc(t)}" placeholder="เช่น 09:30" ${picked ? '' : 'disabled'}>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>เหตุผลที่กรอกย้อนหลัง <span style="color:var(--red)">*</span></label>
+            <div class="rd-chips">${this.REC_REASONS.map(r =>
+              `<button type="button" class="btn btn-sm rd-chip${why === r ? ' on' : ''}" data-why="${this.esc(r)}">${r}</button>`).join('')}</div>
+            <textarea id="rdWhy" rows="2" placeholder="ระบุเหตุผล — จะถูกเก็บไว้กับทุกรายการที่บันทึกในโหมดนี้">${this.esc(why)}</textarea>
+          </div>
+
+          ${picked ? `<p class="rd-warn">ทุกการบันทึกหลังจากนี้ (ชั่งน้ำหนัก · ตรวจกรง · ให้สารทดสอบ · แจ้งป่วย · แจ้งตาย ฯลฯ)
+            จะลงวันที่เป็น <b>${this.thaiDate(d)}</b> จนกว่าจะกดกลับมาบันทึกวันนี้</p>` : ''}
+        </div>
+        <div class="modal-foot">
+          ${this.recOn() ? `<button class="btn" id="rdOff">↩︎ กลับมาบันทึกวันนี้</button>` : ''}
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn" id="rdCancel">ยกเลิก</button>
+          <button class="btn btn-primary" id="rdOk" ${picked ? '' : 'disabled'}>${this.recOn() ? 'บันทึกการแก้ไข' : 'เริ่มบันทึกย้อนหลัง'}</button>
+        </div>`);
+      wire();
+    };
+
+    // the dialog is only ever reachable from the dashboard, so repainting under it
+    // is enough — never go() here, that would disarm the mode we just armed
+    const finish = () => { this.closeModal(); this.refreshUnderlay(p); };
+
+    const wire = () => {
+      this.el('closeModal').onclick = () => this.closeModal();
+      this.el('rdCancel').onclick = () => this.closeModal();
+      this.el('rdDate').onclick = (e) => this.openThaiCalendar(e.currentTarget, d, iso => {
+        d = iso || '';
+        if (!d || d === today) t = '';
+        draw();
+      });
+      const time = this.el('rdTime');
+      if (time) time.oninput = () => { t = time.value.trim(); };
+      const ta = this.el('rdWhy');
+      ta.oninput = () => { why = ta.value; document.querySelectorAll('.rd-chip').forEach(b => b.classList.toggle('on', b.dataset.why === why.trim())); };
+      document.querySelectorAll('.rd-chip').forEach(b => b.onclick = () => { why = b.dataset.why; draw(); });
+      const off = this.el('rdOff');
+      if (off) off.onclick = () => {
+        this.recReset();
+        this.log('กลับมาบันทึกตามวันจริง', 'ปิดโหมดบันทึกย้อนหลัง', p ? p.name : '');
+        this.toast('กลับมาบันทึกเป็นวันนี้แล้ว');
+        finish();
+      };
+      this.el('rdOk').onclick = () => {
+        if (!d || d === today) return;
+        if (d > today) { this.toast('เลือกวันที่ล่วงหน้าไม่ได้ — บันทึกได้เฉพาะวันที่ผ่านมาแล้ว'); return; }
+        if (min && d < min) { this.toast(`โครงการเริ่มวันที่ ${this.thaiDate(min)} — ย้อนหลังก่อนหน้านั้นไม่ได้`); return; }
+        if (t && !/^\d{1,2}:\d{2}$/.test(t)) { this.el('rdTime').focus(); this.toast('รูปแบบเวลาไม่ถูกต้อง (เช่น 09:30)'); return; }
+        if (!why.trim()) { this.el('rdWhy').focus(); this.toast('กรุณาระบุเหตุผลที่กรอกย้อนหลัง'); return; }
+        // log BEFORE arming, so the row that turns the mode on isn't itself stamped ย้อนหลัง
+        this.log('เปิดโหมดบันทึกย้อนหลัง', `ลงวันที่ ${d}${t ? ' ' + t : ''} · ${why.trim()}`, p ? p.name : '');
+        this.rec = { date: d, time: t, why: why.trim(), pid: p ? p.id : null };
+        this.toast(`บันทึกย้อนหลังเป็นวันที่ ${this.thaiDate(d)}`);
+        finish();
+      };
+    };
+
+    this.openModal('', { compact: true });
+    draw();
   },
 
   // ---------------------------------------------------------
@@ -384,6 +575,9 @@ const App = {
   },
 
   init() {
+    this.recReset();
+    // นาฬิกาบนปุ่มวันที่ — เดินเองทุกครึ่งนาที ไม่ต้อง re-render ทั้งหน้า
+    setInterval(() => { const c = this.el('recClock'); if (c) c.textContent = nowHM(); }, 30000);
     this.renderLogin();
     this.el('root').addEventListener('click', (e) => {
       const t = e.target.closest('[data-nav]');
@@ -602,6 +796,9 @@ const App = {
   },
 
   go(name, projectId = null) {
+    // บันทึกย้อนหลังผูกกับโครงการที่กำลังทำอยู่ — พาผู้ใช้ออกจากโครงการเมื่อไหร่
+    // ต้องกลับมาเป็น "วันนี้" เสมอ ไม่งั้นโหมดเงียบ ๆ นี้จะติดไปโผล่ที่งานถัดไป
+    if (this.recOn() && !(name === 'dashboard' && projectId === this.rec.pid)) this.recReset();
     this.route = { name, projectId };
     this.weighing = false;
     this.editing = false;
@@ -695,7 +892,10 @@ const App = {
   log(action, detail, projectName = '') {
     const proj = DB.projects.find(p => p.name === projectName);
     const role = (proj && this.myProjectRoles(proj).join('/')) || this.positionKey();
-    DB.auditLog.push({ ts: Date.now(), user: this.user.name, role, action, detail, project: projectName });
+    // ts is ALWAYS the real clock — an audit trail that can be backdated is not one.
+    // A backdated action carries the event date alongside it instead.
+    DB.auditLog.push({ ts: Date.now(), user: this.user.name, role, action, detail, project: projectName,
+                       ...this.recStamp() });
   },
   // =========================================================
   // NOTIFICATIONS
@@ -960,6 +1160,7 @@ const App = {
     };
     this.el('demoUser').addEventListener('change', (e) => {
       DB.currentUserId = e.target.value;
+      this.recReset();        // เหตุผลการบันทึกย้อนหลังเป็นของคนเดิม ไม่ตามคนใหม่ไป
       this.demoOpen = true;   // keep the panel open after switching
       // the new identity may not be allowed on the current route/project
       const cur = Data.getProject(this.route.projectId);
@@ -1046,11 +1247,12 @@ const App = {
     this.el('loginForm').addEventListener('submit', (e) => {
       e.preventDefault();
       clearErr();
-      // demo: match the typed e-mail to a seeded user; blank → the sample PI.
+      // demo: match the typed e-mail to a seeded user; blank → ADMIN, so pressing
+      // เข้าสู่ระบบ with an empty form lands on the identity that sees everything.
       // A typed-but-unknown address is a mistake worth reporting, not a silent fallback.
       // (the password is NOT checked — this is a click-through prototype)
       const email = (emailIn.value || '').trim().toLowerCase();
-      const match = email ? DB.users.find(u => (u.email || '').toLowerCase() === email) : { id: 'u_pi' };
+      const match = email ? DB.users.find(u => (u.email || '').toLowerCase() === email) : { id: DB.currentUserId };
       if (!match) return showErr('ไม่พบบัญชีนี้ในระบบ กรุณาตรวจสอบอีเมลอีกครั้ง', 'fieldEmail');
 
       // brief pending state so the click has an acknowledgement (see UX: submit feedback)
@@ -2097,7 +2299,7 @@ const App = {
     return {
       id: 'M' + Math.random().toString(36).slice(2, 9),
       code, sex, groupNo, cageNo,
-      weights: [{ date: todayISO(), weight: weight != null ? weight : Math.round((25 + rand(-2, 2)) * 10) / 10 }],
+      weights: [{ date: this.recDate(), weight: weight != null ? weight : Math.round((25 + rand(-2, 2)) * 10) / 10, ...this.recStamp() }],
       remark: '', treatments: [], excluded: false, alive: true, death: null, careOpen: false, flagOpen: false, flag: null, humaneOrder: null, necropsy: null, doses: [], health: [],
     };
   },
@@ -3425,7 +3627,7 @@ const App = {
         .slice()
         .sort((a, b) => a.cageNo - b.cageNo)
         .map(m => this.freshMouse(mouseCode(p.id, cage.code, m.cageNo), selSex, null, m.cageNo, m.weight));
-      cage.lastRecordDate = todayISO();
+      cage.lastRecordDate = this.recDate();
       this.log('รับหนูเข้าโครงการ (น้ำหนักแรกเข้า)',
         `${cage.code} · ${mice.length} ตัว (${selSex === 'M' ? '♂' : '♀'}) · น้ำ ${this.g(sup.water)} g · อาหาร ${this.g(sup.food)} g`, p.name);
       this.closeModal();
@@ -3469,6 +3671,10 @@ const App = {
     const canDose = operational && this.can('dosing', p) && !this.isEmptyProject(p);
     const canEdit = !closed && this.can('editProject', p);
     const canMembers = this.can('manageMembers', p);
+    // the บันทึกย้อนหลัง control only makes sense to someone who can actually record
+    // something here — for everyone else it would be a date display and nothing more
+    const canRecord = operational && this.REC_CAPS.some(c => this.can(c, p));
+    if (this.recOn() && !canRecord) this.recReset();
     // การชั่งครั้งแรก: Sci ชั่งหนูแล้วนำเข้ากรงที่ยังว่าง — ทำได้ตราบใดที่ยังมีกรงว่าง
     const emptyCages = p.cages.filter(c => !c.mice.length);
     const canIntake = canWeigh && emptyCages.length > 0;
@@ -3531,7 +3737,7 @@ const App = {
            <span class="weigh-progress${done >= total && total ? ' full' : ''}">ชั่งแล้ว ${done} / ${total} กรง</span>
            <span class="spacer"></span>
            <button class="btn" id="exitWeighing">ออกจากโหมด</button>
-           <button class="btn btn-green" id="finishWeighing" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้นรอบชั่งวันนี้</button>
+           <button class="btn btn-green" id="finishWeighing" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้น${this.recRoundLabel()}</button>
          </div>`;
         })()
       : this.caring
@@ -3543,7 +3749,7 @@ const App = {
            <span class="weigh-progress${done >= total && total ? ' full' : ''}">ตรวจแล้ว ${done} / ${total} กรง</span>
            <span class="spacer"></span>
            <button class="btn" id="exitCare">ออกจากโหมด</button>
-           <button class="btn btn-green" id="finishCare" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้นรอบตรวจวันนี้</button>
+           <button class="btn btn-green" id="finishCare" ${!done ? 'disabled' : ''}>✓ เสร็จสิ้น${this.recRoundLabel()}</button>
          </div>`;
         })()
       : this.dosing
@@ -3622,7 +3828,16 @@ const App = {
           <div><h2>${p.name} ${closed ? '<span class="pill closed">ปิดแล้ว</span>' : ''}</h2>
             <div class="desc">${p.description}${closed ? ' · โครงการปิดแล้ว (ดูอย่างเดียว)' : ''}</div>
             ${this.facilityLine(p) ? `<div class="desc loc">📍 ${this.facilityLine(p)}</div>` : ''}</div>
+          <span class="spacer" style="flex:1"></span>
+          ${canRecord ? this.recBtn() : ''}
         </div>
+        ${this.recOn() ? `<div class="rec-banner">
+            <span>⏱ <b>กำลังบันทึกย้อนหลัง</b> — ทุกรายการที่บันทึกจะลงวันที่ <b>${this.thaiDate(this.rec.date)}${this.rec.time ? ' ' + this.rec.time : ''}</b>
+              · เหตุผล: ${this.esc(this.rec.why)}</span>
+            <span class="spacer" style="flex:1"></span>
+            <button class="btn btn-sm" id="recEdit">แก้ไข</button>
+            <button class="btn btn-sm" id="recOff">↩︎ กลับมาบันทึกวันนี้</button>
+          </div>` : ''}
         ${modeBar}
         ${shelves.join('')}
         <div class="legend legend-footer">
@@ -3642,6 +3857,19 @@ const App = {
         </div>
       </div>`
     );
+
+    if (canRecord) {
+      this.el('recDateBtn').addEventListener('click', () => this.openRecDate(p));
+      if (this.recOn()) {
+        this.el('recEdit').addEventListener('click', () => this.openRecDate(p));
+        this.el('recOff').addEventListener('click', () => {
+          this.recReset();
+          this.log('กลับมาบันทึกตามวันจริง', 'ปิดโหมดบันทึกย้อนหลัง', p.name);
+          this.toast('กลับมาบันทึกเป็นวันนี้แล้ว');
+          this.renderDashboard();
+        });
+      }
+    }
 
     if (canWeigh && !this.isEmptyProject(p) && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
       this.el('startWeighing').addEventListener('click', () => {
@@ -3701,11 +3929,11 @@ const App = {
       this.el('finishDose')?.addEventListener('click', () => {
         const mice = p.cages.flatMap(c => c.mice.filter(m => m.alive));
         const done = this.doseSession ? this.doseSession.done.size : 0;
-        const today = todayISO();
+        const today = this.recDate();
         const paused = mice.filter(m => (m.doses || []).some(d => d.date === today && d.paused)).length;
         const finish = () => {
           this.log('เสร็จสิ้นรอบให้สารทดสอบ', `${done}/${mice.length} ตัว${paused ? ` · พัก ${paused} ตัว` : ''}`, p.name);
-          this.notify({ kind: 'dose', title: 'ให้สารทดสอบรอบวันนี้เสร็จแล้ว',
+          this.notify({ kind: 'dose', title: `ให้สารทดสอบ${this.recRoundLabel()}เสร็จแล้ว`,
             detail: `บันทึก ${done} จาก ${mice.length} ตัว${done < mice.length ? ' (ยังไม่ครบ)' : ''}`
               + (paused ? ` · พักการทดสอบ ${paused} ตัว` : ''),
             project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
@@ -3732,12 +3960,12 @@ const App = {
       this.el('finishCare').addEventListener('click', () => {
         const cages = p.cages.filter(c => c.mice.length);
         const done = this.careSession ? this.careSession.done.size : 0;
-        const today = todayISO();
+        const today = this.recDate();
         const bad = cages.filter(c => (c.careLog || []).some(r =>
           r.date === today && this.CARE_ITEMS.some(it => r.items[it.key].status === 'abnormal'))).length;
         const finish = () => {
           this.log('เสร็จสิ้นรอบตรวจดูแลกรง', `${done}/${cages.length} กรง · ผิดปกติ ${bad} กรง`, p.name);
-          this.notify({ kind: 'care', title: 'ตรวจดูแลกรงรอบวันนี้เสร็จแล้ว',
+          this.notify({ kind: 'care', title: `ตรวจดูแลกรง${this.recRoundLabel()}เสร็จแล้ว`,
             detail: `ตรวจ ${done} จาก ${cages.length} กรง${done < cages.length ? ' (ยังไม่ครบ)' : ''}`
               + (bad ? ` · พบผิดปกติ ${bad} กรง` : ' · ปกติทุกกรง'),
             project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
@@ -3771,7 +3999,7 @@ const App = {
         const done = this.weighSession ? this.weighSession.done.size : 0;
         const finish = () => {
           this.log('เสร็จสิ้นรอบชั่งน้ำหนัก', `${done}/${total} กรง`, p.name);
-          this.notify({ kind: 'weigh', title: 'ชั่งน้ำหนักรอบวันนี้เสร็จแล้ว',
+          this.notify({ kind: 'weigh', title: `ชั่งน้ำหนัก${this.recRoundLabel()}เสร็จแล้ว`,
             detail: `บันทึก ${done} จาก ${total} กรง${done < total ? ' (ยังไม่ครบ)' : ''}`,
             project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
           this.weighing = false;
@@ -4192,7 +4420,7 @@ const App = {
       const note = this.el('flagNote').value.trim();
       if (!note) { this.el('flagNote').focus(); this.toast('กรุณาระบุลักษณะที่ผิดปกติ'); return; }
       mouse.flagOpen = true;
-      mouse.flag = { by: this.el('flagBy').value.trim() || this.user.name, note, date: todayISO() };
+      mouse.flag = { by: this.el('flagBy').value.trim() || this.user.name, note, date: this.recDate(), ...this.recStamp() };
       this.logHealth(mouse, { source: 'flag', status: 'abnormal', note });
       this.log('แจ้งหนูผิดปกติ', `${mouse.code} · ${note}`, p.name);
       // C1 — an animal is flagged: the vet has to look at it
@@ -4219,8 +4447,8 @@ const App = {
           แล้วรอ <b>นักวิทยาศาสตร์ (Sci) หรือสัตวแพทย์ (VET)</b> เข้ามาตัดสินใจว่าจะทำลายซากหรือส่งชันสูตรตามโปรโตคอล
         </p>
         <div class="form-row3">
-          <div class="field"><label>วันที่ (Date)</label><input id="deathDate" value="${d.date || todayISO()}"></div>
-          <div class="field"><label>เวลา (Time)</label><input id="deathTime" value="${d.time || nowHM()}"></div>
+          <div class="field"><label>วันที่ (Date)</label><input id="deathDate" value="${d.date || this.recDate()}"></div>
+          <div class="field"><label>เวลา (Time)</label><input id="deathTime" value="${d.time || this.recTime()}"></div>
           <div class="field"><label>ผู้รายงาน (Reporter)</label><input id="deathReporter" value="${d.reporter || this.user.name}"></div>
         </div>
         <div class="field">
@@ -4263,10 +4491,11 @@ const App = {
         carcass: 'frozen',      // stage 1 done — awaiting SCI/VET
         disposition: null,
         note: this.el('deathNote').value.trim(),
-        date: this.el('deathDate').value || todayISO(),
+        date: this.el('deathDate').value || this.recDate(),
         time: this.el('deathTime').value.trim(),
         reporter: this.el('deathReporter').value.trim(),
         handledBy: '', handledAt: '',
+        ...this.recStamp(),
       };
       this.logHealth(mouse, { source: 'death', status: 'dead',
         note: `${type === 'humane' ? 'การุณยฆาตตามคำสั่งสัตวแพทย์' : 'พบตายในกรง'}${mouse.death.note ? ' — ' + mouse.death.note : ''}`,
@@ -4306,7 +4535,7 @@ const App = {
         </div>
         <div class="form-row3">
           <div class="field"><label>ผู้ดำเนินการ</label><input id="carcassBy" value="${this.user.name}"></div>
-          <div class="field"><label>วันที่</label><input id="carcassAt" value="${todayISO()}"></div>
+          <div class="field"><label>วันที่</label><input id="carcassAt" value="${this.recDate()}"></div>
         </div>
         <div class="field">
           <label>หมายเหตุเพิ่มเติม</label>
@@ -4334,7 +4563,8 @@ const App = {
       mouse.death.disposition = disp;
       mouse.death.note = this.el('carcassNote').value.trim();
       mouse.death.handledBy = this.el('carcassBy').value.trim();
-      mouse.death.handledAt = this.el('carcassAt').value || todayISO();
+      mouse.death.handledAt = this.el('carcassAt').value || this.recDate();
+      Object.assign(mouse.death, this.recStamp('handledLate'));   // ระยะที่ 2 มีวันกรอกของตัวเอง
       this.log('จัดการซาก', `${mouse.code} · ${disp === 'necropsy' ? 'ส่งชันสูตร' : 'ทำลายซาก'}`, p.name);
       if (disp === 'necropsy') {
         this.toast('บันทึกแล้ว — กรอกผลการผ่าชันสูตรต่อได้เลย');
@@ -4377,7 +4607,7 @@ const App = {
     const treatments = mouse.treatments.length
       ? mouse.treatments.map(t => `
           <div class="treat-item">
-            <div class="t-top"><span>📅 ${t.date}${t.time ? ' · ' + t.time : ''}</span><span>${t.vet}</span></div>
+            <div class="t-top"><span>📅 ${t.date}${t.time ? ' · ' + t.time : ''}${this.lateChip(t)}</span><span>${t.vet}</span></div>
             <div class="t-dx">${t.diagnosis}</div>
             ${chips(t.signs, 'sign')}
             ${t.treatment && t.treatment !== '—' ? `<div class="t-rx">💊 ${t.treatment}</div>` : ''}
@@ -4538,7 +4768,7 @@ const App = {
 
   // Necropsy Record (บันทึกการผ่าชันสูตรซาก — LA Guide-AF 11.3-01)
   openNecropsyForm(p, cage, mouse) {
-    const n = mouse.necropsy || { results: {}, abnormal: '', avComment: '', examiner: this.user.name, date: todayISO(), time: nowHM() };
+    const n = mouse.necropsy || { results: {}, abnormal: '', avComment: '', examiner: this.user.name, date: this.recDate(), time: this.recTime() };
     const seg = (organ) => {
       const cur = (n.results[organ] && n.results[organ].v) || '';
       const note = (n.results[organ] && n.results[organ].note) || '';
@@ -4564,8 +4794,8 @@ const App = {
       <div class="modal-body">
         <div class="form-row3">
           <div class="field"><label>ผู้ชันสูตร</label><input id="nExaminer" value="${n.examiner || this.user.name}"></div>
-          <div class="field"><label>วันที่</label><input id="nDate" value="${n.date || todayISO()}"></div>
-          <div class="field"><label>เวลา</label><input id="nTime" value="${n.time || nowHM()}"></div>
+          <div class="field"><label>วันที่</label><input id="nDate" value="${n.date || this.recDate()}"></div>
+          <div class="field"><label>เวลา</label><input id="nTime" value="${n.time || this.recTime()}"></div>
         </div>
         <p class="nec-legend">N = Normal · A = Autolysis · Abnormal = ระบุรายละเอียด</p>
         <div class="section-title">การตรวจตามระบบ / อวัยวะ</div>
@@ -4609,6 +4839,7 @@ const App = {
         results,
         abnormal: this.el('nAbnormal').value.trim(),
         avComment: this.el('nAv').value.trim(),
+        ...this.recStamp(),
       };
       this.logHealth(mouse, { source: 'necropsy', status: 'dead',
         note: mouse.necropsy.abnormal ? `ผลชันสูตร — ${mouse.necropsy.abnormal}` : 'บันทึกผลชันสูตรแล้ว' });
@@ -4648,7 +4879,7 @@ const App = {
     this.el('saveHumane').onclick = () => {
       const reason = this.el('humaneReason').value.trim();
       if (!reason) { this.el('humaneReason').focus(); this.toast('กรุณาระบุสาเหตุ'); return; }
-      mouse.humaneOrder = { reason, vet: this.el('humaneVet').value.trim(), date: todayISO() };
+      mouse.humaneOrder = { reason, vet: this.el('humaneVet').value.trim(), date: this.recDate(), ...this.recStamp() };
       mouse.careOpen = true;
       mouse.flagOpen = false; mouse.flag = null;   // abnormal flag resolved → humane order issued
       this.logHealth(mouse, { source: 'humane', status: 'critical', note: `สั่งการุณยฆาต — ${reason}` });
@@ -4685,8 +4916,8 @@ const App = {
       </div>
       <div class="modal-body">
         <div class="form-row3">
-          <div class="field"><label>วันที่</label><input id="tDate" value="${todayISO()}"></div>
-          <div class="field"><label>เวลา</label><input id="tTime" value="${nowHM()}"></div>
+          <div class="field"><label>วันที่</label><input id="tDate" value="${this.recDate()}"></div>
+          <div class="field"><label>เวลา</label><input id="tTime" value="${this.recTime()}"></div>
           <div class="field"><label>ผู้บันทึก (Vet)</label><input id="tVet" value="${this.user.name}"></div>
         </div>
 
@@ -4722,7 +4953,7 @@ const App = {
       const other = this.el('tSignOther').value.trim();
       if (other) signs.push(other);
       const support = [...document.querySelectorAll('.supportChk:checked')].map(x => x.value);
-      mouse.treatments.unshift({
+      this.unshiftDated(mouse.treatments, {
         date: this.el('tDate').value,
         time: this.el('tTime').value,
         vet: this.el('tVet').value,
@@ -4732,6 +4963,7 @@ const App = {
         treatment: this.el('tRx').value.trim() || '—',
         recommend: this.el('tReco').value,
         note: '',
+        ...this.recStamp(),
       });
       mouse.remark = this.el('tRemark').value.trim();
       mouse.careOpen = true;   // adding a treatment opens/keeps the case open
@@ -4765,7 +4997,7 @@ const App = {
       const nec = m.death.disposition !== 'necropsy' ? '—'
         : (m.necropsy ? '<span class="chg up">✓ บันทึกแล้ว</span>' : '<span class="chg down">รอบันทึก</span>');
       return `<tr class="dr-row" data-mid="${m.id}">
-        <td>${m.death.date}</td><td>${m.death.time || '—'}</td><td>${cage.code}</td>
+        <td>${m.death.date}${this.lateChip(m.death)}</td><td>${m.death.time || '—'}</td><td>${cage.code}</td>
         <td><b>${m.code}</b><br>${this.tagChip(p, cage, m)}</td><td>${g ? g.name : '—'}</td><td>${m.death.reporter || '—'}</td>
         <td>${type}</td><td>${disp}</td><td>${nec}</td></tr>`;
     }).join('');
@@ -5646,7 +5878,7 @@ const App = {
 
   wizardSave() {
     const w = this.wizard, cage = w.cage;
-    const today = todayISO();
+    const today = this.recDate();   // วันที่ของ "รอบชั่ง" — วันนี้ หรือวันที่กรอกย้อนหลัง
     // ทุกการประเมินลงไทม์ไลน์ รวมทั้งครั้งที่ผลปกติ — "ดูทุกสัปดาห์แล้วปกติ" คือ
     // หลักฐานที่ผู้ตรวจถาม เฉพาะครั้งที่ผลออกมาเป็น E เท่านั้นที่ส่งต่อเข้าสายสัตวแพทย์
     const crit = this.humaneCriteria(w.p);
@@ -5676,7 +5908,7 @@ const App = {
       const why = lossPct != null && lossPct >= cfg.weightLossPct
         ? `น้ำหนักลด ${lossPct}% (เกณฑ์ ${cfg.weightLossPct}%)`
         : `Humane score ${total}/${maxScore} (เกณฑ์ ${cfg.totalThreshold})`;
-      m.flag = { by: this.user.name, note: h.note.trim() ? `${why} — ${h.note.trim()}` : why, date: today };
+      m.flag = { by: this.user.name, note: h.note.trim() ? `${why} — ${h.note.trim()}` : why, date: today, ...this.recStamp() };
       flagged.push({ m, total, why });
       this.log('ถึงเกณฑ์ Humane endpoint', `${m.code} · ${why}`, w.p.name);
     });
@@ -5690,12 +5922,7 @@ const App = {
     // commit new weights (alive mice only — dead mice were skipped)
     w.mice.forEach((m, i) => {
       const nw = w.data.mouseWeights[i];
-      if (nw != null) {
-        // if last entry is today, overwrite; else append
-        const last = m.weights[m.weights.length - 1];
-        if (last && last.date === today) last.weight = nw;
-        else m.weights.push({ date: today, weight: nw });
-      }
+      if (nw != null) this.putWeight(m, today, nw);   // one weight per day, kept in date order
     });
     // consumed = amount provided last cycle − amount measured remaining now
     const waterConsumed = Math.max(0, Math.round(((cage.water.remaining - (w.data.waterRemaining ?? 0))) * 10) / 10);
@@ -5707,7 +5934,7 @@ const App = {
     cage.food.remaining = (w.data.foodRemaining ?? 0) + (w.data.foodAdded ?? 0);
     cage.water.added = w.data.waterAdded;
     cage.food.added = w.data.foodAdded;
-    cage.lastRecordDate = today;
+    cage.lastRecordDate = this.bumpDate(cage.lastRecordDate, today);
     // keep alert if any mouse has a remark, else mark done
     const hasRemark = cage.mice.some(m => m.remark);
     cage.status = hasRemark ? 'alert' : 'done';
@@ -5796,7 +6023,7 @@ const App = {
       return `<span class="care-chip ${bad ? 'bad' : 'ok'}">${it.icon} ${it.en}${bad ? '<b> !</b>' + extra : ' ✓'}</span>`;
     }).join('');
     return `<div class="care-last">
-      <div class="cl-head">🧹 ตรวจดูแลกรงล่าสุด <span class="muted-note">${this.thaiDate(r.date)} ${r.time} · ${r.by}</span></div>
+      <div class="cl-head">🧹 ตรวจดูแลกรงล่าสุด <span class="muted-note">${this.thaiDate(r.date)} ${r.time} · ${r.by}</span>${this.lateChip(r)}</div>
       <div class="cl-chips">${chips}</div>
     </div>`;
   },
@@ -6131,8 +6358,7 @@ const App = {
 
   careSave() {
     const w = this.careWiz, cage = w.cage, d = w.data;
-    const now = new Date();
-    const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const time = this.recTime();
 
     // apply what physically changed in the cage
     const apply = (key, store) => {
@@ -6152,11 +6378,12 @@ const App = {
     apply('water', cage.water);
 
     cage.careLog = cage.careLog || [];
-    cage.careLog.push({
-      date: todayISO(), time, by: this.user.name,
+    this.pushDated(cage.careLog, {
+      date: this.recDate(), time, by: this.user.name,
       items: JSON.parse(JSON.stringify(d)),
+      ...this.recStamp(),
     });
-    cage.lastCareDate = todayISO();
+    cage.lastCareDate = this.bumpDate(cage.lastCareDate, this.recDate());
     if (this.careSession) this.careSession.done.add(cage.id);
 
     const abnormal = this.CARE_ITEMS.filter(it => d[it.key].status === 'abnormal');
@@ -6201,7 +6428,7 @@ const App = {
   // ตอบคำถามเดียว: ตอนนี้สัตว์ในโครงการนี้เป็นอย่างไรบ้าง และมีตัวไหนที่วันนี้ยังไม่มีใครดู
   openHealthBoard(p) {
     const cfg = this.humaneCfg(p);
-    const today = todayISO();
+    const today = this.recDate();
     const rows = [];
     p.cages.forEach(c => c.mice.forEach(m => {
       const st = this.healthNow(m);
@@ -6249,12 +6476,12 @@ const App = {
       </div>
       <div class="modal-body">
         <div class="hb-summary">${pills}
-          ${unchecked ? `<span class="hb-pill miss">วันนี้ยังไม่ได้ตรวจ <b>${unchecked}</b></span>` : ''}</div>
+          ${unchecked ? `<span class="hb-pill miss">${this.recOn() ? 'วันนั้น' : 'วันนี้'}ยังไม่ได้ตรวจ <b>${unchecked}</b></span>` : ''}</div>
         <div class="hb-items">เกณฑ์ที่ใช้: ${this.humaneCriteria(p).map((x, i) =>
           `<span>${i + 1}. ${this.esc(x.name)}${x.auto === 'weight' ? ' ⚙️' : ''}</span>`).join('')}</div>
         <div class="table-wrap">
           <table class="tbl hb-tbl">
-            <thead><tr><th>หนู</th><th>กลุ่ม</th><th>สถานะ</th><th>คะแนนล่าสุด</th><th>ตรวจวันนี้</th></tr></thead>
+            <thead><tr><th>หนู</th><th>กลุ่ม</th><th>สถานะ</th><th>คะแนนล่าสุด</th><th>ตรวจ${this.recOn() ? this.thaiDate(this.rec.date) : 'วันนี้'}</th></tr></thead>
             <tbody>${body || '<tr><td colspan="5"><p class="empty-note">ยังไม่มีหนูในโครงการ</p></td></tr>'}</tbody>
           </table>
         </div>
@@ -6295,6 +6522,7 @@ const App = {
             <span class="ht-src">${src.icon} ${src.label}</span>
             <span class="ht-st ${st.tone}">${st.label}</span>${tot}
             <span class="spacer" style="flex:1"></span>
+            ${this.lateChip(h)}
             <span class="ht-by">${this.esc(h.by)}</span>
           </div>
           ${h.note ? `<div class="ht-note">${this.esc(h.note)}</div>` : ''}
@@ -6309,7 +6537,7 @@ const App = {
   renderDoseHistory(mouse) {
     return `<div class="dose-hist">${[...(mouse.doses || [])].reverse().map(d => `
       <div class="dh-row">
-        <span class="dh-when">${this.thaiDate(d.date)}<br>${d.time} · ${this.esc(d.by)}</span>
+        <span class="dh-when">${this.thaiDate(d.date)}<br>${d.time} · ${this.esc(d.by)}${this.lateChip(d)}</span>
         <span class="dh-what">${d.paused
           ? `<span class="dh-paused">⏸️ พักการทดสอบ</span> — ${this.esc(d.pauseReason)}`
           : d.items.map(i => `<span class="dh-item">• ${this.esc(i.text)}<span class="dh-kind">${this.DOSE_KIND[i.kind].label}</span></span>`).join('')}
@@ -6331,7 +6559,7 @@ const App = {
     if (m.careOpen) return 'กำลังรักษา — รอสัตวแพทย์';
     if (m.flagOpen) return 'แจ้งผิดปกติ รอสัตวแพทย์ตรวจ';
     const last = this.lastDose(m);
-    if (last && last.date === todayISO()) return 'บันทึกรอบนี้ไปแล้ว';
+    if (last && last.date === this.recDate()) return 'บันทึกรอบนี้ไปแล้ว';
     if (last && last.paused) return 'พักการทดสอบไว้รอบก่อน';
     if (!last) return 'ยังไม่เคยมีบันทึก';
     if (!this.routineItems(m).length) return 'รอบก่อนเป็นรายการชั่วคราวล้วน';
@@ -6356,7 +6584,7 @@ const App = {
   openDoseRepeat(p) {
     const draw = () => {
       const { buckets, skip } = this.doseRepeatPlan(p);
-      const today = todayISO();
+      const today = this.recDate();
       const rows = buckets.map((b, i) => {
         const dates = [...b.dates].sort();
         const newest = dates[dates.length - 1];
@@ -6406,12 +6634,11 @@ const App = {
       this.el('rpClose').onclick = done;
       document.querySelectorAll('[data-bucket]').forEach(btn => btn.onclick = () => {
         const b = buckets[+btn.dataset.bucket];
-        const now = new Date();
-        const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const time = this.recTime();
         b.mice.forEach(m => {
-          m.doses.push({ date: today, time, by: this.user.name,
+          this.pushDated(m.doses, { date: today, time, by: this.user.name,
             items: b.items.map(i => ({ text: i.text, kind: 'routine' })),
-            paused: false, pauseReason: '' });
+            paused: false, pauseReason: '', ...this.recStamp() });
           if (this.doseSession) this.doseSession.done.add(m.id);
         });
         this.log('ให้สารทดสอบ (ทำซ้ำรอบก่อน)',
@@ -6433,11 +6660,11 @@ const App = {
     const draw = () => {
       const rows = live.map(m => {
         const last = this.lastDose(m);
-        const doneToday = last && last.date === todayISO();
+        const doneToday = last && last.date === this.recDate();
         const routine = this.routineItems(m);
         const state = doneToday
           ? (last.paused ? '<span class="ds-state pause">พักการทดสอบ</span>'
-                         : `<span class="ds-state done">บันทึกแล้ววันนี้</span>`)
+                         : `<span class="ds-state done">บันทึกแล้ว${this.recOn() ? ' (' + this.thaiDate(this.rec.date) + ')' : 'วันนี้'}</span>`)
           : routine.length ? `<span class="ds-state routine">มีรายการประจำ ${routine.length} ข้อ</span>` : '';
         const tag = this.tagChip(p, cage, m);
         return `<button class="ds-row ${sel.has(m.id) ? 'on' : ''} ${doneToday ? 'did' : ''}" data-mid="${m.id}">
@@ -6591,16 +6818,15 @@ const App = {
       st.items = st.items.filter(i => i.text.trim());
       if (!st.items.length) { this.toast('กรุณากรอกอย่างน้อย 1 รายการ'); return; }
     }
-    const now = new Date();
-    const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
     const rec = {
-      date: todayISO(), time, by: this.user.name,
+      date: this.recDate(), time: this.recTime(), by: this.user.name,
       items: st.paused ? [] : st.items.map(i => ({ text: i.text.trim(), kind: i.kind })),
       paused: st.paused, pauseReason: st.paused ? st.reason.trim() : '',
+      ...this.recStamp(),
     };
     mice.forEach(m => {
       m.doses = m.doses || [];
-      m.doses.push(JSON.parse(JSON.stringify(rec)));
+      this.pushDated(m.doses, JSON.parse(JSON.stringify(rec)));
       if (this.doseSession) this.doseSession.done.add(m.id);
     });
 
@@ -6948,7 +7174,7 @@ const App = {
         <td class="mono" style="white-space:nowrap">${this.formatTs(e.ts)}</td>
         <td><span class="role-tag">${e.role}</span> ${e.user}</td>
         <td><span class="audit-act ${this.ACTION_STYLE[e.action] || 'gray'}">${e.action}</span></td>
-        <td>${e.detail}</td>
+        <td>${e.detail}${this.lateChip(e)}</td>
         <td style="color:var(--text-muted)">${e.project || '—'}</td>
       </tr>`).join('')
       : `<tr><td colspan="5" class="empty-note" style="text-align:center;padding:24px">ยังไม่มีบันทึกกิจกรรม</td></tr>`;

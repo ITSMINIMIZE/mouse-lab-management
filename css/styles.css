@@ -1916,3 +1916,60 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   border: 1px dashed var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-muted); }
 .hu-cut.bad { border-color: var(--red); background: #fef2f2; }
 .hu-cutwarn { font-size: 11.5px; font-weight: 600; color: var(--red); margin-top: 6px; }
+
+/* ============================================================
+ * BACKDATED ENTRY (บันทึกย้อนหลัง)
+ * The button sits at the right end of the project-name row and normally does
+ * nothing but state the date/time the next save will carry — deliberately quiet,
+ * grey, no border weight. It only raises its voice once the mode is ARMED, and
+ * then it has to: a silent backdate is how a study ends up with a fortnight of
+ * data stamped on one Thursday.
+ * ============================================================ */
+.recbtn {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: none; border: 1px solid transparent; cursor: pointer;
+  color: var(--text-muted); font-family: inherit; font-size: 12.5px; font-weight: 600;
+  padding: 6px 10px; border-radius: var(--radius-btn); white-space: nowrap;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.page-head .recbtn { align-self: flex-start; margin-top: 5px; }
+.recbtn:hover { background: var(--surface); border-color: var(--border); color: var(--text); }
+.recbtn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.recbtn .rb-ico { font-size: 13px; opacity: .75; }
+.recbtn .rb-time { font-variant-numeric: tabular-nums; opacity: .7; padding-left: 7px; border-left: 1px solid var(--border); }
+/* armed — amber, and it stays amber until the user hands it back */
+.recbtn.on {
+  background: var(--amber-soft); border-color: #fcd34d; color: #92400e;
+}
+.recbtn.on:hover { background: #fde9b4; color: #78350f; }
+.recbtn.on .rb-ico { opacity: 1; }
+
+.rec-banner {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--amber-soft); border: 1px solid #fcd34d; border-left: 4px solid var(--amber);
+  color: #92400e; border-radius: var(--radius); padding: 9px 14px; margin-bottom: 14px;
+  font-size: 13px; font-weight: 600;
+}
+.rec-banner .btn { font-size: 12px; }
+
+/* the marker carried by every record saved in that mode */
+.late-chip {
+  display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px;
+  background: var(--amber-soft); color: #92400e; border: 1px solid #fcd34d;
+  font-size: 10.5px; font-weight: 700; white-space: nowrap; vertical-align: middle;
+  cursor: help;
+}
+
+/* ---- the dialog ---- */
+.rd-grid { display: grid; grid-template-columns: 1fr 150px; gap: 12px; align-items: end; }
+.rd-grid .field { margin-bottom: 0; }
+.muted-lbl { color: var(--text-muted); font-weight: 500; }
+.rd-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.rd-chip { font-weight: 500; }
+.rd-chip.on { background: var(--primary); color: #fff; }
+.rd-warn {
+  margin-top: 14px; padding: 10px 12px; border-radius: var(--radius-sm);
+  background: var(--amber-soft); color: #78350f; font-size: 13px; line-height: 1.6;
+}
+.audit-table .late-chip { margin-left: 8px; }
+@media (max-width: 560px) { .rd-grid { grid-template-columns: 1fr; } }
