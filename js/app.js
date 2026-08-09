@@ -306,6 +306,32 @@ const App = {
   },
   // "ล่าสุด" markers must never move backwards because someone filled in an old day
   bumpDate(cur, d) { return cur && cur > d ? cur : d; },
+
+  // ---- SUPPLY HISTORY (ประวัติน้ำ / อาหาร) --------------------------------
+  // น้ำและอาหารถูกชั่งทุกรอบ แต่เดิมเก็บเป็นค่าเดียวที่ถูกเขียนทับทุกครั้ง — รอบก่อน
+  // หน้าหายหมด กราฟน้ำ/อาหารในหน้ารายงานจึงต้อง "สุ่มเส้นขึ้นมาเอง" จากค่าปัจจุบัน
+  // ซึ่งไม่ใช่ข้อมูลที่ใครบันทึกไว้เลย ตอนนี้ทุกรอบลง supplyLog เป็นแถวของตัวเอง
+  // แล้ว cage.water/food กลายเป็นแค่ "สรุปของรอบล่าสุด"
+  //
+  // เรียกหลังจากอัปเดต cage.water / cage.food แล้วเท่านั้น — ตัวมันถ่ายภาพค่าที่เป็นอยู่
+  logSupply(cage, source) {
+    cage.supplyLog = cage.supplyLog || [];
+    this.pushDated(cage.supplyLog, {
+      date: this.recDate(), time: this.recTime(), by: this.user.name, source,
+      water: { ...cage.water },
+      food: { ...cage.food },
+      // จำนวนหนูตอนนั้น — ตายไปแล้วค่า g/ตัว ของรอบเก่าต้องไม่เปลี่ยนตาม
+      mice: cage.mice.filter(m => m.alive).length,
+      ...this.recStamp(),
+    });
+  },
+  SUPPLY_SOURCE: {
+    intake: { icon: '🐭', label: 'รับหนูเข้ากรง' },
+    weigh:  { icon: '⚖️', label: 'รอบชั่งน้ำหนัก' },
+    care:   { icon: '🧹', label: 'รอบตรวจดูแลกรง' },
+  },
+  // g ต่อตัว ของรายการหนึ่ง — หารด้วยจำนวนหนู ณ รอบนั้น ไม่ใช่จำนวนตอนนี้
+  perMouse(v, n) { return n ? Math.round((v / n) * 10) / 10 : null; },
   // a round is "รอบวันนี้" only when it really is today — a notification telling the
   // team that today's round is finished, when the data is last Tuesday's, is a lie
   recRoundLabel() { return this.recOn() ? `รอบวันที่ ${this.thaiDate(this.rec.date)}` : 'รอบวันนี้'; },
@@ -3627,6 +3653,7 @@ const App = {
         .slice()
         .sort((a, b) => a.cageNo - b.cageNo)
         .map(m => this.freshMouse(mouseCode(p.id, cage.code, m.cageNo), selSex, null, m.cageNo, m.weight));
+      this.logSupply(cage, 'intake');   // ยอดตั้งต้น — ต้องเรียกหลังใส่หนู เพราะนับตัวจากในกรง
       cage.lastRecordDate = this.recDate();
       this.log('รับหนูเข้าโครงการ (น้ำหนักแรกเข้า)',
         `${cage.code} · ${mice.length} ตัว (${selSex === 'M' ? '♂' : '♀'}) · น้ำ ${this.g(sup.water)} g · อาหาร ${this.g(sup.food)} g`, p.name);
@@ -3722,6 +3749,17 @@ const App = {
       return `<section class="rack${ri > 0 ? ' next' : ''}">${head}${list.join('')}</section>`;
     });
 
+    // เอกสารที่พิมพ์ได้จากโครงการนี้ — รวมอยู่ในเมนูเดียว (ดู printMenu)
+    const printItems = [];
+    if (p.cages.length) {
+      if (this.can('cageCard', p)) printItems.push({ key: 'cagecard', icon: '🏷️',
+        label: 'ใบติดหน้ากรง', hint: 'เลือกกรง · ขนาดนามบัตร 10 ใบ/หน้า' });
+      printItems.push({ key: 'humane', icon: '🩺',
+        label: 'แผ่นบันทึก Humane endpoint', hint: 'รายสัปดาห์ · เลือกสัปดาห์ หรือแผ่นเปล่า' });
+    }
+    printItems.push({ key: 'death', icon: '✝', label: 'รายงานการตายของสัตว์ทดลอง', hint: 'LA Guide–AF 11.1-01' });
+    printItems.push({ key: 'sick', icon: '🩺', label: 'บันทึกติดตามอาการสัตว์ป่วย', hint: 'LA Guide–AF 11.1-03 · หนึ่งแผ่นต่อตัว' });
+
     const modeBar = this.intake
       ? `<div class="weighing-banner intake">
            <span>🦠 <b>โหมดรับหนูเข้าโครงการ (น้ำหนักแรกเข้า)</b> — แตะกรงว่างเพื่อชั่งน้ำ/อาหาร แล้วชั่งหนูเข้ากรง · เหลือ ${emptyCages.length} กรงว่าง</span>
@@ -3811,9 +3849,10 @@ const App = {
       : `<div class="mode-bar">
            <span style="flex:1"></span>
            <button class="btn" id="healthBoard">🩺 สุขภาพสัตว์</button>
+           <button class="btn" id="supplyReport">💧 น้ำ-อาหาร</button>
            <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
            <button class="btn" id="deathReport">✝ รายงานการตาย</button>
-           ${this.can('cageCard', p) && p.cages.length ? `<button class="btn" id="cageCards">🏷️ ใบติดหน้ากรง</button>` : ''}
+           ${this.printMenu('docPrint', 'พิมพ์เอกสาร', printItems)}
            ${this.can('viewReports', p) ? `<button class="btn" data-nav="reports">📈 กราฟ</button>` : ''}
            ${canCare ? `<button class="btn btn-primary" id="startCare">🧹 ตรวจดูแลกรง</button>` : ''}
            ${canDose ? `<button class="btn btn-primary" id="startDose">💉 ให้สารทดสอบ</button>` : ''}
@@ -4019,10 +4058,21 @@ const App = {
     }
     if (!this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
       this.el('healthBoard').addEventListener('click', () => this.openHealthBoard(p));
+      this.el('supplyReport').addEventListener('click', () => this.openSupplyReport(p));
       this.el('sickReport').addEventListener('click', () => this.openSickReport(p));
       this.el('deathReport').addEventListener('click', () => this.openDeathReport(p));
-      const cc = this.el('cageCards');
-      if (cc) cc.addEventListener('click', () => this.openCageCards(p));
+      this.bindPrintMenu('docPrint', (key) => {
+        if (key === 'cagecard') return this.openCageCards(p);
+        if (key === 'humane') return this.openHumaneSheets(p);
+        if (key === 'death') {
+          this.printDocument(`DeathReport_${p.name}`, this.buildDeathReportDoc(p));
+          return this.log('Export PDF', `รายงานการตาย · ${p.name}`, p.name);
+        }
+        if (key === 'sick') {
+          this.printDocument(`SickFollowup_${p.name}`, this.buildSickReportDoc(p));
+          this.log('Export PDF', `ติดตามอาการป่วย · ${p.name}`, p.name);
+        }
+      });
     }
     if (this.editing) {
       this.el('exitEditing').addEventListener('click', () => {
@@ -4324,6 +4374,10 @@ const App = {
           <div class="supply-box"><div class="l">🍚 อาหารที่กินไป</div><div class="v">${this.g(cage.food.consumed)} g</div><div class="l">เฉลี่ย ${fAvg} g/ตัว · เหลือ ${this.g(cage.food.remaining)} g</div></div>
           <div class="supply-box"><div class="l">🐭 จำนวนหนู</div><div class="v">${cage.mice.length}</div></div>
         </div>
+        ${(cage.supplyLog || []).length ? `<div class="supply-more">
+          ตัวเลขข้างบนคือ<b>รอบล่าสุด</b>
+          <button class="nt-link" id="cageSupplyHist">ดูย้อนหลังทั้งหมด (${cage.supplyLog.length} รอบ) →</button>
+        </div>` : ''}
         <table class="data">
           <thead><tr><th>หนู</th><th>น้ำหนักล่าสุด</th><th>เปลี่ยนแปลง</th><th>เทียบกลุ่มควบคุม</th><th>ดำเนินการ</th></tr></thead>
           <tbody>${rows}</tbody>
@@ -4340,6 +4394,8 @@ const App = {
 
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('closeModal2').onclick = () => this.closeModal();
+    const sh = this.el('cageSupplyHist');
+    if (sh) sh.onclick = () => this.openSupplyReport(p, cage.id);
     // reprint this cage's card once it actually holds animals and a group
     const pc = this.el('printCard');
     if (pc) pc.onclick = () => this.printCageCards(p, [cage], `_${cage.code}`);
@@ -4584,6 +4640,13 @@ const App = {
     const operational = this.isOperational(p);        // no recording actions on waiting/rejected/closed
     const canTreat = this.can('treat', p) && operational;
     const canNecropsy = this.can('handleCarcass', p) && operational;   // SCI/VET perform the gross exam
+    // ฟอร์มที่พิมพ์ได้ของหนูตัวนี้ — ขึ้นเฉพาะที่มีข้อมูลจริงแล้ว
+    const mousePrintItems = [];
+    if (mouse.treatments.length) {
+      mousePrintItems.push({ key: 'sick', icon: '🩺', label: 'รายงานอาการป่วย', hint: 'LA Guide–AF 11.1-02' });
+      mousePrintItems.push({ key: 'monitor', icon: '📋', label: 'บันทึกติดตามอาการ', hint: 'LA Guide–AF 11.1-03' });
+    }
+    if (mouse.necropsy) mousePrintItems.push({ key: 'necropsy', icon: '🔬', label: 'บันทึกผ่าชันสูตรซาก', hint: 'LA Guide–AF 11.3-01' });
     const cur = Data.latestWeight(mouse);
     const chg = Data.weightChange(mouse);
     const chgClass = chg == null ? '' : chg >= 0 ? 'up' : 'down';
@@ -4682,9 +4745,7 @@ const App = {
       </div>
       <div class="modal-foot">
         <button class="btn" id="backCage">← กลับ</button>
-        ${mouse.treatments.length ? `<button class="btn" id="exportSick">🖨️ ฟอร์มป่วย</button>` : ''}
-        ${mouse.treatments.length ? `<button class="btn" id="exportMonitor">🖨️ ฟอร์มติดตาม</button>` : ''}
-        ${mouse.necropsy ? `<button class="btn" id="exportNec">🖨️ ฟอร์มชันสูตร</button>` : ''}
+        ${this.printMenu('mousePrint', 'พิมพ์ฟอร์ม', mousePrintItems)}
         <span class="spacer" style="flex:1"></span>
         ${canTreat && mouse.alive && mouse.flagOpen ? `<button class="btn btn-green" id="clearFlagBtn">✓ ปกติ (ยกเลิกแจ้ง)</button>` : ''}
         ${canTreat && mouse.alive ? `<button class="btn btn-primary" id="addTreat">🩺 ${mouse.flagOpen ? 'เปิดเคส (ป่วย)' : 'รายงานอาการป่วย'}</button>` : ''}
@@ -4699,22 +4760,20 @@ const App = {
 
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('backCage').onclick = () => this.openCagePopup(p, cage);
-    if (mouse.treatments.length) {
-      this.el('exportSick').onclick = () => {
+    this.bindPrintMenu('mousePrint', (key) => {
+      if (key === 'sick') {
         this.printDocument(`SickCaseReport_${mouse.code}`, this.buildSickCaseDoc(p, cage, mouse));
-        this.log('Export PDF', `Sick Case Report · ${mouse.code}`, p.name);
-      };
-      this.el('exportMonitor').onclick = () => {
+        return this.log('Export PDF', `Sick Case Report · ${mouse.code}`, p.name);
+      }
+      if (key === 'monitor') {
         this.printDocument(`MonitoringRecord_${mouse.code}`, this.buildMonitoringForm(p, cage, mouse));
-        this.log('Export PDF', `Monitoring Record · ${mouse.code}`, p.name);
-      };
-    }
-    if (mouse.necropsy) {
-      this.el('exportNec').onclick = () => {
+        return this.log('Export PDF', `Monitoring Record · ${mouse.code}`, p.name);
+      }
+      if (key === 'necropsy') {
         this.printDocument(`Necropsy_${mouse.code}`, this.buildNecropsyDoc(p, cage, mouse));
         this.log('Export PDF', `Necropsy Record · ${mouse.code}`, p.name);
-      };
-    }
+      }
+    });
     if (canTreat && mouse.alive) this.el('addTreat').onclick = () => this.openTreatForm(p, cage, mouse);
     if (canTreat && mouse.alive && mouse.flagOpen) {
       this.el('clearFlagBtn').onclick = () => {
@@ -4982,6 +5041,91 @@ const App = {
   // ---------------------------------------------------------
   // SUMMARY REPORTS (project-level)
   // ---------------------------------------------------------
+  // "น้ำและอาหาร" — ทุกรอบที่มีการชั่งจริง เรียงจากใหม่ไปเก่า
+  // ตอบคำถามที่กราฟตอบไม่ได้: วันนั้นเหลือเท่าไร เติมเท่าไร กินไปเท่าไร ใครเป็นคนชั่ง
+  openSupplyReport(p, cageId = null) {
+    let sel = cageId && p.cages.some(c => c.id === cageId) ? cageId : 'ALL';
+
+    const draw = () => {
+      const cages = sel === 'ALL' ? p.cages : p.cages.filter(c => c.id === sel);
+      const rows = [];
+      cages.forEach(c => (c.supplyLog || []).forEach(e => rows.push({ c, e })));
+      rows.sort((a, b) => (a.e.date === b.e.date
+        ? (b.e.time || '').localeCompare(a.e.time || '')
+        : (a.e.date < b.e.date ? 1 : -1)));
+
+      const chips = ['ALL', ...p.cages.filter(c => (c.supplyLog || []).length).map(c => c.id)]
+        .map(id => {
+          const c = p.cages.find(x => x.id === id);
+          const n = id === 'ALL'
+            ? p.cages.reduce((a, x) => a + (x.supplyLog || []).length, 0)
+            : (c.supplyLog || []).length;
+          return `<button class="btn btn-sm sp-chip ${sel === id ? 'on' : ''}" data-cage="${id}">${
+            id === 'ALL' ? 'ทุกกรง' : c.code}<b>${n}</b></button>`;
+        }).join('');
+
+      // สรุปของช่วงที่กำลังดู — ค่าเฉลี่ยต่อตัวต่อรอบ คือเลขที่เทียบข้ามกรงได้
+      const tot = rows.reduce((a, { e }) => ({
+        w: a.w + (e.water.consumed || 0), f: a.f + (e.food.consumed || 0),
+        n: a.n + (e.mice || 0), r: a.r + 1,
+      }), { w: 0, f: 0, n: 0, r: 0 });
+      const avgW = tot.n ? (tot.w / tot.n).toFixed(1) : '–';
+      const avgF = tot.n ? (tot.f / tot.n).toFixed(1) : '–';
+
+      const body = rows.length ? `
+        <div class="sp-sum">
+          <div class="sp-stat"><span>รอบที่บันทึก</span><b>${tot.r}</b></div>
+          <div class="sp-stat"><span>💧 น้ำเฉลี่ย</span><b>${avgW} g</b><i>ต่อตัว/รอบ</i></div>
+          <div class="sp-stat"><span>🍚 อาหารเฉลี่ย</span><b>${avgF} g</b><i>ต่อตัว/รอบ</i></div>
+        </div>
+        <table class="data rep-table sp-table">
+          <thead>
+            <tr>
+              <th rowspan="2">วันที่</th><th rowspan="2">กรง</th><th rowspan="2">ที่มา</th>
+              <th colspan="3">💧 น้ำ (g)</th><th colspan="3">🍚 อาหาร (g)</th>
+              <th rowspan="2">ผู้บันทึก</th>
+            </tr>
+            <tr><th>กินไป</th><th>เติม</th><th>คงเหลือ</th><th>กินไป</th><th>เติม</th><th>คงเหลือ</th></tr>
+          </thead>
+          <tbody>${rows.map(({ c, e }) => {
+            const src = this.SUPPLY_SOURCE[e.source] || { icon: '•', label: e.source || '—' };
+            const pm = (v) => e.mice ? `<i class="sp-pm">${this.g(this.perMouse(v, e.mice))}/ตัว</i>` : '';
+            return `<tr>
+              <td style="white-space:nowrap">${this.thaiDate(e.date)}<br><span class="muted-note">${e.time || ''}</span>${this.lateChip(e)}</td>
+              <td><b>${c.code}</b></td>
+              <td style="white-space:nowrap">${src.icon} ${src.label}</td>
+              <td class="num sp-use">${this.g(e.water.consumed)}${pm(e.water.consumed)}</td>
+              <td class="num">${e.water.added ? '+' + this.g(e.water.added) : '–'}</td>
+              <td class="num">${this.g(e.water.remaining)}</td>
+              <td class="num sp-use">${this.g(e.food.consumed)}${pm(e.food.consumed)}</td>
+              <td class="num">${e.food.added ? '+' + this.g(e.food.added) : '–'}</td>
+              <td class="num">${this.g(e.food.remaining)}</td>
+              <td style="white-space:nowrap">${this.esc(e.by)}</td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>`
+        : `<p class="empty-note">ยังไม่มีการชั่งน้ำ/อาหารในโครงการนี้ — ข้อมูลจะเริ่มเก็บตั้งแต่รอบรับหนูเข้ากรง</p>`;
+
+      this.openModal(`
+        <div class="modal-head">
+          <div><h3>💧 น้ำและอาหาร</h3>
+            <div class="sub">${p.name} · ทุกรอบที่ชั่งจริง เรียงจากล่าสุด</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="sp-bar">${chips}</div>
+          ${body}
+        </div>
+        <div class="modal-foot"><button class="btn" id="spClose">ปิด</button></div>
+      `, { wide: true });
+
+      this.el('closeModal').onclick = () => this.closeModal();
+      this.el('spClose').onclick = () => this.closeModal();
+      document.querySelectorAll('[data-cage]').forEach(b => b.onclick = () => { sel = b.dataset.cage; draw(); });
+    };
+    draw();
+  },
+
   // "รายงานการตายของสัตว์ทดลอง" — which mice died, when, and how
   openDeathReport(p) {
     const dead = [];
@@ -5276,6 +5420,50 @@ const App = {
 
   tick(label, on) { return `<span class="chk">${on ? '☑' : '☐'} ${label}</span>`; },
 
+  // ---- print menu ---------------------------------------------------------
+  // The printable list outgrew a row of buttons: five documents side by side pushed
+  // the actual work (ชั่งน้ำหนัก / ตรวจกรง / ให้สาร) off the end of the bar. One
+  // button with a menu keeps printing one click away without letting paperwork
+  // compete visually with the job. `items` = [{ key, icon, label, hint }].
+  printMenu(id, label, items) {
+    if (!items.length) return '';
+    return `<div class="print-menu">
+      <button class="btn" id="${id}Btn" aria-haspopup="menu" aria-expanded="false">🖨️ ${label} <span class="caret">▾</span></button>
+      <div class="print-drop" id="${id}Drop" role="menu">
+        ${items.map(it => `<button class="pd-item" role="menuitem" data-print="${it.key}">
+          <span class="pd-ic">${it.icon}</span>
+          <span class="pd-txt"><b>${it.label}</b>${it.hint ? `<i>${it.hint}</i>` : ''}</span>
+        </button>`).join('')}
+      </div>
+    </div>`;
+  },
+  bindPrintMenu(id, onPick) {
+    const btn = this.el(id + 'Btn'), drop = this.el(id + 'Drop');
+    if (!btn || !drop) return;
+    const close = () => { drop.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); };
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const open = !drop.classList.contains('open');
+      drop.classList.toggle('open', open);
+      btn.setAttribute('aria-expanded', String(open));
+      // The menu hangs below-right of its button. Both of those run out of room in
+      // real placements — the mode bar wraps and puts the button at the left, and in
+      // a modal footer there is nothing below it — so measure and flip either way.
+      if (open) {
+        drop.classList.remove('flip', 'up');
+        const r = drop.getBoundingClientRect();
+        if (r.left < 8) drop.classList.add('flip');
+        if (r.bottom > window.innerHeight - 8) drop.classList.add('up');
+      }
+      if (open) setTimeout(() => document.addEventListener('click', function h() {
+        close(); document.removeEventListener('click', h);
+      }, { once: true }), 0);
+    };
+    drop.querySelectorAll('[data-print]').forEach(b => b.onclick = (e) => {
+      e.stopPropagation(); close(); onPick(b.dataset.print);
+    });
+  },
+
   // colgroups so table-layout:fixed wraps long checkbox rows within the page width
   COLS4: '<colgroup><col style="width:23%"><col style="width:30%"><col style="width:17%"><col style="width:30%"></colgroup>',
   COLS2: '<colgroup><col style="width:24%"><col style="width:76%"></colgroup>',
@@ -5492,6 +5680,263 @@ const App = {
     if (!sick.length) return '<p class="muted">ไม่มีข้อมูล</p>';
     return sick.map(({ m, cage }, i) =>
       `<div style="${i > 0 ? 'page-break-before:always' : ''}">${this.buildMonitoringForm(p, cage, m)}</div>`).join('');
+  },
+
+  // ---- 5) Humane Endpoint weekly record sheet -----------------------------
+  // The paper sheet is a MATRIX, not a list: one COLUMN per animal, one ROW per
+  // criterion, then Total score and Result. That shape is the point — the reviewer
+  // reads across a row to see the whole colony on one parameter, and down a column
+  // to see one animal. Twenty animals to a block, as on the form; past that the
+  // columns stop being writable by hand, which is what the blank sheet is for.
+  //
+  // Landscape, because 20 columns in portrait gives ~7 mm each and nobody can
+  // write a digit in that.
+  HUMANE_COLS_PER_BLOCK: 20,
+  HUMANE_SHEET_CSS: `
+    @page { size: A4 portrait; margin: 12mm 10mm; }
+    table.hsheet { table-layout: fixed; width: 100%; border-collapse: collapse; }
+    table.hsheet th, table.hsheet td { border: 1px solid #333; padding: 4px 1px; text-align: center; font-size: 10px; }
+    table.hsheet th.rowlbl, table.hsheet td.rowlbl { text-align: left; padding: 4px 6px; font-size: 10.5px; font-weight: 600; }
+    /* หัวกรงกินสองช่อง (หนูของกรงเดียวกันอยู่ติดกัน) จึงพิมพ์ 'A-01' ได้เต็มโดยไม่ตัดคำ */
+    table.hsheet .cagehd { background: #f1eef7; font-size: 10px; font-weight: 700; white-space: nowrap; }
+    table.hsheet .nohd { background: #f8f6fb; font-size: 9.5px; white-space: nowrap; }
+    table.hsheet .totrow td { background: #f6f4fa; font-weight: 700; }
+    table.hsheet .resrow td { font-weight: 700; }
+    table.hsheet td.E { background: #fde2e2; }
+    table.hsheet td.D { background: #e6e6e6; }
+    .hs-meta { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: flex-end; margin: 8px 0 10px; font-size: 11.5px; }
+    .hs-meta .f { flex: 1 1 190px; border-bottom: 1px solid #333; padding-bottom: 2px; white-space: nowrap; }
+    /* ตารางไหลต่อกันลงหน้า — 20 ตัวสูงแค่ ~55 มม. บังคับขึ้นหน้าใหม่ทุกตอนคือทิ้ง
+       กระดาษเปล่าไปสามในสี่หน้า · ห้ามแค่ 'ตัดกลางตาราง' ก็พอ */
+    .hs-block { page-break-inside: avoid; break-inside: avoid; margin-top: 9px; }
+    .hs-rule { margin-top: 8px; font-size: 11px; }
+  `,
+
+  // '2 – 8 สิงหาคม 2569' เมื่ออยู่เดือนเดียวกัน · เต็มรูปแบบเมื่อคร่อมเดือน
+  dateRange(from, to) {
+    if (!from) return '';
+    if (!to || from === to) return this.thaiDate(from);
+    const [ay, am, ad] = from.split('-').map(Number), [by, bm] = to.split('-').map(Number);
+    return (ay === by && am === bm) ? `${ad} – ${this.thaiDate(to)}` : `${this.thaiDate(from)} – ${this.thaiDate(to)}`;
+  },
+
+  // สัปดาห์ที่เท่าไรของโครงการ — นับจากวันเริ่มโครงการ (สัปดาห์ที่ 1 = 7 วันแรก)
+  weekNoOf(p, iso) {
+    if (!p.startDate || !iso) return 1;
+    const days = Math.floor((new Date(iso) - new Date(p.startDate)) / 86400000);
+    return Math.max(1, Math.floor(days / 7) + 1);
+  },
+  // ทุกสัปดาห์ที่มีการให้คะแนน · หนึ่งสัปดาห์ = หนึ่งแผ่น
+  // ประเมินซ้ำในสัปดาห์เดียวกัน ใช้ครั้งล่าสุด (health เรียงตามวันอยู่แล้ว)
+  humaneWeeks(p) {
+    const map = new Map();
+    p.cages.forEach(cage => cage.mice.forEach(m => (m.health || []).forEach(h => {
+      if (h.total == null) return;
+      const wk = this.weekNoOf(p, h.date);
+      if (!map.has(wk)) map.set(wk, { week: wk, dates: new Set(), scored: new Map() });
+      const w = map.get(wk);
+      w.dates.add(h.date);
+      w.scored.set(m.id, { cage, mouse: m, h });
+    })));
+    return [...map.values()].map(w => {
+      const d = [...w.dates].sort();
+      return { ...w, from: d[0], to: d[d.length - 1] };
+    }).sort((a, b) => a.week - b.week);
+  },
+  // คอลัมน์ของแผ่น: ทุกตัวที่ยังอยู่ในสัปดาห์นั้น ไม่ใช่เฉพาะตัวที่ประเมินแล้ว —
+  // ช่องว่างคือหลักฐานว่ามีตัวไหนตกหล่น ซึ่งเป็นสิ่งที่ผู้ตรวจมองหา
+  humaneSheetMice(p, wk) {
+    const out = [];
+    p.cages.forEach(cage => cage.mice.forEach(m => {
+      const rec = wk ? wk.scored.get(m.id) : null;
+      const gone = !m.alive && m.death && m.death.date && wk && m.death.date < wk.from;
+      if (rec || !gone) out.push({ cage, mouse: m, h: rec ? rec.h : null });
+    }));
+    return out.sort((a, b) =>
+      a.cage.code.localeCompare(b.cage.code, 'en', { numeric: true }) || (a.mouse.cageNo - b.mouse.cageNo));
+  },
+
+  // หน้าเกณฑ์การให้คะแนน — แต่ละโครงการตั้งเกณฑ์เองตอนยื่นคำขอ แผ่นคะแนนจึงต้อง
+  // มีเกณฑ์ของโครงการนั้นแนบไปด้วย ไม่งั้นตัวเลข 0–3 ไม่มีความหมายกับคนอ่าน
+  buildHumaneCriteriaDoc(p) {
+    const crit = this.humaneCriteria(p);
+    const cfg = this.humaneCfg(p);
+    const tables = crit.map((c, i) => {
+      const lv = this.critLevels(c);
+      const w = c.other ? [10, 62, 28] : [10, 90];
+      return `<table class="form" style="margin-bottom:9px">
+        <colgroup>${w.map(x => `<col style="width:${x}%">`).join('')}</colgroup>
+        <tr><td class="band" colspan="${w.length}">${i + 1}. ${this.esc(c.name)}${
+          c.auto === 'weight' ? ' <span style="font-weight:400">— ระบบคำนวณให้จากน้ำหนักที่ชั่ง</span>' : ''}</td></tr>
+        <tr><th style="text-align:center">Score</th><th>Criteria</th>${c.other ? '<th>Other, please specify:</th>' : ''}</tr>
+        ${[0, 1, 2, 3].map(s =>
+          `<tr><td style="text-align:center"><b>${s}</b></td><td>${this.esc(lv[s] || '')}</td>${c.other ? '<td></td>' : ''}</tr>`
+        ).join('')}
+      </table>`;
+    }).join('');
+
+    return `
+      ${this.cmuHeader('Humane Endpoint — Criteria & Record', '1 หน้า')}
+      <div class="doc-title" style="margin-bottom:2px">ข้อกำหนดในการหยุดการทดลองกับสัตว์ก่อนสิ้นสุดการทดลอง (Humane end-point)</div>
+      <div class="doc-title" style="margin-top:0;font-size:12.5px;font-weight:400">ประเมินสัปดาห์ละ 1 ครั้ง · ${this.esc(p.name)}</div>
+      <p style="margin:0 0 8px"><b>Early Endpoint Criteria using scoring system are:</b></p>
+      ${tables}
+      <table class="form">${this.COLS2}
+        <tr><td class="lbl">Early euthanasia will be done</td>
+          <td>when body weight loss ≥ <b>${cfg.weightLossPct}%</b> or:
+            = <b>${crit.length}</b> Criteria &amp; Total score ≥ <b>${cfg.totalThreshold} / ${crit.length * 3}</b></td></tr>
+        <tr><td class="lbl">Result</td><td>N = Normal, &nbsp; E = Euthanasia, &nbsp; D = Death</td></tr>
+        ${cfg.note ? `<tr><td class="lbl">หมายเหตุ</td><td>${this.esc(cfg.note)}</td></tr>` : ''}
+      </table>
+      <p class="muted" style="margin-top:8px">พิมพ์จากระบบ iLAMP · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+  },
+
+  // แผ่นบันทึกหนึ่งสัปดาห์ · wk = null → แผ่นเปล่าไว้กรอกมือหน้ากรง
+  buildHumaneWeekDoc(p, wk) {
+    const crit = this.humaneCriteria(p);
+    const cfg = this.humaneCfg(p);
+    const list = this.humaneSheetMice(p, wk);
+    const N = this.HUMANE_COLS_PER_BLOCK;
+    const blocks = [];
+    for (let i = 0; i < list.length; i += N) blocks.push(list.slice(i, i + N));
+    if (!blocks.length) blocks.push([]);
+
+    // เกณฑ์อาจถูกแก้หลังบันทึกไปแล้ว — จับคู่ด้วยชื่อก่อน แล้วค่อยถอยไปใช้ลำดับ
+    const scoreOf = (h, k) => {
+      if (!h || !h.scores) return '';
+      const s = h.scores.find(x => x.name === crit[k].name) || h.scores[k];
+      return s && s.v != null ? s.v : '';
+    };
+    const resultOf = (row) => {
+      const m = row.mouse;
+      if (wk && !m.alive && m.death && m.death.date && m.death.date >= wk.from && m.death.date <= wk.to) return 'D';
+      return row.h && row.h.result ? row.h.result : '';
+    };
+
+    const sheet = (rows, bi) => {
+      const pad = N - rows.length;                       // ทุกแผ่นกว้างเท่ากันเสมอ
+      const blank = '<td></td>'.repeat(pad);
+      const lblW = 26, colW = (100 - lblW) / N;
+      // หัวคอลัมน์: รวมช่องของกรงเดียวกันเป็นเซลล์เดียว — แนวตั้งเหลือช่องละ ~7 มม.
+      // เขียน 'A-01' ไม่ลง แต่พอรวมช่องของกรงเดียวกันก็พิมพ์ได้เต็มโดยไม่ตัดคำ
+      const groups = [];
+      rows.forEach(r => {
+        const last = groups[groups.length - 1];
+        if (last && last.cage.id === r.cage.id) last.n++;
+        else groups.push({ cage: r.cage, n: 1 });
+      });
+      return `<div class="hs-block">
+        <table class="hsheet">
+          <colgroup><col style="width:${lblW}%">${`<col style="width:${colW}%">`.repeat(N)}</colgroup>
+          <tr><th class="rowlbl" rowspan="2">Humane Endpoint parameters</th>
+            ${groups.map(g => `<th class="cagehd" colspan="${g.n}">${this.esc(g.cage.code)}</th>`).join('')}${blank}</tr>
+          <tr>${rows.map(r => `<th class="nohd">#${r.mouse.cageNo ?? ''}</th>`).join('')}${blank}</tr>
+          ${crit.map((c, k) => `<tr>
+            <td class="rowlbl">${k + 1}. ${this.esc(c.name)}</td>
+            ${rows.map(r => `<td>${scoreOf(r.h, k)}</td>`).join('')}${blank}</tr>`).join('')}
+          <tr class="totrow"><td class="rowlbl">Total score</td>
+            ${rows.map(r => `<td>${r.h && r.h.total != null ? r.h.total : ''}</td>`).join('')}${blank}</tr>
+          <tr class="resrow"><td class="rowlbl">Result</td>
+            ${rows.map(r => { const v = resultOf(r); return `<td class="${v}">${v}</td>`; }).join('')}${blank}</tr>
+        </table>
+      </div>`;
+    };
+
+    const when = wk ? this.dateRange(wk.from, wk.to) : '';
+    const evaluator = wk
+      ? [...new Set([...wk.scored.values()].map(x => x.h.by).filter(Boolean))].join(', ')
+      : '';
+
+    return `<style>${this.HUMANE_SHEET_CSS}</style>
+      ${this.cmuHeader('Humane Endpoint — Weekly Record', `${list.length} ตัว`)}
+      <div class="doc-title" style="margin:8px 0 2px">แบบบันทึกการประเมิน Humane endpoint (รายสัปดาห์)</div>
+      <div class="doc-title" style="margin-top:0;font-size:12px;font-weight:400">${this.esc(p.name)}</div>
+      <div class="hs-meta">
+        <span>สัปดาห์ Care &amp; Use ที่ <b>${wk ? wk.week : '&nbsp;&nbsp;&nbsp;&nbsp;'}</b></span>
+        <span class="f">วันที่ / เวลา : ${when}</span>
+        <span class="f">ลงชื่อผู้ประเมิน : ${this.esc(evaluator)}</span>
+      </div>
+      ${blocks.map(sheet).join('')}
+      <p class="hs-rule">Early euthanasia will be done when body weight loss ≥ <b>${cfg.weightLossPct}%</b>
+        or = <b>${crit.length}</b> Criteria &amp; Total score ≥ <b>${cfg.totalThreshold} / ${crit.length * 3}</b>
+        &nbsp;·&nbsp; Result: N = Normal, E = Euthanasia, D = Death</p>
+      <p class="muted" style="margin-top:6px">พิมพ์จากระบบ iLAMP · ${todayISO()} (เอกสารจำลอง prototype)</p>`;
+  },
+
+  // เลือกสัปดาห์ที่จะพิมพ์ — ทั้งหมด บางสัปดาห์ หรือแผ่นเปล่าไว้กรอกมือ
+  openHumaneSheets(p) {
+    const weeks = this.humaneWeeks(p);
+    const sel = new Set(weeks.map(w => w.week));
+    let withCriteria = true, blank = false;
+    const total = p.cages.reduce((n, c) => n + c.mice.length, 0);
+
+    const draw = () => {
+      const rows = weeks.map(w => {
+        const done = w.scored.size;
+        const cols = this.humaneSheetMice(p, w).length;
+        const e = [...w.scored.values()].filter(x => x.h.result === 'E').length;
+        const when = w.from === w.to ? this.thaiDate(w.from) : `${this.thaiDate(w.from)} – ${this.thaiDate(w.to)}`;
+        return `<button class="hw-row ${sel.has(w.week) ? 'on' : ''}" data-wk="${w.week}" ${blank ? 'disabled' : ''}>
+          <span class="hw-no">สัปดาห์ที่ ${w.week}</span>
+          <span class="hw-when">${when}</span>
+          <span class="spacer" style="flex:1"></span>
+          <span class="hw-n${done < cols ? ' part' : ''}">ประเมินแล้ว ${done} / ${cols} ตัว</span>
+          ${e ? `<span class="hw-e">ผล E ${e}</span>` : ''}
+        </button>`;
+      }).join('');
+
+      this.openModal(`
+        <div class="modal-head">
+          <div><h3>🩺 แผ่นบันทึก Humane endpoint</h3>
+            <div class="sub">${p.name} · หนึ่งแผ่นต่อหนึ่งสัปดาห์ · A4 แนวตั้ง · ${this.HUMANE_COLS_PER_BLOCK} ตัว/แผ่น</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="cs-bar">
+            <button class="btn mini" id="hwAll" ${blank ? 'disabled' : ''}>เลือกทั้งหมด</button>
+            <button class="btn mini" id="hwNone" ${blank ? 'disabled' : ''}>ล้างที่เลือก</button>
+            <span class="spacer" style="flex:1"></span>
+            <span class="count-chip">${blank ? 'แผ่นเปล่า' : `เลือกแล้ว ${sel.size} / ${weeks.length} สัปดาห์`}</span>
+          </div>
+          ${weeks.length
+            ? `<div class="hw-list">${rows}</div>`
+            : `<p class="empty-note">ยังไม่มีการให้คะแนน Humane endpoint ในโครงการนี้ — พิมพ์แผ่นเปล่าไปกรอกที่หน้ากรงได้</p>`}
+          <label class="chk hw-opt"><input type="checkbox" id="hwBlank" ${blank ? 'checked' : ''}>
+            <span>พิมพ์<b>แผ่นเปล่า</b>ไว้กรอกด้วยมือ (${total} ตัว · ไม่ใส่คะแนนที่บันทึกไว้)</span></label>
+          <label class="chk hw-opt"><input type="checkbox" id="hwCrit" ${withCriteria ? 'checked' : ''}>
+            <span>แนบ<b>หน้าเกณฑ์การให้คะแนน</b>ของโครงการนี้ไว้หน้าแรก</span></label>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="hwCancel">ปิด</button>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-primary" id="hwPrint" ${blank || sel.size ? '' : 'disabled'}>🖨️ พิมพ์</button>
+        </div>
+      `, { wide: true });
+
+      this.el('closeModal').onclick = () => this.closeModal();
+      this.el('hwCancel').onclick = () => this.closeModal();
+      this.el('hwAll').onclick = () => { weeks.forEach(w => sel.add(w.week)); draw(); };
+      this.el('hwNone').onclick = () => { sel.clear(); draw(); };
+      this.el('hwBlank').onclick = (e) => { blank = e.target.checked; draw(); };
+      this.el('hwCrit').onclick = (e) => { withCriteria = e.target.checked; };
+      document.querySelectorAll('[data-wk]').forEach(b => b.onclick = () => {
+        const n = +b.dataset.wk;
+        sel.has(n) ? sel.delete(n) : sel.add(n);
+        draw();
+      });
+      this.el('hwPrint').onclick = () => {
+        const chosen = blank ? [null] : weeks.filter(w => sel.has(w.week));
+        if (!chosen.length) return;
+        const pages = chosen.map(w => this.buildHumaneWeekDoc(p, w));
+        if (withCriteria) pages.unshift(this.buildHumaneCriteriaDoc(p));
+        this.closeModal();
+        this.printDocument(`HumaneEndpoint_${p.name}${blank ? '_blank' : ''}`,
+          pages.map((h, i) => `<div style="${i > 0 ? 'page-break-before:always' : ''}">${h}</div>`).join(''));
+        this.log('Export PDF', blank ? 'แผ่นบันทึก Humane endpoint (เปล่า)'
+          : `แผ่นบันทึก Humane endpoint · ${chosen.length} สัปดาห์`, p.name);
+      };
+    };
+    draw();
   },
 
   // ---------------------------------------------------------
@@ -5934,6 +6379,7 @@ const App = {
     cage.food.remaining = (w.data.foodRemaining ?? 0) + (w.data.foodAdded ?? 0);
     cage.water.added = w.data.waterAdded;
     cage.food.added = w.data.foodAdded;
+    this.logSupply(cage, 'weigh');            // ลงประวัติ ไม่ใช่แค่ทับค่าล่าสุด
     cage.lastRecordDate = this.bumpDate(cage.lastRecordDate, today);
     // keep alert if any mouse has a remark, else mark done
     const hasRemark = cage.mice.some(m => m.remark);
@@ -6363,7 +6809,7 @@ const App = {
     // apply what physically changed in the cage
     const apply = (key, store) => {
       const x = d[key];
-      if (x.status !== 'abnormal' || !x.mode) return;
+      if (x.status !== 'abnormal' || !x.mode) return 0;
       if (x.mode === 'add') {
         store.remaining = Math.round((store.remaining + (x.amount || 0)) * 10) / 10;
         store.added = x.amount;
@@ -6373,9 +6819,11 @@ const App = {
         store.remaining = x.amount || 0;
         store.added = x.amount;
       }
+      return 1;
     };
-    apply('feed', cage.food);
-    apply('water', cage.water);
+    const touched = apply('feed', cage.food) | apply('water', cage.water);
+    // ตรวจแล้วปกติ = ไม่ได้ชั่งอะไร จึงไม่มีตัวเลขให้ลงประวัติ — ลงเฉพาะรอบที่วัดจริง
+    if (touched) this.logSupply(cage, 'care');
 
     cage.careLog = cage.careLog || [];
     this.pushDated(cage.careLog, {
@@ -7007,8 +7455,9 @@ const App = {
   },
 
   // Build series for the report: any combination of metrics (weight/water/food)
-  // over the selected groups. Only weight has per-mouse history; water/food are
-  // simulated as a gentle series from current remaining values.
+  // over the selected groups. Weight is per mouse; water/food are measured per CAGE
+  // (the animals share the supply) and read from cage.supplyLog — real recorded
+  // rounds, matched by date.
   // No time-range picker — the x-axis is every recorded weigh-day (data is already
   // averaged to one value per day at each weighing).
   // a cage is in scope only when BOTH layers are selected (2-factor design)
@@ -7034,12 +7483,18 @@ const App = {
 
     const multi = st.metrics.length > 1;
     const suffix = m => multi ? ` · ${metricLabel[m]}` : '';
-    // water/food have no real history → simulate a gentle declining-then-refilled series from a base value
-    const simSeries = base => {
-      const pts = [];
-      for (let d = 0; d <= range; d++) { const cycle = d % 3; pts.push(Math.round((base + (2 - cycle) * base * 0.18 + rand(-5, 5)) * 10) / 10); }
-      return pts;
+    // น้ำ/อาหารอ่านจาก cage.supplyLog จริง ไม่ได้สร้างเส้นขึ้นมาเองอีกแล้ว
+    // จับคู่ด้วย "วันที่" ไม่ใช่ตำแหน่งในอาร์เรย์ — กรงถูกชั่งคนละวันได้ และการกรอก
+    // ย้อนหลังก็แทรกกลางลำดับ · วันที่ไม่มีการชั่ง = null (กราฟเว้นช่วงให้เอง)
+    const axisDates = Array.from({ length: range + 1 }, (_, i) => isoDaysAgo(range - i));
+    // ชั่งซ้ำในวันเดียวกันได้ (Sci ชั่งเช้า ACT เปลี่ยนน้ำบ่าย) — แต่ละรายการนับ
+    // ช่วงเวลาของตัวเอง ปริมาณที่กินไป "ทั้งวัน" จึงเป็นผลรวม ไม่ใช่รายการใดรายการหนึ่ง
+    const usedOn = (c, metric, iso) => {
+      const day = (c.supplyLog || []).filter(x => x.date === iso && x[metric]);
+      if (!day.length) return null;
+      return Math.round(day.reduce((a, x) => a + (x[metric].consumed || 0), 0) * 10) / 10;
     };
+    const cageSeries = (c, metric) => axisDates.map(d => usedOn(c, metric, d));
     let series = [];
 
     st.metrics.forEach(metric => {
@@ -7069,22 +7524,25 @@ const App = {
         // water/food = amount CONSUMED that day (backend derives it by working backward from the
         // recorded "remaining" across days: consumed = prev_remaining + added − current_remaining).
         // Measured per CAGE (mice share the supply) → finest granularity is per cage.
-        const val = c => metric === 'water' ? c.water.consumed : c.food.consumed;
         groups.forEach(g => {
           const base = colorOf(g.id);
           const gc = this.reportCages(p, g.id);
           gc.forEach((c, j) => {
             const tone = gc.length > 1 ? (j / (gc.length - 1)) * 0.55 : 0;
-            series.push({ label: c.code + suffix(metric), color: this.lighten(base, tone), dash, points: simSeries(val(c)) });
+            series.push({ label: c.code + suffix(metric), color: this.lighten(base, tone), dash, points: cageSeries(c, metric) });
           });
         });
       } else {
-        // group average of daily consumption per group
+        // ค่าเฉลี่ยต่อกรงของกลุ่ม — เฉลี่ยเฉพาะกรงที่มีการชั่งในวันนั้นจริง
         groups.forEach(g => {
           const gc = this.reportCages(p, g.id);
           if (!gc.length) return;
-          const base = gc.reduce((a, c) => a + (metric === 'water' ? c.water.consumed : c.food.consumed), 0) / gc.length;
-          series.push({ label: g.name + suffix(metric), color: colorOf(g.id), dash, points: simSeries(base) });
+          const cols = gc.map(c => cageSeries(c, metric));
+          const pts = axisDates.map((_, d) => {
+            const vals = cols.map(col => col[d]).filter(v => v != null);
+            return vals.length ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length * 10) / 10 : null;
+          });
+          series.push({ label: g.name + suffix(metric), color: colorOf(g.id), dash, points: pts });
         });
       }
     });

@@ -163,6 +163,33 @@ function rand(min, max) {
 }
 
 // Build a 14-day weight series that drifts around a baseline.
+// ประวัติน้ำ/อาหารของกรง — หนึ่งรายการต่อหนึ่งรอบที่มีการชั่งจริง
+// remaining = ปริมาณที่พร้อมใช้หลังจบรอบ (ที่วัดได้ + ที่เติม) · consumed = กินไประหว่างรอบ
+// เก็บ `mice` ไว้ด้วย เพราะจำนวนหนูเปลี่ยนได้ (ตาย/ย้าย) — ถ้าไม่เก็บ ค่า g/ตัว
+// ย้อนหลังจะคำนวณผิดทันทีที่มีตัวใดตาย
+function buildSupplyLog(nMice, waterBase, foodBase, days = 14) {
+  const log = [];
+  let water = waterBase, food = foodBase;
+  for (let i = days; i >= 0; i--) {
+    const wUse = Math.round(rand(5, 9) * nMice * 10) / 10;
+    const fUse = Math.round(rand(3.5, 5.5) * nMice * 10) / 10;
+    const wLeft = Math.max(0, Math.round((water - wUse) * 10) / 10);
+    const fLeft = Math.max(0, Math.round((food - fUse) * 10) / 10);
+    // เติมเมื่อเหลือน้อย — เหมือนที่เจ้าหน้าที่ทำจริง ไม่ใช่เติมทุกวัน
+    const wAdd = wLeft < waterBase * 0.4 ? Math.round((waterBase - wLeft) * 10) / 10 : 0;
+    const fAdd = fLeft < foodBase * 0.4 ? Math.round((foodBase - fLeft) * 10) / 10 : 0;
+    water = Math.round((wLeft + wAdd) * 10) / 10;
+    food = Math.round((fLeft + fAdd) * 10) / 10;
+    log.push({
+      date: isoDaysAgo(i), time: '09:30', by: 'Sci — นักวิทยาศาสตร์', source: 'weigh',
+      water: { remaining: water, added: wAdd, consumed: wUse },
+      food:  { remaining: food,  added: fAdd, consumed: fUse },
+      mice: nMice,
+    });
+  }
+  return log;
+}
+
 function buildWeightSeries(baseline, trendPerDay, days = 14) {
   const series = [];
   let w = baseline - trendPerDay * days;
@@ -231,6 +258,11 @@ function makeMouse(code, sex, baseline, trend, groupNo = null, cageNo = null) {
 // by the PI *after* the mice are already in the cage, and never at the same time:
 //   dietId  — ชนิดอาหาร (layer 1). null ⇒ อาหารทั่วไป (the project's default diet)
 //   groupId — กลุ่มทดสอบ (layer 2). null ⇒ ยังไม่ถูกจัดเข้ากลุ่มการทดลอง
+function _lastSupply(log, key) {
+  const e = log && log.length ? log[log.length - 1] : null;
+  return e ? { ...e[key] } : null;
+}
+
 function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
   return {
     id,
@@ -243,20 +275,20 @@ function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
     rackNo: opts.rackNo ?? null,   // แร็คที่ชั้นนี้อยู่ (โครงการหนึ่งมีได้หลายแร็ค)
     position,
     mice,
-    water: {
-      remaining: opts.water ?? rand(180, 350),   // grams remaining
-      added: null,
-      // total grams consumed since last record (previous provided − current remaining)
-      consumed: opts.waterConsumed ?? rand(5, 9) * (mice.length || 1),
-    },
-    food: {
-      remaining: opts.food ?? rand(40, 120),      // grams remaining
-      added: null,
-      consumed: opts.foodConsumed ?? rand(3.5, 5.5) * (mice.length || 1),
-    },
+    // water/food = สรุปของรอบล่าสุด · ตัวจริงคือ supplyLog ข้างล่าง
+    // อ่านจากท้าย log เสมอเมื่อมี log เพื่อไม่ให้ "ค่าล่าสุด" กับ "ประวัติ" ขัดกันเอง
+    water: _lastSupply(opts.supplyLog, 'water')
+      ?? { remaining: opts.water ?? rand(180, 350), added: null,
+           consumed: opts.waterConsumed ?? rand(5, 9) * (mice.length || 1) },
+    food: _lastSupply(opts.supplyLog, 'food')
+      ?? { remaining: opts.food ?? rand(40, 120), added: null,
+           consumed: opts.foodConsumed ?? rand(3.5, 5.5) * (mice.length || 1) },
     // บันทึกการตรวจดูแลกรงของ ACT — หนึ่งรายการต่อการตรวจหนึ่งรอบ
     // { date, time, by, items: { animals, feed, water, cage } } — ดู App.CARE_ITEMS
     careLog: opts.careLog ?? [],
+    // ประวัติน้ำ/อาหารทุกรอบ — water/food ข้างบนคือรายการล่าสุดของ log นี้
+    // (เดิมเก็บแค่ค่าล่าสุด ทับทุกรอบ ประวัติจึงหายหมดและกราฟต้องสุ่มเส้นขึ้นมาเอง)
+    supplyLog: opts.supplyLog ?? [],
     status: opts.status ?? 'pending',             // 'done' | 'pending' | 'alert'
     lastRecordDate: opts.lastRecordDate ?? isoDaysAgo(1),
   };
@@ -320,6 +352,7 @@ for (let si = 0; si < 4; si++) {
     }
     cagesP1.push(makeCage(nextCageId(), code, groupId, si + 1, pos, mice, {
       dietId, shelfLabel: letter, rackNo: si < 2 ? 'R3' : 'R4', lastRecordDate: isoDaysAgo(1),
+      supplyLog: buildSupplyLog(mice.length, rand(280, 340), rand(90, 120)),
     }));
   }
 }
@@ -469,7 +502,8 @@ for (let si = 0; si < 2; si++) {
     cagesDone.push(makeCage(nextCageId(), code, groupId, si + 1, pos, [
       makeMouse(mouseCode('P3', code, 1), cageSex, 26.5 + rand(-1, 1), si === 0 ? 0.28 : 0.16, g1, 1),
       makeMouse(mouseCode('P3', code, 2), cageSex, 25.5 + rand(-1, 1), si === 0 ? 0.26 : 0.15, g2, 2),
-    ], { dietId: 'DD1', shelfLabel: letter, rackNo: 'R1', lastRecordDate: isoDaysAgo(96) }));
+    ], { dietId: 'DD1', shelfLabel: letter, rackNo: 'R1', lastRecordDate: isoDaysAgo(96),
+         supplyLog: buildSupplyLog(2, rand(280, 340), rand(90, 120)) }));
   }
 }
 
