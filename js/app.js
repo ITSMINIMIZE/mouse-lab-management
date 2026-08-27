@@ -752,7 +752,7 @@ const App = {
     return this.myProjectRoles(project).some(r => ROLES[r] && ROLES[r].caps.includes(cap));
   },
   // can the current user see this project in the list at all?
-  // needs the `view` capability first — that is what keeps GM (stockroom/finance
+  // needs the `view` capability first — that is what keeps GM (ครุภัณฑ์ only)
   // only) out of every project even though their position scope is 'all'.
   hasAccess(project) {
     if (!this.can('view', project)) return false;
@@ -769,18 +769,20 @@ const App = {
   // but has no enterProject, so a card click takes them to the safety form instead.
   canEnter(project) { return this.hasAccess(project) && this.can('enterProject', project); },
 
-  // ---- top-level tabs (โครงการ / งานคลัง / การเงิน) ----------------------
-  // Visibility is per capability: GM sees only the last two, EX sees all three,
-  // everyone else sees only โครงการ.
+  // ---- top-level tabs (โครงการ / ครุภัณฑ์) --------------------------------
+  // Visibility is per capability: GM sees only ครุภัณฑ์, everyone else sees
+  // โครงการ and — if entitled — ครุภัณฑ์ alongside it.
+  // การเงิน used to be a third tab. It was removed once ครุภัณฑ์ grew its own
+  // balance summary: two screens both answering "what did the unit spend" is one
+  // screen too many, and the money lives where the items are.
   TABS: [
     { key: 'projects', label: 'โครงการ', icon: '🧪', cap: 'view' },
-    { key: 'supply',   label: 'งานคลัง', icon: '📦', cap: 'viewSupply' },
-    { key: 'finance',  label: 'การเงิน', icon: '💰', cap: 'viewFinance' },
+    { key: 'assets',   label: 'ครุภัณฑ์', icon: '📦', cap: 'viewAssets' },
   ],
   visibleTabs() { return this.TABS.filter(t => this.can(t.cap)); },
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
-    if (name === 'supply' || name === 'finance') return name;
+    if (name === 'assets') return name;
     if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport'].includes(name)) return 'projects';
     return '';
   },
@@ -813,8 +815,7 @@ const App = {
       case 'audit':    this.go('audit', this.route.projectId); break;
       case 'roles':    this.go('roles', this.route.projectId); break;
       case 'users':    this.go('users'); break;
-      case 'supply':   this.go('supply'); break;
-      case 'finance':  this.go('finance'); break;
+      case 'assets':   this.go('assets'); break;
       case 'build':
       case 'ochreport': this.go(name, ds.projectId || this.route.projectId); break;
       case 'logout':   this.go('login'); break;
@@ -843,24 +844,18 @@ const App = {
     if (name === 'audit') return this.renderAudit();
     if (name === 'roles') return this.renderRoles();
     if (name === 'users') return this.renderUsers();
-    if (name === 'supply') return this.renderModulePlaceholder('supply');
-    if (name === 'finance') return this.renderModulePlaceholder('finance');
+    if (name === 'assets') return this.renderAssets();
     if (this.PROJECT_MODULES[name]) return this.renderProjectModule(name);
+    // A name nothing matches used to fall out here silently: route said one thing,
+    // the screen still showed the last one. Removing the การเงิน route is what
+    // exposed it. Land somewhere real instead of half-navigating — and never
+    // bounce to a target that is itself unrouted, or this recurses forever.
+    const home = this.homeRoute();
+    return this.go(home === name ? 'roles' : home);
   },
 
-  // ---------------------------------------------------------
-  // Top-level modules reserved for the next phase (งานคลัง / การเงิน).
-  // These are facility-wide, NOT per project. The tab, route and permission gate
-  // exist now so the real screens can drop straight in; there is deliberately no
-  // data model behind them yet.
-  // ---------------------------------------------------------
-  MODULES: {
-    supply:  { icon: '📦', title: 'งานคลัง', cap: 'viewSupply',  desc: 'คลังวัสดุ อาหารสัตว์ และครุภัณฑ์ของหน่วยสัตว์ทดลอง' },
-    finance: { icon: '💰', title: 'การเงิน', cap: 'viewFinance', desc: 'งบประมาณ ค่าใช้จ่าย และการเบิกจ่าย' },
-  },
-
-  // Per-project screens reserved for the next phase. Same idea as MODULES, but
-  // these hang off a project, so they carry a projectId and a breadcrumb.
+  // Per-project screens reserved for the next phase. These hang off a project, so
+  // they carry a projectId and a breadcrumb.
   PROJECT_MODULES: {
     ochreport:{ icon: '🦺', title: 'รายงานความปลอดภัย', cap: 'ochReport',
                 desc: 'ตรวจหน้างานตามมาตรฐานชีวอนามัย และออกรายงานเมื่อพบสิ่งผิดปกติ' },
@@ -891,23 +886,599 @@ const App = {
       </div>`
     );
   },
-  renderModulePlaceholder(key) {
-    const mod = this.MODULES[key];
-    if (!this.can(mod.cap)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้านี้'); return this.go(this.homeRoute()); }
+  // =========================================================
+  // ครุภัณฑ์ และ วัสดุ
+  // =========================================================
+  // ทะเบียนเดียว สองชนิด เพราะทั้งคู่คือของที่ซื้อด้วยเงินหน่วยงานและต้องสรุปยอด
+  // รวมกัน แต่คิดมูลค่าคนละแบบ:
+  //   ครุภัณฑ์ — ซื้อครั้งเดียว มูลค่าทยอยตัดเป็นค่าเสื่อมตามอายุการใช้งาน
+  //              (เส้นตรง: ราคา ÷ อายุปี) ที่กรอกไว้ตอนเพิ่มรายการ
+  //   วัสดุ    — ใช้แล้วหมดไป มูลค่าเป็นค่าใช้จ่ายตอน "เบิกออก" ไม่ใช่ตอนซื้อ
+  // ความต่างนี้คือเหตุผลเดียวที่หน้านี้ต้องรู้จักสองชนิด — ตัวเลขสรุปข้างบนถึงจะถูก
+  assetCats() { return ASSET_CATEGORIES; },
+  catOf(a) { return ASSET_CATEGORIES.find(c => c.key === a.category) || { label: a.category || '—', icon: '📦' }; },
+  assetStatus(a) { return ASSET_STATUS[a.status] || { label: a.status, tone: '' }; },
 
-    this.shell(
-      '',   // the active tab already says where we are
-      `<div class="page">
+  // จำนวนบาท — คั่นหลักพัน ไม่มีทศนิยม (สตางค์ไม่มีความหมายกับงบครุภัณฑ์)
+  baht(v) { return (v == null || isNaN(v)) ? '–' : Math.round(v).toLocaleString('en-US'); },
+
+  // ---- ค่าเสื่อมราคาแบบเส้นตรง ----
+  // ปีที่ครอบครองมาแล้ว (ทศนิยม) — ใช้คิดค่าเสื่อมสะสม
+  assetAgeYears(a) {
+    if (!a.acquiredDate) return 0;
+    return Math.max(0, (new Date(todayISO()) - new Date(a.acquiredDate)) / (365.25 * 86400000));
+  },
+  depPerYear(a) {
+    return (a.kind === 'asset' && a.lifeYears > 0) ? a.price / a.lifeYears : 0;
+  },
+  // ค่าเสื่อมสะสม — หยุดที่ราคาทุน ของที่หมดอายุแล้วไม่ติดลบ
+  depAccum(a) {
+    if (a.kind !== 'asset' || !(a.lifeYears > 0)) return 0;
+    return Math.min(a.price, this.depPerYear(a) * this.assetAgeYears(a));
+  },
+  bookValue(a) {
+    if (a.kind === 'consumable') return (a.qty || 0) * (a.price || 0);
+    if (a.status === 'disposed') return 0;
+    return Math.max(0, a.price - this.depAccum(a));
+  },
+  // ยังอยู่ในอายุการใช้งานไหม — ของที่ตัดค่าเสื่อมหมดแล้วยังใช้งานได้ แต่มูลค่าเป็น 0
+  depDone(a) { return a.kind === 'asset' && a.lifeYears > 0 && this.assetAgeYears(a) >= a.lifeYears; },
+
+  // วัสดุที่เบิกออกในช่วง 12 เดือน คิดเป็นค่าใช้จ่าย
+  usedThisYear(a) {
+    if (a.kind !== 'consumable') return 0;
+    const from = new Date(todayISO()); from.setFullYear(from.getFullYear() - 1);
+    return (a.moves || []).filter(m => m.type === 'out' && new Date(m.date) >= from)
+      .reduce((s, m) => s + (m.qty || 0), 0) * (a.price || 0);
+  },
+  repairCostThisYear(a) {
+    const from = new Date(todayISO()); from.setFullYear(from.getFullYear() - 1);
+    return (a.repairs || []).filter(r => new Date(r.date) >= from)
+      .reduce((s, r) => s + (r.cost || 0), 0);
+  },
+  openRepairs(a) { return (a.repairs || []).filter(r => r.status === 'open'); },
+  lowStock(a) { return a.kind === 'consumable' && a.minQty != null && (a.qty || 0) <= a.minQty; },
+
+  renderAssets() {
+    if (!this.can('viewAssets')) { this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้านี้'); return this.go(this.homeRoute()); }
+    const canEdit = this.can('manageAssets');
+    this.assetFilter = this.assetFilter || { kind: 'ALL', cat: 'ALL', q: '' };
+    const f = this.assetFilter;
+    const all = DB.assets;
+
+    const match = a =>
+      (f.kind === 'ALL' || a.kind === f.kind)
+      && (f.cat === 'ALL' || a.category === f.cat)
+      && (!f.q || [a.name, a.code, a.brand, a.model, a.serial, a.room].join(' ').toLowerCase().includes(f.q.toLowerCase()));
+    const list = all.filter(match);
+
+    // ---- สรุปดุลของทั้งหน่วย ----
+    // ครุภัณฑ์นับ "มูลค่าตามบัญชี" (ราคาทุน − ค่าเสื่อมสะสม) ไม่ใช่ราคาที่ซื้อมา
+    // ไม่งั้นตัวเลขจะโตขึ้นเรื่อย ๆ ทั้งที่ของเก่าลงทุกปี
+    const assets = all.filter(a => a.kind === 'asset' && a.status !== 'disposed');
+    const stock = all.filter(a => a.kind === 'consumable');
+    const sum = {
+      bookAsset: assets.reduce((s, a) => s + this.bookValue(a), 0),
+      costAsset: assets.reduce((s, a) => s + a.price, 0),
+      depYear: assets.reduce((s, a) => s + (this.depDone(a) ? 0 : this.depPerYear(a)), 0),
+      stockValue: stock.reduce((s, a) => s + this.bookValue(a), 0),
+      usedYear: stock.reduce((s, a) => s + this.usedThisYear(a), 0),
+      repairYear: all.reduce((s, a) => s + this.repairCostThisYear(a), 0),
+    };
+    // ค่าใช้จ่ายของหน่วยในรอบปี = ค่าเสื่อม + วัสดุที่เบิกใช้ + ค่าซ่อม
+    sum.expenseYear = sum.depYear + sum.usedYear + sum.repairYear;
+
+    const alerts = [];
+    const openRep = all.filter(a => this.openRepairs(a).length);
+    const low = stock.filter(a => this.lowStock(a));
+    if (openRep.length) alerts.push(`<button class="as-alert warn" data-jump="repair">🔧 มีงานซ่อมค้างอยู่ <b>${openRep.length}</b> รายการ</button>`);
+    if (low.length) alerts.push(`<button class="as-alert bad" data-jump="low">📉 วัสดุต่ำกว่าจุดสั่งซื้อ <b>${low.length}</b> รายการ</button>`);
+
+    const kindTabs = [['ALL', 'ทั้งหมด', all.length],
+      ['asset', 'ครุภัณฑ์', all.filter(a => a.kind === 'asset').length],
+      ['consumable', 'วัสดุสิ้นเปลือง', all.filter(a => a.kind === 'consumable').length]]
+      .map(([k, l, n]) => `<button class="btn as-kind ${f.kind === k ? 'on' : ''}" data-kind="${k}">${l} <b>${n}</b></button>`).join('');
+
+    const catChips = ['ALL', ...ASSET_CATEGORIES.map(c => c.key)]
+      .filter(k => k === 'ALL' || all.some(a => a.category === k))
+      .map(k => {
+        const c = ASSET_CATEGORIES.find(x => x.key === k);
+        return `<button class="btn btn-sm as-cat ${f.cat === k ? 'on' : ''}" data-cat="${k}">${
+          k === 'ALL' ? 'ทุกหมวด' : `${c.icon} ${c.label}`}</button>`;
+      }).join('');
+
+    const rows = list.length ? list.map(a => {
+      const st = this.assetStatus(a);
+      const cat = this.catOf(a);
+      const open = this.openRepairs(a).length;
+      const isAsset = a.kind === 'asset';
+      const value = isAsset
+        ? `<b>${this.baht(this.bookValue(a))}</b><i>ทุน ${this.baht(a.price)}${
+            a.lifeYears ? ` · ${a.lifeYears} ปี` : ''}</i>`
+        : `<b>${this.baht(this.bookValue(a))}</b><i>${this.baht(a.price)} / ${this.esc(a.unit)}</i>`;
+      const qty = isAsset
+        ? `<span class="as-dep${this.depDone(a) ? ' done' : ''}">${
+            this.depDone(a) ? 'ตัดค่าเสื่อมครบแล้ว' : `ค่าเสื่อม ${this.baht(this.depPerYear(a))}/ปี`}</span>`
+        : `<span class="as-qty${this.lowStock(a) ? ' low' : ''}">${a.qty} ${this.esc(a.unit)}${
+            a.minQty != null ? `<i>ขั้นต่ำ ${a.minQty}</i>` : ''}</span>`;
+      return `<tr class="as-row" data-id="${a.id}">
+        <td>${cat.icon} <b>${this.esc(a.name)}</b>
+          <div class="as-sub">${a.code ? `<span class="mono">${this.esc(a.code)}</span> · ` : ''}${
+            [a.brand, a.model].filter(Boolean).map(x => this.esc(x)).join(' ') || '—'}</div></td>
+        <td>${a.room ? `${this.esc(a.room)}${a.rack && a.rack !== '—' ? ' · ' + this.esc(a.rack) : ''}` : '—'}</td>
+        <td>${qty}</td>
+        <td class="num as-val">${value}</td>
+        <td><span class="as-st ${st.tone}">${st.label}</span>${
+          open ? `<span class="as-open">🔧 ${open}</span>` : ''}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="5" class="empty-note" style="text-align:center;padding:26px">ไม่พบรายการที่ตรงกับที่ค้นหา</td></tr>`;
+
+    this.shell('', `
+      <div class="page wide">
         <div class="page-head">
-          <div><h2>${mod.icon} ${mod.title}</h2><div class="desc">${mod.desc}</div></div>
+          <div><h2>📦 ครุภัณฑ์ และ วัสดุ</h2>
+            <div class="desc">ทะเบียนของหน่วยสัตว์ทดลอง · ครุภัณฑ์ตัดค่าเสื่อมตามอายุการใช้งาน · วัสดุตัดเป็นค่าใช้จ่ายตอนเบิกออก</div></div>
+          <span class="spacer" style="flex:1"></span>
+          ${canEdit ? `<button class="btn btn-primary" id="asAdd">+ เพิ่มรายการ</button>` : ''}
         </div>
-        <div class="report-canvas module-soon">
-          <div class="ms-ico">${mod.icon}</div>
-          <h3>อยู่ระหว่างพัฒนา — เฟสถัดไป</h3>
-          <p>โครงสร้างหน้าและสิทธิ์การเข้าถึงถูกวางไว้แล้ว รอออกแบบรายละเอียดร่วมกับผู้ใช้งานจริง</p>
+
+        <div class="as-sum">
+          <div class="as-card"><span>มูลค่าครุภัณฑ์ตามบัญชี</span><b>${this.baht(sum.bookAsset)}</b>
+            <i>ราคาทุนรวม ${this.baht(sum.costAsset)}</i></div>
+          <div class="as-card"><span>ค่าเสื่อมราคา / ปี</span><b>${this.baht(sum.depYear)}</b>
+            <i>เฉพาะที่ยังไม่ตัดครบ</i></div>
+          <div class="as-card"><span>มูลค่าวัสดุคงคลัง</span><b>${this.baht(sum.stockValue)}</b>
+            <i>${stock.length} รายการ</i></div>
+          <div class="as-card total"><span>ค่าใช้จ่ายรอบ 12 เดือน</span><b>${this.baht(sum.expenseYear)}</b>
+            <i>ค่าเสื่อม ${this.baht(sum.depYear)} · วัสดุ ${this.baht(sum.usedYear)} · ซ่อม ${this.baht(sum.repairYear)}</i></div>
         </div>
-      </div>`
-    );
+        ${alerts.length ? `<div class="as-alerts">${alerts.join('')}</div>` : ''}
+
+        <div class="as-bar">
+          <div class="as-kinds">${kindTabs}</div>
+          <span class="spacer" style="flex:1"></span>
+          <input id="asSearch" class="as-search" placeholder="ค้นหาชื่อ · เลขครุภัณฑ์ · ยี่ห้อ · ห้อง" value="${this.esc(f.q)}">
+        </div>
+        <div class="as-cats">${catChips}</div>
+
+        <div class="report-canvas" style="padding:0;overflow:auto">
+          <table class="data as-table">
+            <thead><tr><th>รายการ</th><th>ที่ตั้ง</th><th>คงเหลือ / ค่าเสื่อม</th><th class="num">มูลค่า (บาท)</th><th>สถานะ</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="empty-note" style="margin-top:10px">แสดง ${list.length} จาก ${all.length} รายการ · แตะแถวเพื่อดูรายละเอียด</p>
+      </div>`);
+
+    if (canEdit) this.el('asAdd').onclick = () => this.openAssetForm(null);
+    document.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { f.kind = b.dataset.kind; this.renderAssets(); });
+    document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { f.cat = b.dataset.cat; this.renderAssets(); });
+    document.querySelectorAll('.as-row').forEach(r => r.onclick = () => this.openAssetDetail(DB.assets.find(a => a.id === r.dataset.id)));
+    document.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
+      // ไม่ได้ทำหน้าใหม่ — กรองให้เห็นเฉพาะที่ต้องจัดการ
+      f.kind = b.dataset.jump === 'low' ? 'consumable' : 'ALL';
+      f.cat = 'ALL'; f.q = '';
+      this.assetJump = b.dataset.jump;
+      this.renderAssets();
+    });
+    // เมื่อกดแถบเตือน ให้เหลือเฉพาะรายการที่เข้าเงื่อนไข
+    if (this.assetJump) {
+      const want = this.assetJump === 'low' ? (a => this.lowStock(a)) : (a => this.openRepairs(a).length);
+      document.querySelectorAll('.as-row').forEach(r => {
+        const a = DB.assets.find(x => x.id === r.dataset.id);
+        if (!want(a)) r.remove();
+      });
+      this.assetJump = null;
+    }
+    const q = this.el('asSearch');
+    q.oninput = () => { f.q = q.value; this.renderAssets(); this.el('asSearch').focus(); };
+  },
+
+  // ---- รายละเอียดรายการ ----
+  openAssetDetail(a) {
+    if (!a) return;
+    const canEdit = this.can('manageAssets');
+    const isAsset = a.kind === 'asset';
+    const st = this.assetStatus(a), cat = this.catOf(a);
+    const row = (k, v) => `<div class="ad-row"><span class="ad-k">${k}</span><span class="ad-v">${v || '—'}</span></div>`;
+
+    // ครุภัณฑ์: เส้นเวลาค่าเสื่อม · วัสดุ: ความเคลื่อนไหวสต๊อก
+    const money = isAsset ? `
+      <div class="ad-money">
+        <div><span>ราคาทุน</span><b>${this.baht(a.price)}</b></div>
+        <div><span>ค่าเสื่อมสะสม</span><b class="minus">−${this.baht(this.depAccum(a))}</b></div>
+        <div class="net"><span>มูลค่าตามบัญชี</span><b>${this.baht(this.bookValue(a))}</b></div>
+      </div>
+      <div class="ad-bar" title="ตัดค่าเสื่อมไปแล้ว ${Math.round(this.depAccum(a) / (a.price || 1) * 100)}%">
+        <i style="width:${Math.min(100, Math.round(this.depAccum(a) / (a.price || 1) * 100))}%"></i>
+      </div>
+      <p class="ad-note">${a.lifeYears
+        ? `อายุการใช้งาน ${a.lifeYears} ปี · ตัดปีละ ${this.baht(this.depPerYear(a))} · ใช้งานมาแล้ว ${this.assetAgeYears(a).toFixed(1)} ปี${
+            this.depDone(a) ? ' — <b>ตัดค่าเสื่อมครบแล้ว</b> (ยังใช้งานได้ แต่มูลค่าทางบัญชีเป็น 0)' : ''}`
+        : 'ไม่ได้ระบุอายุการใช้งาน จึงไม่คิดค่าเสื่อม'}</p>`
+      : `
+      <div class="ad-money">
+        <div><span>คงเหลือ</span><b class="${this.lowStock(a) ? 'minus' : ''}">${a.qty} ${this.esc(a.unit)}</b></div>
+        <div><span>ราคา/หน่วย</span><b>${this.baht(a.price)}</b></div>
+        <div class="net"><span>มูลค่าคงคลัง</span><b>${this.baht(this.bookValue(a))}</b></div>
+      </div>
+      <p class="ad-note">${a.minQty != null
+        ? `จุดสั่งซื้อ ${a.minQty} ${this.esc(a.unit)}${this.lowStock(a) ? ' — <b>ต่ำกว่าจุดสั่งซื้อแล้ว</b>' : ''}`
+        : 'ไม่ได้ตั้งจุดสั่งซื้อ'} · เบิกใช้ในรอบ 12 เดือน คิดเป็น ${this.baht(this.usedThisYear(a))} บาท</p>`;
+
+    const repairs = (a.repairs || []).length
+      ? [...a.repairs].reverse().map(r => `
+        <div class="ad-rep ${r.status}">
+          <div class="ad-rep-h">
+            <span class="ad-rep-d">${this.thaiDate(r.date)}</span>
+            <span class="ad-rep-s ${r.status}">${r.status === 'open' ? 'รอดำเนินการ' : r.status === 'fixed' ? 'ซ่อมเสร็จแล้ว' : 'ซ่อมไม่ได้'}</span>
+            <span class="spacer" style="flex:1"></span>
+            ${r.cost ? `<span class="ad-rep-c">${this.baht(r.cost)} บาท</span>` : ''}
+          </div>
+          <div class="ad-rep-b">${this.esc(r.symptom)}</div>
+          <div class="ad-rep-m">แจ้งโดย ${this.esc(r.by)}${r.vendor ? ` · ผู้ซ่อม ${this.esc(r.vendor)}` : ''}${
+            r.fixedDate ? ` · เสร็จ ${this.thaiDate(r.fixedDate)}` : ''}</div>
+          ${r.note ? `<div class="ad-rep-n">${this.esc(r.note)}</div>` : ''}
+          ${canEdit && r.status === 'open' ? `<button class="btn btn-sm" data-close-rep="${a.repairs.indexOf(r)}">✓ ปิดงานซ่อม</button>` : ''}
+        </div>`).join('')
+      : `<p class="empty-note">ยังไม่มีประวัติการซ่อม</p>`;
+
+    const moves = (a.moves || []).length
+      ? `<table class="data ad-moves">
+          <thead><tr><th>วันที่</th><th>รายการ</th><th class="num">จำนวน</th><th>ผู้ทำรายการ</th><th>หมายเหตุ</th></tr></thead>
+          <tbody>${[...a.moves].reverse().map(m => `<tr>
+            <td style="white-space:nowrap">${this.thaiDate(m.date)}</td>
+            <td><span class="ad-mv ${m.type}">${m.type === 'in' ? '📥 รับเข้า' : '📤 เบิกออก'}</span></td>
+            <td class="num"><b>${m.type === 'in' ? '+' : '−'}${m.qty}</b> ${this.esc(a.unit)}</td>
+            <td>${this.esc(m.by)}</td><td>${this.esc(m.note)}</td></tr>`).join('')}</tbody>
+        </table>`
+      : `<p class="empty-note">ยังไม่มีความเคลื่อนไหว</p>`;
+
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>${cat.icon} ${this.esc(a.name)}</h3>
+          <div class="sub">${a.code ? `<span class="mono">${this.esc(a.code)}</span> · ` : ''}${cat.label} · <span class="as-st ${st.tone}">${st.label}</span></div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        ${money}
+        <div class="section-title">ข้อมูลทะเบียน</div>
+        <div class="ad-grid">
+          ${row('ยี่ห้อ / รุ่น', [a.brand, a.model].filter(Boolean).map(x => this.esc(x)).join(' ') || '')}
+          ${isAsset ? row('หมายเลขเครื่อง', this.esc(a.serial)) : row('หน่วยนับ', this.esc(a.unit))}
+          ${row('วันที่ได้มา', this.thaiDate(a.acquiredDate))}
+          ${row('แหล่งเงิน', this.esc(a.fundSource))}
+          ${row('ที่ตั้ง', [a.room, a.rack && a.rack !== '—' ? a.rack : ''].filter(Boolean).map(x => this.esc(x)).join(' · '))}
+          ${row('ผู้รับผิดชอบ', this.esc(a.owner))}
+        </div>
+        ${a.note ? `<p class="ad-freetext">${this.esc(a.note)}</p>` : ''}
+
+        <div class="section-title">${isAsset ? '🔧 ประวัติการซ่อมบำรุง' : '📦 ความเคลื่อนไหวสต๊อก'}</div>
+        ${isAsset ? repairs : moves}
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="adClose">ปิด</button>
+        <span class="spacer" style="flex:1"></span>
+        ${canEdit && isAsset ? `<button class="btn" id="adRepair">🔧 แจ้งซ่อม</button>` : ''}
+        ${canEdit && !isAsset ? `<button class="btn" id="adOut">📤 เบิกออก</button>
+                                 <button class="btn" id="adIn">📥 รับเข้า</button>` : ''}
+        ${canEdit ? `<button class="btn btn-primary" id="adEdit">✏️ แก้ไขทะเบียน</button>` : ''}
+      </div>`, { wide: true });
+
+    const back = () => this.openAssetDetail(a);
+    this.el('closeModal').onclick = () => { this.closeModal(); this.renderAssets(); };
+    this.el('adClose').onclick = () => { this.closeModal(); this.renderAssets(); };
+    if (canEdit) {
+      this.el('adEdit').onclick = () => this.openAssetForm(a);
+      if (isAsset) this.el('adRepair').onclick = () => this.openRepairForm(a);
+      else {
+        this.el('adIn').onclick = () => this.openStockMove(a, 'in');
+        this.el('adOut').onclick = () => this.openStockMove(a, 'out');
+      }
+      document.querySelectorAll('[data-close-rep]').forEach(b => b.onclick = () => this.openRepairForm(a, +b.dataset.closeRep));
+    }
+  },
+
+  // ---- เพิ่ม / แก้ทะเบียน ----
+  // ชนิดตัดสินตั้งแต่ต้นและเปลี่ยนไม่ได้หลังบันทึก เพราะมันเปลี่ยนวิธีคิดมูลค่า
+  // ทั้งก้อน (ค่าเสื่อม ↔ สต๊อก) และประวัติที่มีอยู่จะอ่านไม่ได้
+  openAssetForm(a) {
+    const isNew = !a;
+    const d = a ? { ...a } : {
+      kind: 'asset', code: '', name: '', category: 'lab', brand: '', model: '', serial: '',
+      acquiredDate: todayISO(), price: '', fundSource: FUND_SOURCES[0], lifeYears: 5,
+      room: '', rack: '', owner: this.user.name, status: 'active', note: '',
+      unit: '', qty: '', minQty: '',
+    };
+
+    const draw = () => {
+      const isAsset = d.kind === 'asset';
+      this.setModal(`
+        <div class="modal-head">
+          <div><h3>${isNew ? '+ เพิ่มรายการใหม่' : '✏️ แก้ไขทะเบียน'}</h3>
+            <div class="sub">${isNew ? 'เลือกชนิดก่อน — ชนิดกำหนดวิธีคิดมูลค่า' : this.esc(a.name)}</div></div>
+          <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <label>ชนิด ${isNew ? '<span style="color:var(--red)">*</span>' : '<span class="muted-lbl">(เปลี่ยนไม่ได้หลังบันทึกแล้ว)</span>'}</label>
+            <div class="choice-row">
+              <button type="button" class="choice ${isAsset ? 'sel' : ''}" data-kind="asset" ${isNew ? '' : 'disabled'}>
+                🏷️ ครุภัณฑ์<i>ของคงทน · ตัดค่าเสื่อมตามอายุ</i></button>
+              <button type="button" class="choice ${!isAsset ? 'sel' : ''}" data-kind="consumable" ${isNew ? '' : 'disabled'}>
+                📦 วัสดุสิ้นเปลือง<i>ใช้แล้วหมดไป · ตัดค่าใช้จ่ายตอนเบิก</i></button>
+            </div>
+          </div>
+          <div class="form-row2">
+            <div class="field"><label>ชื่อรายการ <span style="color:var(--red)">*</span></label>
+              <input id="afName" value="${this.esc(d.name)}" placeholder="เช่น เครื่องชั่งดิจิทัลทศนิยม 2 ตำแหน่ง"></div>
+            <div class="field"><label>${isAsset ? 'เลขครุภัณฑ์' : 'รหัสวัสดุ'}</label>
+              <input id="afCode" value="${this.esc(d.code)}" placeholder="${isAsset ? 'เช่น มช.6640-002-0007' : 'เช่น ว-FEED-01'}"></div>
+          </div>
+          <div class="form-row3">
+            <div class="field"><label>หมวด</label><select id="afCat">${
+              ASSET_CATEGORIES.map(c => `<option value="${c.key}" ${d.category === c.key ? 'selected' : ''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
+            <div class="field"><label>ยี่ห้อ</label><input id="afBrand" value="${this.esc(d.brand)}"></div>
+            <div class="field"><label>รุ่น</label><input id="afModel" value="${this.esc(d.model)}"></div>
+          </div>
+          <div class="form-row3">
+            <div class="field"><label>วันที่ได้มา</label>${this.dateChip('afDate', d.acquiredDate, 'เลือกวันที่')}</div>
+            <div class="field"><label>${isAsset ? 'ราคาทุน (บาท)' : 'ราคาต่อหน่วย (บาท)'} <span style="color:var(--red)">*</span></label>
+              <input id="afPrice" type="number" min="0" step="1" value="${d.price}"></div>
+            <div class="field"><label>แหล่งเงิน</label><select id="afFund">${
+              FUND_SOURCES.map(x => `<option ${d.fundSource === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
+          </div>
+
+          ${isAsset ? `
+          <div class="form-row3">
+            <div class="field"><label>อายุการใช้งาน (ปี) <span style="color:var(--red)">*</span></label>
+              <input id="afLife" type="number" min="1" max="50" value="${d.lifeYears ?? ''}"></div>
+            <div class="field"><label>หมายเลขเครื่อง (S/N)</label><input id="afSerial" value="${this.esc(d.serial)}"></div>
+            <div class="field"><label>สถานะ</label><select id="afStatus">${
+              Object.entries(ASSET_STATUS).map(([k, v]) => `<option value="${k}" ${d.status === k ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+          </div>
+          <p class="af-hint">💡 ค่าเสื่อมคิดแบบเส้นตรง — ราคาทุน ÷ อายุการใช้งาน ตัดเท่ากันทุกปีจนครบ
+            <b id="afDepPreview"></b></p>`
+          : `
+          <div class="form-row3">
+            <div class="field"><label>หน่วยนับ <span style="color:var(--red)">*</span></label>
+              <input id="afUnit" value="${this.esc(d.unit)}" placeholder="เช่น ถุง 20 กก. · กล่อง 100 ชิ้น"></div>
+            <div class="field"><label>คงเหลือ${isNew ? ' (ยอดตั้งต้น)' : ''}</label>
+              <input id="afQty" type="number" min="0" value="${d.qty === '' ? '' : d.qty}" ${isNew ? '' : 'disabled'}></div>
+            <div class="field"><label>จุดสั่งซื้อ</label><input id="afMin" type="number" min="0" value="${d.minQty ?? ''}"></div>
+          </div>
+          ${isNew ? '' : `<p class="af-hint">💡 ยอดคงเหลือแก้ตรงนี้ไม่ได้ — ต้องบันทึกเป็น <b>รับเข้า</b> หรือ <b>เบิกออก</b> เพื่อให้มีร่องรอยว่าของหายไปไหน</p>`}`}
+
+          <div class="form-row3">
+            <div class="field"><label>ห้อง</label><input id="afRoom" value="${this.esc(d.room)}" placeholder="เช่น AR01"></div>
+            <div class="field"><label>แร็ค / จุดวาง</label><input id="afRack" value="${this.esc(d.rack)}"></div>
+            <div class="field"><label>ผู้รับผิดชอบ</label><input id="afOwner" value="${this.esc(d.owner)}"></div>
+          </div>
+          <div class="field"><label>หมายเหตุ</label><textarea id="afNote" rows="2">${this.esc(d.note)}</textarea></div>
+        </div>
+        <div class="modal-foot">
+          ${!isNew ? `<button class="btn btn-danger" id="afDel">ลบรายการ</button>` : ''}
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn" id="afCancel">ยกเลิก</button>
+          <button class="btn btn-primary" id="afSave">${isNew ? 'เพิ่มรายการ' : 'บันทึกการแก้ไข'}</button>
+        </div>`);
+      wire();
+    };
+
+    const capture = () => {
+      const v = id => (this.el(id) ? this.el(id).value : '');
+      d.name = v('afName').trim(); d.code = v('afCode').trim();
+      d.category = v('afCat'); d.brand = v('afBrand').trim(); d.model = v('afModel').trim();
+      d.price = v('afPrice') === '' ? '' : +v('afPrice');
+      d.fundSource = v('afFund'); d.room = v('afRoom').trim(); d.rack = v('afRack').trim();
+      d.owner = v('afOwner').trim(); d.note = v('afNote').trim();
+      if (d.kind === 'asset') {
+        d.lifeYears = v('afLife') === '' ? null : +v('afLife');
+        d.serial = v('afSerial').trim(); d.status = v('afStatus');
+      } else {
+        d.unit = v('afUnit').trim();
+        if (isNew) d.qty = v('afQty') === '' ? 0 : +v('afQty');
+        d.minQty = v('afMin') === '' ? null : +v('afMin');
+      }
+    };
+
+    const wire = () => {
+      const done = () => { this.closeModal(); this.renderAssets(); };
+      this.el('closeModal').onclick = done;
+      this.el('afCancel').onclick = () => { if (isNew) done(); else this.openAssetDetail(a); };
+      document.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => {
+        if (!isNew) return;
+        capture(); d.kind = b.dataset.kind; draw();
+      });
+      this.el('afDate').onclick = (e) => this.openThaiCalendar(e.currentTarget, d.acquiredDate, iso => {
+        d.acquiredDate = iso || ''; this.setDateChip(this.el('afDate'), d.acquiredDate, 'เลือกวันที่');
+      });
+      const prev = this.el('afDepPreview');
+      if (prev) {
+        const upd = () => {
+          const pr = +this.el('afPrice').value, ly = +this.el('afLife').value;
+          prev.textContent = (pr > 0 && ly > 0) ? ` → ปีละ ${this.baht(pr / ly)} บาท` : '';
+        };
+        this.el('afPrice').oninput = upd; this.el('afLife').oninput = upd; upd();
+      }
+      const del = this.el('afDel');
+      if (del) del.onclick = () => this.confirmDialog({
+        title: 'ลบรายการนี้ออกจากทะเบียน?',
+        body: `<b>${this.esc(a.name)}</b>${a.code ? ` (${this.esc(a.code)})` : ''}<br>ประวัติการซ่อมและความเคลื่อนไหวทั้งหมดจะหายไปด้วย`,
+        okLabel: 'ลบรายการ',
+        onOk: () => {
+          DB.assets.splice(DB.assets.findIndex(x => x.id === a.id), 1);
+          this.log('ลบรายการครุภัณฑ์/วัสดุ', `${a.name}${a.code ? ' · ' + a.code : ''}`);
+          this.toast('ลบรายการแล้ว');
+          this.closeModal(); this.renderAssets();
+        },
+      });
+      this.el('afSave').onclick = () => {
+        capture();
+        if (!d.name) { this.el('afName').focus(); this.toast('กรุณากรอกชื่อรายการ'); return; }
+        if (!(d.price > 0)) { this.el('afPrice').focus(); this.toast('กรุณากรอกราคา'); return; }
+        if (d.kind === 'asset' && !(d.lifeYears > 0)) { this.el('afLife').focus(); this.toast('กรุณากรอกอายุการใช้งาน — ใช้คิดค่าเสื่อมราคา'); return; }
+        if (d.kind === 'consumable' && !d.unit) { this.el('afUnit').focus(); this.toast('กรุณากรอกหน่วยนับ'); return; }
+        if (d.code && DB.assets.some(x => x.code === d.code && x.id !== (a && a.id))) {
+          this.el('afCode').focus(); this.toast(`รหัส ${d.code} ถูกใช้แล้ว`); return;
+        }
+        if (isNew) {
+          const rec = makeAsset(d);
+          // ยอดตั้งต้นของวัสดุถือเป็นการรับเข้าครั้งแรก — ไม่ให้มีของโผล่มาเฉย ๆ
+          if (rec.kind === 'consumable' && rec.qty > 0) {
+            rec.moves.push({ date: rec.acquiredDate, type: 'in', qty: rec.qty, by: this.user.name,
+              note: 'ยอดตั้งต้นตอนขึ้นทะเบียน', price: rec.price });
+          }
+          DB.assets.push(rec);
+          this.log('เพิ่มรายการครุภัณฑ์/วัสดุ', `${rec.name}${rec.code ? ' · ' + rec.code : ''} · ${this.baht(rec.price)} บาท`);
+          this.toast('เพิ่มรายการแล้ว');
+          this.closeModal(); this.renderAssets();
+        } else {
+          Object.assign(a, d);
+          this.log('แก้ทะเบียนครุภัณฑ์/วัสดุ', `${a.name}${a.code ? ' · ' + a.code : ''}`);
+          this.toast('บันทึกการแก้ไขแล้ว');
+          this.openAssetDetail(a);
+        }
+      };
+    };
+
+    this.openModal('', { wide: true });
+    draw();
+  },
+
+  // ---- แจ้งซ่อม / ปิดงานซ่อม ----
+  openRepairForm(a, idx = null) {
+    const closing = idx != null;
+    const r = closing ? a.repairs[idx] : null;
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>🔧 ${closing ? 'ปิดงานซ่อม' : 'แจ้งซ่อม'} — ${this.esc(a.name)}</h3>
+          <div class="sub">${a.code ? `<span class="mono">${this.esc(a.code)}</span> · ` : ''}${this.esc(a.room)}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        ${closing ? `<p class="empty-note" style="margin-top:0">แจ้งเมื่อ ${this.thaiDate(r.date)} โดย ${this.esc(r.by)}<br><b>${this.esc(r.symptom)}</b></p>` : ''}
+        ${closing ? `
+          <div class="field"><label>ผลการซ่อม</label>
+            <div class="choice-row" id="rpResult">
+              <button type="button" class="choice sel" data-v="fixed">✅ ซ่อมเสร็จ ใช้งานได้</button>
+              <button type="button" class="choice" data-v="cannot">🚫 ซ่อมไม่ได้ / ไม่คุ้ม</button>
+            </div></div>
+          <div class="form-row3">
+            <div class="field"><label>วันที่เสร็จ</label>${this.dateChip('rpFixed', todayISO(), 'เลือกวันที่')}</div>
+            <div class="field"><label>ค่าซ่อม (บาท)</label><input id="rpCost" type="number" min="0" value="${r.cost || ''}"></div>
+            <div class="field"><label>ผู้ซ่อม / ร้าน</label><input id="rpVendor" value="${this.esc(r.vendor)}"></div>
+          </div>
+          <div class="field"><label>สิ่งที่ทำ / อะไหล่ที่เปลี่ยน</label><textarea id="rpNote" rows="2">${this.esc(r.note)}</textarea></div>`
+        : `
+          <div class="field"><label>อาการที่พบ <span style="color:var(--red)">*</span></label>
+            <textarea id="rpSymptom" rows="3" placeholder="เช่น พัดลมชั้น 3 มีเสียงดังผิดปกติ · ประตูรั่ว ไอน้ำออกด้านข้าง"></textarea></div>
+          <div class="form-row2">
+            <div class="field"><label>วันที่พบ</label>${this.dateChip('rpDate', todayISO(), 'เลือกวันที่')}</div>
+            <div class="field"><label>ผู้แจ้ง</label><input id="rpBy" value="${this.esc(this.user.name)}"></div>
+          </div>
+          <div class="field"><label>ผู้ซ่อม / ร้าน (ถ้าทราบแล้ว)</label><input id="rpVendor" value=""></div>
+          <p class="af-hint">💡 แจ้งซ่อมแล้วสถานะของครุภัณฑ์จะเปลี่ยนเป็น <b>ส่งซ่อม</b> อัตโนมัติ</p>`}
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="rpCancel">ยกเลิก</button>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn btn-primary" id="rpSave">${closing ? 'ปิดงานซ่อม' : 'แจ้งซ่อม'}</button>
+      </div>`);
+
+    let dateVal = todayISO();
+    let result = 'fixed';
+    const chip = this.el(closing ? 'rpFixed' : 'rpDate');
+    chip.onclick = (e) => this.openThaiCalendar(e.currentTarget, dateVal, iso => {
+      dateVal = iso || todayISO(); this.setDateChip(chip, dateVal, 'เลือกวันที่');
+    });
+    const res = this.el('rpResult');
+    if (res) res.querySelectorAll('.choice').forEach(b => b.onclick = () => {
+      result = b.dataset.v;
+      res.querySelectorAll('.choice').forEach(x => x.classList.toggle('sel', x === b));
+    });
+    this.el('closeModal').onclick = () => this.openAssetDetail(a);
+    this.el('rpCancel').onclick = () => this.openAssetDetail(a);
+    this.el('rpSave').onclick = () => {
+      if (closing) {
+        r.status = result;
+        r.fixedDate = dateVal;
+        r.cost = +this.el('rpCost').value || 0;
+        r.vendor = this.el('rpVendor').value.trim();
+        r.note = this.el('rpNote').value.trim();
+        // ซ่อมไม่ได้ = ของชำรุดถาวร รอเสนอจำหน่าย ไม่ใช่กลับมาใช้งานปกติ
+        a.status = result === 'fixed' ? 'active' : 'broken';
+        this.log('ปิดงานซ่อม', `${a.name} · ${result === 'fixed' ? 'ซ่อมเสร็จ' : 'ซ่อมไม่ได้'}${r.cost ? ' · ' + this.baht(r.cost) + ' บาท' : ''}`);
+        this.toast(result === 'fixed' ? 'ปิดงานซ่อมแล้ว — กลับมาใช้งานปกติ' : 'บันทึกแล้ว — สถานะเป็นชำรุด รอจำหน่าย');
+      } else {
+        const sym = this.el('rpSymptom').value.trim();
+        if (!sym) { this.el('rpSymptom').focus(); this.toast('กรุณาระบุอาการที่พบ'); return; }
+        a.repairs = a.repairs || [];
+        a.repairs.push({ date: dateVal, by: this.el('rpBy').value.trim() || this.user.name,
+          symptom: sym, status: 'open', fixedDate: '', cost: 0,
+          vendor: this.el('rpVendor').value.trim(), note: '' });
+        a.status = 'repair';
+        this.log('แจ้งซ่อมครุภัณฑ์', `${a.name}${a.code ? ' · ' + a.code : ''} · ${sym}`);
+        this.toast(`แจ้งซ่อม ${a.name} แล้ว`);
+      }
+      this.openAssetDetail(a);
+    };
+  },
+
+  // ---- รับเข้า / เบิกออก ----
+  openStockMove(a, type) {
+    const isIn = type === 'in';
+    this.openModal(`
+      <div class="modal-head">
+        <div><h3>${isIn ? '📥 รับวัสดุเข้าคลัง' : '📤 เบิกวัสดุออก'} — ${this.esc(a.name)}</h3>
+          <div class="sub">คงเหลือตอนนี้ <b>${a.qty} ${this.esc(a.unit)}</b></div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row3">
+          <div class="field"><label>จำนวน (${this.esc(a.unit)}) <span style="color:var(--red)">*</span></label>
+            <input id="smQty" type="number" min="1" value=""></div>
+          <div class="field"><label>วันที่</label>${this.dateChip('smDate', todayISO(), 'เลือกวันที่')}</div>
+          <div class="field"><label>ผู้ทำรายการ</label><input id="smBy" value="${this.esc(this.user.name)}"></div>
+        </div>
+        ${isIn ? `<div class="field"><label>ราคาต่อหน่วยล็อตนี้ (บาท)</label>
+          <input id="smPrice" type="number" min="0" value="${a.price}">
+          <span class="muted-lbl">ถ้าราคาต่างจากเดิม ระบบจะใช้ราคาใหม่กับสต๊อกทั้งหมด</span></div>` : ''}
+        <div class="field"><label>หมายเหตุ ${isIn ? '<span class="muted-lbl">(เลขใบสั่งซื้อ / ผู้ขาย)</span>' : '<span class="muted-lbl">(เบิกไปใช้ที่ไหน)</span>'}</label>
+          <input id="smNote" placeholder="${isIn ? 'เช่น รับเข้าตามใบสั่งซื้อ PO-2569-0142' : 'เช่น เบิกใช้ห้อง AR01'}"></div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" id="smCancel">ยกเลิก</button>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn btn-primary" id="smSave">${isIn ? 'รับเข้า' : 'เบิกออก'}</button>
+      </div>`);
+
+    let dateVal = todayISO();
+    const chip = this.el('smDate');
+    chip.onclick = (e) => this.openThaiCalendar(e.currentTarget, dateVal, iso => {
+      dateVal = iso || todayISO(); this.setDateChip(chip, dateVal, 'เลือกวันที่');
+    });
+    this.el('closeModal').onclick = () => this.openAssetDetail(a);
+    this.el('smCancel').onclick = () => this.openAssetDetail(a);
+    this.el('smSave').onclick = () => {
+      const q = +this.el('smQty').value;
+      if (!(q > 0)) { this.el('smQty').focus(); this.toast('กรุณากรอกจำนวน'); return; }
+      // เบิกเกินของที่มีคือความผิดพลาดในการนับ ไม่ใช่สิ่งที่ปล่อยให้ติดลบ
+      if (!isIn && q > a.qty) { this.el('smQty').focus(); this.toast(`เบิกได้ไม่เกิน ${a.qty} ${a.unit} ที่มีอยู่`); return; }
+      const note = this.el('smNote').value.trim();
+      if (isIn) {
+        const np = +this.el('smPrice').value;
+        if (np > 0) a.price = np;
+      }
+      a.qty = isIn ? a.qty + q : a.qty - q;
+      a.moves = a.moves || [];
+      this.pushDated(a.moves, { date: dateVal, type, qty: q, by: this.el('smBy').value.trim() || this.user.name,
+        note, ...(isIn ? { price: a.price } : {}) });
+      this.log(isIn ? 'รับวัสดุเข้าคลัง' : 'เบิกวัสดุออก',
+        `${a.name} · ${isIn ? '+' : '−'}${q} ${a.unit}${note ? ' · ' + note : ''}`);
+      this.toast(`${isIn ? 'รับเข้า' : 'เบิกออก'} ${q} ${a.unit} แล้ว · คงเหลือ ${a.qty}`);
+      this.openAssetDetail(a);
+    };
   },
 
   // ---- user account helpers ----
@@ -1109,7 +1680,7 @@ const App = {
     const projRoles = proj ? this.myProjectRoles(proj) : [];
     const projRole = projRoles.join(' + ');
     const sysLabel = `${this.positionLabel()} (${this.positionKey()})`;
-    // top-level tabs — only those the position is entitled to (GM: คลัง+การเงิน only)
+    // top-level tabs — only those the position is entitled to (GM: ครุภัณฑ์ only)
     const activeTab = this.tabOfRoute(this.route.name);
     // always rendered: the lit tab is both the "you are here" marker and the way
     // back up (the redundant leading breadcrumb was removed in favour of it)
@@ -1286,7 +1857,7 @@ const App = {
       btn.innerHTML = `<span class="spin"></span> กำลังเข้าสู่ระบบ…`;
       setTimeout(() => {
         DB.currentUserId = match.id;
-        // land on the first tab this position is entitled to (GM starts at งานคลัง)
+        // land on the first tab this position is entitled to (GM starts at ครุภัณฑ์)
         this.go(this.homeRoute());
       }, 350);
     });

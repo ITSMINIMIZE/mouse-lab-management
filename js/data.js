@@ -36,11 +36,11 @@
 // scope: 'all'    = sees every project without being appointed to it
 //        'member' = only projects they are appointed to
 const POSITIONS = {
-  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewSupply', 'viewFinance', 'cageCard'] },
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewAssets', 'manageAssets', 'cageCard'] },
   AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
   VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
   SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewSupply'] },
+  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewAssets'] },
   // AEC = สำนักเลขานุการคณะกรรมการจริยธรรมการใช้สัตว์ทดลอง — like IACUC (read-only
   // across projects) but can approve/reject a PI's project REQUEST at stage 1.
   // AEC reviews the paperwork only: it reads a project's DETAILS (the info popup)
@@ -51,14 +51,14 @@ const POSITIONS = {
   IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
   QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
   AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
-  // EX reads details like AEC (no enterProject) but keeps งานคลัง / การเงิน
-  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewSupply', 'viewFinance'] },
+  // EX reads details like AEC (no enterProject) but keeps ครุภัณฑ์
+  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewAssets'] },
   // OCH inspects on site like a site-safety officer: sees the project cards but
   // deliberately has NO enterProject — clicking a card opens a safety report form.
   OCH:      { key: 'OCH',      label: 'เจ้าหน้าที่ชีวอนามัย',           scope: 'all',    caps: ['view', 'createProject', 'ochReport'] },
-  // GM works the stockroom/finance side only — no `view` at all, so hasAccess()
+  // GM works the ครุภัณฑ์ side only — no `view` at all, so hasAccess()
   // keeps them out of every project and the โครงการ tab stays hidden.
-  GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewSupply', 'viewFinance'] },
+  GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewAssets', 'manageAssets'] },
   EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
 };
 const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'SCI', 'ACT', 'AEC', 'IACUC', 'QA', 'AUDIT', 'EX', 'OCH', 'GM', 'EXTERNAL'];
@@ -97,8 +97,8 @@ const CAPABILITIES = [
   { key: 'approve',       label: 'สร้างโครงการจริง / ตีกลับ (สัตวแพทย์)' },
   { key: 'manageUsers',   label: 'จัดการบัญชีผู้ใช้ระบบ' },
   { key: 'ochReport',     label: 'รายงานความปลอดภัย / ชีวอนามัย' },
-  { key: 'viewSupply',    label: 'เข้าถึงงานคลัง' },
-  { key: 'viewFinance',   label: 'เข้าถึงการเงิน' },
+  { key: 'viewAssets',    label: 'เข้าถึงงานครุภัณฑ์' },
+  { key: 'manageAssets',  label: 'เพิ่ม / แก้ทะเบียนครุภัณฑ์-วัสดุ' },
 ];
 
 // mock user accounts. `position` = the ONE system-level job (a POSITIONS key).
@@ -510,8 +510,138 @@ for (let si = 0; si < 2; si++) {
 // ------------------------------------------------------------
 // Root DB object
 // ------------------------------------------------------------
+// ============================================================
+// ครุภัณฑ์ และ วัสดุ  (facility-wide — ไม่ผูกกับโครงการใดโครงการหนึ่ง)
+// ============================================================
+// สองชนิดในทะเบียนเดียวกัน เพราะทั้งคู่คือ "ของที่ซื้อด้วยเงินหน่วยงาน" และต้อง
+// สรุปยอดรวมกันในหน้าเดียว แต่คิดมูลค่าคนละแบบ:
+//   kind:'asset'      ครุภัณฑ์ — ของคงทน มีเลขครุภัณฑ์รายชิ้น มูลค่าทยอยตัดเป็น
+//                     ค่าเสื่อมตามอายุการใช้งานที่กรอกไว้ตอนเพิ่มรายการ
+//   kind:'consumable' วัสดุ — ใช้แล้วหมดไป ไม่มีเลขรายชิ้น นับเป็นจำนวนคงเหลือ
+//                     มูลค่าตัดเป็นค่าใช้จ่ายตอน "เบิกออก" ไม่ใช่ตอนซื้อ
+const ASSET_CATEGORIES = [
+  { key: 'housing',  label: 'กรง / ระบบเลี้ยง',  icon: '🏠' },
+  { key: 'lab',      label: 'เครื่องมือห้องปฏิบัติการ', icon: '🔬' },
+  { key: 'clean',    label: 'ทำความสะอาด / ปลอดเชื้อ', icon: '🧼' },
+  { key: 'feed',     label: 'อาหารสัตว์',        icon: '🍚' },
+  { key: 'bedding',  label: 'วัสดุรองนอน',       icon: '🪵' },
+  { key: 'medical',  label: 'เวชภัณฑ์ / ของใช้สิ้นเปลือง', icon: '💊' },
+  { key: 'office',   label: 'สำนักงาน / อื่น ๆ',  icon: '🗄️' },
+];
+const ASSET_STATUS = {
+  active:   { label: 'ใช้งานปกติ',   tone: 'ok' },
+  repair:   { label: 'ส่งซ่อม',      tone: 'warn' },
+  broken:   { label: 'ชำรุด รอจำหน่าย', tone: 'bad' },
+  disposed: { label: 'จำหน่ายแล้ว',  tone: 'muted' },
+};
+const FUND_SOURCES = ['เงินรายได้คณะ', 'เงินงบประมาณแผ่นดิน', 'เงินบริจาค', 'ทุนวิจัย'];
+
+let _assetSeq = 0;
+function makeAsset(o) {
+  _assetSeq++;
+  return {
+    id: 'AS' + _assetSeq,
+    kind: o.kind,                       // 'asset' | 'consumable'
+    code: o.code || '',                 // เลขครุภัณฑ์ / รหัสวัสดุ
+    name: o.name,
+    category: o.category,
+    brand: o.brand || '', model: o.model || '', serial: o.serial || '',
+    acquiredDate: o.acquiredDate,
+    price: o.price,                     // ครุภัณฑ์ = ราคาต่อชิ้น · วัสดุ = ราคาต่อหน่วย
+    fundSource: o.fundSource || FUND_SOURCES[0],
+    lifeYears: o.lifeYears ?? null,     // ครุภัณฑ์เท่านั้น — ตัวหารของค่าเสื่อมรายปี
+    room: o.room || '', rack: o.rack || '',
+    owner: o.owner || '',
+    status: o.status || 'active',
+    note: o.note || '',
+    // ---- วัสดุ ----
+    unit: o.unit || '',                 // หน่วยนับ (ถุง / กล่อง / กก.)
+    qty: o.qty ?? null,                 // คงเหลือ
+    minQty: o.minQty ?? null,           // จุดสั่งซื้อ — ต่ำกว่านี้ขึ้นเตือน
+    moves: o.moves || [],               // { date, type:'in'|'out', qty, by, note, price? }
+    // ---- ครุภัณฑ์ ----
+    repairs: o.repairs || [],           // { date, by, symptom, status, fixedDate, cost, vendor, note }
+  };
+}
+
+const ASSETS = [
+  makeAsset({ kind: 'asset', code: 'มช.7440-001-0001', name: 'ตู้เลี้ยงสัตว์ระบบระบายอากาศ (IVC) 70 กรง',
+    category: 'housing', brand: 'Tecniplast', model: 'GM500', serial: 'TP-2565-118',
+    acquiredDate: isoDaysAgo(1120), price: 1850000, lifeYears: 10, room: 'AR01', rack: 'R1',
+    owner: 'ACT — จนท.ดูแลสัตว์ทดลอง', fundSource: 'เงินงบประมาณแผ่นดิน',
+    repairs: [{ date: isoDaysAgo(240), by: 'ACT — จนท.ดูแลสัตว์ทดลอง', symptom: 'พัดลมชั้น 3 มีเสียงดังผิดปกติ',
+      status: 'fixed', fixedDate: isoDaysAgo(228), cost: 12500, vendor: 'บ.เทคนิคอลไซแอนซ์', note: 'เปลี่ยนมอเตอร์พัดลม' }] }),
+  makeAsset({ kind: 'asset', code: 'มช.7440-001-0002', name: 'ตู้เลี้ยงสัตว์ระบบระบายอากาศ (IVC) 70 กรง',
+    category: 'housing', brand: 'Tecniplast', model: 'GM500', serial: 'TP-2565-119',
+    acquiredDate: isoDaysAgo(1120), price: 1850000, lifeYears: 10, room: 'AR02', rack: 'R3',
+    owner: 'ACT — จนท.ดูแลสัตว์ทดลอง', fundSource: 'เงินงบประมาณแผ่นดิน' }),
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0007', name: 'เครื่องชั่งดิจิทัลทศนิยม 2 ตำแหน่ง',
+    category: 'lab', brand: 'Sartorius', model: 'Entris II', serial: 'SA-88421',
+    acquiredDate: isoDaysAgo(700), price: 68000, lifeYears: 5, room: 'AR02', rack: '—',
+    owner: 'Sci — นักวิทยาศาสตร์', fundSource: 'เงินรายได้คณะ' }),
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0011', name: 'ตู้ปลอดเชื้อ Biosafety Cabinet Class II',
+    category: 'clean', brand: 'ESCO', model: 'AC2-4S', serial: 'ES-77120',
+    acquiredDate: isoDaysAgo(430), price: 320000, lifeYears: 10, room: 'AR01', rack: '—',
+    owner: 'AV — สัตวแพทย์ประจำหน่วย', fundSource: 'ทุนวิจัย', status: 'repair',
+    repairs: [{ date: isoDaysAgo(9), by: 'AV — สัตวแพทย์ประจำหน่วย', symptom: 'ค่าความเร็วลมต่ำกว่าเกณฑ์ แจ้งเตือนขึ้นตลอด',
+      status: 'open', fixedDate: '', cost: 0, vendor: 'บ.เอสโก้ ประเทศไทย', note: 'แจ้งบริษัทแล้ว รออะไหล่' }] }),
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0015', name: 'หม้อนึ่งฆ่าเชื้อ (Autoclave) 100 ลิตร',
+    category: 'clean', brand: 'Hirayama', model: 'HVE-50', serial: 'HR-40233',
+    acquiredDate: isoDaysAgo(2200), price: 450000, lifeYears: 10, room: 'AR03', rack: '—',
+    owner: 'ACT — จนท.ดูแลสัตว์ทดลอง', fundSource: 'เงินงบประมาณแผ่นดิน',
+    repairs: [
+      { date: isoDaysAgo(400), by: 'ACT — จนท.ดูแลสัตว์ทดลอง', symptom: 'ประตูรั่ว ไอน้ำออกด้านข้าง',
+        status: 'fixed', fixedDate: isoDaysAgo(385), cost: 8200, vendor: 'บ.ฮิรายาม่า เซอร์วิส', note: 'เปลี่ยนซีลยางประตู' },
+      { date: isoDaysAgo(60), by: 'ACT — จนท.ดูแลสัตว์ทดลอง', symptom: 'อุณหภูมิไม่ถึง 121°C ในรอบที่ 2',
+        status: 'fixed', fixedDate: isoDaysAgo(45), cost: 15400, vendor: 'บ.ฮิรายาม่า เซอร์วิส', note: 'เปลี่ยนฮีตเตอร์' }] }),
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0019', name: 'ตู้แช่แข็ง -20°C สำหรับเก็บซาก',
+    category: 'lab', brand: 'Panasonic', model: 'MDF-U334', serial: 'PN-55901',
+    acquiredDate: isoDaysAgo(1500), price: 185000, lifeYears: 8, room: 'AR03', rack: '—',
+    owner: 'Sci — นักวิทยาศาสตร์', fundSource: 'เงินรายได้คณะ' }),
+  makeAsset({ kind: 'asset', code: 'มช.7440-001-0021', name: 'ชั้นวางกรงสเตนเลส 5 ชั้น',
+    category: 'housing', brand: '—', model: '—', serial: '',
+    acquiredDate: isoDaysAgo(3000), price: 42000, lifeYears: 10, room: 'AR02', rack: 'R4',
+    owner: 'ACT — จนท.ดูแลสัตว์ทดลอง', fundSource: 'เงินบริจาค', status: 'broken',
+    note: 'ขาชั้นบิดงอจากการชน ใช้งานไม่ปลอดภัย รอเสนอจำหน่าย' }),
+
+  makeAsset({ kind: 'consumable', code: 'ว-FEED-01', name: 'อาหารเม็ดสำเร็จรูปสำหรับหนูเมาส์ (Rodent Chow)',
+    category: 'feed', brand: 'Perfect Companion', model: 'Rat & Mouse', unit: 'ถุง 20 กก.',
+    acquiredDate: isoDaysAgo(30), price: 1250, qty: 18, minQty: 6,
+    room: 'AR04', owner: 'GM — จนท.บริหารงานทั่วไป', fundSource: 'เงินรายได้คณะ',
+    moves: [
+      { date: isoDaysAgo(30), type: 'in',  qty: 30, by: 'GM — จนท.บริหารงานทั่วไป', note: 'รับเข้าตามใบสั่งซื้อ PO-2569-0142', price: 1250 },
+      { date: isoDaysAgo(21), type: 'out', qty: 5,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'เบิกใช้ห้อง AR01' },
+      { date: isoDaysAgo(14), type: 'out', qty: 4,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'เบิกใช้ห้อง AR02' },
+      { date: isoDaysAgo(7),  type: 'out', qty: 3,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'เบิกใช้ห้อง AR01' }] }),
+  makeAsset({ kind: 'consumable', code: 'ว-BED-01', name: 'ขี้เลื่อยอัดแท่งปลอดเชื้อ (Corn cob bedding)',
+    category: 'bedding', brand: 'Bio-Serv', model: '—', unit: 'ถุง 25 กก.',
+    acquiredDate: isoDaysAgo(45), price: 980, qty: 4, minQty: 8,
+    room: 'AR04', owner: 'GM — จนท.บริหารงานทั่วไป', fundSource: 'เงินรายได้คณะ',
+    note: 'ต่ำกว่าจุดสั่งซื้อ — เสนอจัดซื้อรอบถัดไป',
+    moves: [
+      { date: isoDaysAgo(45), type: 'in',  qty: 20, by: 'GM — จนท.บริหารงานทั่วไป', note: 'รับเข้าตามใบสั่งซื้อ PO-2569-0138', price: 980 },
+      { date: isoDaysAgo(20), type: 'out', qty: 9,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'เปลี่ยนวัสดุรองนอนทั้งแร็ค R3' },
+      { date: isoDaysAgo(6),  type: 'out', qty: 7,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'เปลี่ยนวัสดุรองนอนทั้งแร็ค R4' }] }),
+  makeAsset({ kind: 'consumable', code: 'ว-MED-03', name: 'ถุงมือไนไตรล์ ไร้แป้ง ขนาด M',
+    category: 'medical', brand: 'Ansell', model: 'TouchNTuff', unit: 'กล่อง 100 ชิ้น',
+    acquiredDate: isoDaysAgo(60), price: 320, qty: 26, minQty: 10,
+    room: 'AR04', owner: 'GM — จนท.บริหารงานทั่วไป', fundSource: 'เงินรายได้คณะ',
+    moves: [
+      { date: isoDaysAgo(60), type: 'in',  qty: 40, by: 'GM — จนท.บริหารงานทั่วไป', note: 'รับเข้าตามใบสั่งซื้อ PO-2569-0130', price: 320 },
+      { date: isoDaysAgo(28), type: 'out', qty: 8,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'เบิกใช้ประจำเดือน' },
+      { date: isoDaysAgo(5),  type: 'out', qty: 6,  by: 'Sci — นักวิทยาศาสตร์', note: 'เบิกใช้รอบชั่งน้ำหนัก' }] }),
+  makeAsset({ kind: 'consumable', code: 'ว-MED-07', name: 'น้ำยาฆ่าเชื้อพื้นผิว (Surface disinfectant)',
+    category: 'clean', brand: 'Virkon', model: 'S', unit: 'ขวด 1 ลิตร',
+    acquiredDate: isoDaysAgo(75), price: 750, qty: 11, minQty: 5,
+    room: 'AR04', owner: 'GM — จนท.บริหารงานทั่วไป', fundSource: 'ทุนวิจัย',
+    moves: [
+      { date: isoDaysAgo(75), type: 'in',  qty: 15, by: 'GM — จนท.บริหารงานทั่วไป', note: 'รับเข้าตามใบสั่งซื้อ PO-2569-0125', price: 750 },
+      { date: isoDaysAgo(12), type: 'out', qty: 4,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'ทำความสะอาดห้อง AR01–AR02' }] }),
+];
+
 const DB = {
   users: USERS,
+  assets: ASSETS,
   // ตัวตนที่ใช้งานอยู่ — สลับได้จากแผงสาธิตมุมขวาล่าง
   // ตั้งต้นเป็น ADMIN เพราะเห็นทุกโครงการและทุกฟังก์ชัน จึงเป็นจุดเริ่มที่ดีสำหรับการสาธิต
   // (ของจริงค่านี้มาจากการล็อกอิน ไม่ได้ตั้งไว้ในไฟล์)
