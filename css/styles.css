@@ -2200,3 +2200,47 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 .fin-x { font-weight: 600; color: var(--text); margin-left: 4px; }
 .as-none { color: var(--border); font-weight: 400; }
 
+/* ---------- ร้องขอหัตถการเพิ่มเติม (ฟอร์มคำขอของ PI) ----------
+   แถวเดียวอ่านจากซ้ายไปขวาเป็นประโยค: ทำอะไร × กี่ตัว × กี่วัน = กี่ครั้ง = เท่าไร
+   ยอดของแถวชิดขวาเสมอ เพื่อให้กวาดตาลงมาบวกเลขเองได้โดยไม่ต้องหาว่าตัวเลขอยู่ไหน */
+.req-svc {
+  display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
+  padding: 10px; margin-bottom: 8px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.req-svc.over { border-color: #fca5a5; background: var(--red-soft); }
+.req-svc .rs-key {
+  flex: 1; min-width: 220px; padding: 9px 10px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px; background: var(--surface);
+}
+.rs-num { display: flex; flex-direction: column; gap: 4px; }
+.rs-num label { font-size: 11px; color: var(--text-muted); font-weight: 600; }
+.rs-num input {
+  width: 82px; padding: 9px 10px; text-align: right;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 14px;
+  font-variant-numeric: tabular-nums; background: var(--surface);
+}
+.rs-x { color: var(--text-muted); font-weight: 700; padding-bottom: 10px; }
+.rs-calc { min-width: 96px; text-align: right; padding-bottom: 2px; }
+.rs-qty { display: block; font-size: 13.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.rs-calc i { display: block; font-size: 11px; font-style: normal; color: var(--text-muted); }
+.rs-amt {
+  min-width: 96px; text-align: right; padding-bottom: 2px;
+  font-size: 17px; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums;
+}
+.req-svc .rs-del { padding-bottom: 4px; }
+.rs-warn { flex-basis: 100%; font-size: 12px; font-weight: 600; color: var(--red); }
+
+/* ตารางหัตถการในป๊อปอัปรายละเอียดโครงการ (มุมมองผู้ตรวจ) */
+.pi-svc { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 6px; }
+.pi-svc th, .pi-svc td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+.pi-svc th { font-size: 11.5px; color: var(--text-muted); font-weight: 600; background: var(--surface-2); }
+.pi-svc td.num, .pi-svc th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.pi-svc td i { display: block; font-size: 11px; font-style: normal; color: var(--text-muted); }
+.pi-svc tfoot td { border-bottom: 0; font-weight: 700; background: var(--surface-2); }
+
+@media (max-width: 700px) {
+  .req-svc .rs-key { min-width: 100%; }
+  .rs-calc, .rs-amt { min-width: 76px; }
+}
+

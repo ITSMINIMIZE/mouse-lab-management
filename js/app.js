@@ -2617,6 +2617,7 @@ const App = {
       approvalDoc: req.approvalDoc || null,
       extraDocs: (req.extraDocs || []).map(x => ({ _id: this.uid(), label: x.label || '', file: x.file || null })),
       appointments: (req.appointments || []).map(a => ({ ...a })),
+      services: (req.services || []).map(x => ({ _id: this.uid(), key: x.key, mice: x.mice ?? '', days: x.days ?? '' })),
     };
     if (!this.draft.diets.some(x => x.isDefault)) this.draft.diets[0].isDefault = true;
     this.go('create');
@@ -2738,6 +2739,21 @@ const App = {
            .sort((a, b) => (a.date || '9999-99-99').localeCompare(b.date || '9999-99-99'))
            .map(x => `<li><span class="pp-date">${this.thaiDate(x.date)}</span><span class="pp-detail">${x.detail || '—'}</span></li>`).join('')}</ol>`
       : '';
+    // หัตถการที่ร้องขอ — ผู้ตรวจ (AEC/AV) ต้องเห็นทั้งรายการและยอดรวม
+    const svcBlock = (req.services || []).length
+      ? `<div class="section-title">หัตถการที่ร้องขอเพิ่มเติม</div>
+         <table class="pi-svc">
+           <thead><tr><th>รายการ</th><th class="num">หนู</th><th class="num">วัน</th><th class="num">ครั้ง</th><th class="num">เป็นเงิน</th></tr></thead>
+           <tbody>${req.services.map(x => `<tr>
+             <td>${this.esc(x.label)}<i>@ ${this.baht(x.price)} บาท/ครั้ง</i></td>
+             <td class="num">${x.mice}</td><td class="num">${x.days}</td>
+             <td class="num">${(x.qty || 0).toLocaleString('en-US')}</td>
+             <td class="num"><b>${this.baht(x.amount)}</b></td></tr>`).join('')}</tbody>
+           <tfoot><tr><td colspan="4">รวมประมาณการ</td>
+             <td class="num"><b>${this.baht(req.services.reduce((s, x) => s + (x.amount || 0), 0))}</b></td></tr></tfoot>
+         </table>
+         <p class="empty-note">ราคา ณ วันที่ยื่นคำขอ · ยอดที่เรียกเก็บจริงคิดตามที่ทำจริงในแต่ละเดือน</p>`
+      : '';
     const reqAppoint = (req.appointments || []).length
       ? (req.appointments || []).map(a => {
           const u = a.userId !== '__new__' ? DB.users.find(x => x.id === a.userId) : null;
@@ -2764,6 +2780,7 @@ const App = {
         <div class="section-title">ชั้นที่ 2 · กลุ่มทดสอบ</div>${p.groups.map(gr => `<div class="pi-grp"><i class="sw" style="background:${gr.color}"></i><b>${gr.name}</b>${gr.isControl ? ' <span class="muted">(control)</span>' : ''}${gr.capacity != null ? ` <span class="muted">· ${this.popGroupCountLive(p, gr.id)}/${gr.capacity} ตัว</span>` : ''}</div>`).join('')}
         ${endpointBlock}
         ${planBlock}
+        ${svcBlock}
         <div class="section-title">สมาชิก</div>${members}`
       : `<div class="pi-grid">
           <div><span class="pi-k">วันที่ยื่นคำขอ</span> ${this.thaiDate(p.requestDate) || '—'}</div>
@@ -2783,6 +2800,7 @@ const App = {
         <div class="section-title">ชั้นที่ 1 · ชนิดอาหาร</div>${reqDiets}
         <div class="section-title">ชั้นที่ 2 · กลุ่มทดสอบ</div>${reqGroups}
         ${planBlock}
+        ${svcBlock}
         <div class="section-title">แผนภาพการทดลอง</div>${diagramPreview || '<span class="muted">ไม่ได้แนบ</span>'}
         <div class="section-title">เอกสารแนบ</div><div class="pi-docs">${fileLine(req.aup, 'AUP')}${fileLine(req.approvalDoc, 'ใบอนุมัติจริยธรรม')}${(req.extraDocs || []).map(x => fileLine(x.file, x.label)).join('')}</div>
         <div class="section-title">ร้องขอแต่งตั้ง</div>${reqAppoint}
@@ -2884,6 +2902,10 @@ const App = {
       diagram: null, aup: null, approvalDoc: null,
       extraDocs: [],      // เอกสารเพิ่มเติมที่ PI แนบเองได้ไม่จำกัด [{_id,label,file}]
       appointments: [],
+      // หัตถการที่ขอให้หน่วยทำให้ — [{_id, key, mice, days}] ราคามาจาก PROCEDURES
+      // เก็บแค่ "เลือกอะไร กี่ตัว กี่วัน" ส่วนจำนวนครั้งและค่าใช้จ่ายคำนวณสด
+      // ไม่เก็บซ้ำ ตัวเลขบนจอกับตอนยื่นจึงตรงกันเสมอ
+      services: [],
     };
   },
 
@@ -2893,7 +2915,7 @@ const App = {
     if (!this.draft || this.draft.mode === 'build') this.draft = this.blankRequestDraft();
     // a draft built by an older version may be missing the newer collections
     const blank = this.blankRequestDraft();
-    ['diets', 'plan', 'extraDocs'].forEach(k => { if (!this.draft[k]) this.draft[k] = blank[k]; });
+    ['diets', 'plan', 'extraDocs', 'services'].forEach(k => { if (!this.draft[k]) this.draft[k] = blank[k]; });
     this.draft.meta = { ...blank.meta, ...(this.draft.meta || {}) };
     if (!this.draft.meta.sexes || !this.draft.meta.sexes.length) this.draft.meta.sexes = ['M'];
 
@@ -3033,6 +3055,17 @@ const App = {
           </div>
 
           <div class="form-card">
+            <div class="form-card-title">ร้องขอหัตถการเพิ่มเติม
+              <button class="btn btn-ghost btn-sm" id="cpAddSvc" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มหัตถการ</button>
+            </div>
+            <p class="empty-note" style="margin-top:0">หัตถการที่ขอให้ <b>เจ้าหน้าที่ของหน่วย</b> ทำให้ (ไม่ใช่สิ่งที่ทีมวิจัยทำเอง)
+              · เลือกรายการ ระบุจำนวนหนูและจำนวนวัน ระบบคิดจำนวนครั้งและค่าใช้จ่ายให้
+              · ราคาเป็น<b>อัตราปัจจุบัน</b> ใช้ประมาณการ ยอดจริงเรียกเก็บตามที่ทำจริง</p>
+            <div id="cpServices"></div>
+            <div class="req-sum" id="cpSvcSum"></div>
+          </div>
+
+          <div class="form-card">
             <div class="form-card-title">เอกสารแนบ
               <button class="btn btn-ghost btn-sm" id="cpAddDoc" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มเอกสารอื่น</button>
             </div>
@@ -3062,11 +3095,16 @@ const App = {
       </div>`
     );
 
-    ['cpMale', 'cpFemale'].forEach(id => this.el(id).addEventListener('input', () => this.updateReqTotals()));
+    ['cpMale', 'cpFemale'].forEach(id => this.el(id).addEventListener('input', () => {
+      this.updateReqTotals();
+      // จำนวนหนูเป็นเพดานของหัตถการทุกแถว — แก้ตรงนี้แล้วคำเตือนด้านล่างต้องตามทันที
+      this.draft.services.forEach((_, i) => this.refreshReqSvcRow(i));
+    }));
     this.renderReqDiets();
     this.renderReqGroups();
     this.renderReqHumane();
     this.renderReqPlan();
+    this.renderReqServices();
     this.renderReqExtraDocs();
     this.renderReqPeople();
     this.updateReqTotals();      // seeds the total readout + both layer sums + the lot cap
@@ -3113,7 +3151,14 @@ const App = {
       this.el(id).addEventListener('input', () => this.captureReqHumane()));
     this.el('cpAddDoc').onclick = () => { this.draft.extraDocs.push({ _id: this.uid(), label: '', file: null }); this.renderReqExtraDocs(); };
     this.el('cpAddPerson').onclick = () => { this.captureReqPeople(); this.draft.appointments.push({ role: 'COPI', userId: '', name: '' }); this.renderReqPeople(); };
-    const captureAll = () => { this.captureReqMeta(); this.captureReqDiets(); this.captureReqGroups(); this.captureReqHumane(); this.captureReqPeople(); };
+    this.el('cpAddSvc').onclick = () => {
+      this.captureReqServices();
+      this.draft.services.push({ _id: this.uid(), key: PROCEDURES[0].key, mice: '', days: '' });
+      this.renderReqServices();
+    };
+
+    // file pickers + clears — capture everything first, the whole page re-renders
+    const captureAll = () => { this.captureReqMeta(); this.captureReqDiets(); this.captureReqGroups(); this.captureReqHumane(); this.captureReqPeople(); this.captureReqServices(); };
     // extraDocs labels are written to the draft on input, so nothing to capture there
     this.el('root').querySelectorAll('[data-file]').forEach(inp => {
       inp.onchange = (e) => {
@@ -3253,6 +3298,110 @@ const App = {
     });
     this.el('cpGroups').querySelectorAll('.g-mice').forEach(inp => inp.addEventListener('input', () => this.updateLayerSum('group')));
     this.updateLayerSum('group');
+  },
+
+  // ---- ร้องขอหัตถการเพิ่มเติม (ฟอร์มคำขอของ PI) -------------------------
+  // หนึ่งแถว = หัตถการหนึ่งรายการ · จำนวนครั้ง = จำนวนหนู × จำนวนวัน
+  // ราคาไม่ได้เก็บในแถว แต่อ่านจาก PROCEDURES ทุกครั้งที่วาด — ตอนนี้ยังไม่มีหน้า
+  // จัดการรายการหัตถการ ราคาจึงมาจากที่เดียวคือแคตตาล็อก พอมีหน้านั้นเมื่อไหร่
+  // หน้านี้ไม่ต้องแก้ตาม (ราคาจะถูก "แช่แข็ง" ลงคำขอตอนกดยื่น ดู submitCreateProject)
+  svcQty(row) {
+    const mice = Math.max(0, Math.round(+row.mice) || 0);
+    const days = Math.max(0, Math.round(+row.days) || 0);
+    return mice * days;
+  },
+  svcAmount(row) { return this.svcQty(row) * (this.procOf(row.key).price || 0); },
+
+  renderReqServices() {
+    const box = this.el('cpServices');
+    if (!box) return;
+    const d = this.draft;
+    // จำนวนหนูทั้งโครงการ — อ่านจากช่อง Sex ที่กรอกอยู่จริง ไม่ใช่จาก draft
+    // (draft ถูกเขียนตอน capture เท่านั้น ถ้าอ่านจากตรงนั้นคำเตือนจะช้าไปหนึ่งจังหวะ)
+    const totalMice = this.reqTotalMice();
+
+    box.innerHTML = d.services.map((row, i) => {
+      const pr = this.procOf(row.key);
+      const qty = this.svcQty(row);
+      const over = totalMice > 0 && (+row.mice || 0) > totalMice;
+      return `
+      <div class="req-svc${over ? ' over' : ''}" data-i="${i}">
+        <select class="rs-key" data-i="${i}">
+          ${PROCEDURES.map(x => `<option value="${x.key}" ${row.key === x.key ? 'selected' : ''}>${x.label}</option>`).join('')}
+        </select>
+        <div class="rs-num"><label>หนู (ตัว)</label>
+          <input class="rs-mice" type="number" min="1" step="1" data-i="${i}" value="${this.esc(row.mice)}" placeholder="0"></div>
+        <span class="rs-x">×</span>
+        <div class="rs-num"><label>จำนวนวัน</label>
+          <input class="rs-days" type="number" min="1" step="1" data-i="${i}" value="${this.esc(row.days)}" placeholder="0"></div>
+        <div class="rs-calc">
+          <span class="rs-qty">${qty ? `${qty.toLocaleString('en-US')} ครั้ง` : '—'}</span>
+          <i>@ ${this.baht(pr.price)} บาท</i>
+        </div>
+        <div class="rs-amt">${qty ? this.baht(this.svcAmount(row)) : '—'}</div>
+        <button type="button" class="icon-btn rs-del" data-i="${i}" title="ลบ">🗑️</button>
+        ${over ? `<div class="rs-warn">ขอทำ ${(+row.mice).toLocaleString('en-US')} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice.toLocaleString('en-US')} ตัว</div>` : ''}
+      </div>`;
+    }).join('') || '<p class="empty-note">ยังไม่ได้ร้องขอหัตถการเพิ่มเติม — ทีมวิจัยดำเนินการเองทั้งหมด</p>';
+
+    // ยอดรวมอยู่ใต้ตาราง อัปเดตทุกครั้งที่พิมพ์ — PI เห็นราคาก่อนกดยื่น ไม่ใช่รู้ทีหลัง
+    const total = d.services.reduce((s, r) => s + this.svcAmount(r), 0);
+    const sum = this.el('cpSvcSum');
+    sum.className = 'req-sum' + (total ? ' ok' : '');
+    sum.innerHTML = total
+      ? `รวมค่าใช้จ่ายหัตถการที่ร้องขอ <b>${this.baht(total)} บาท</b> — ประมาณการจากอัตราปัจจุบัน`
+      : '';
+
+    // พิมพ์เลขแล้วคิดยอดใหม่ทันที แต่ไม่วาดใหม่ทั้งบล็อก เคอร์เซอร์จะได้ไม่กระโดด
+    box.querySelectorAll('.rs-mice, .rs-days').forEach(inp => inp.oninput = () => {
+      this.captureReqServices();
+      this.refreshReqSvcRow(+inp.dataset.i);
+    });
+    box.querySelectorAll('.rs-key').forEach(sel => sel.onchange = () => {
+      this.captureReqServices();
+      this.refreshReqSvcRow(+sel.dataset.i);
+    });
+    box.querySelectorAll('.rs-del').forEach(b => b.onclick = () => {
+      this.captureReqServices();
+      this.draft.services.splice(+b.dataset.i, 1);
+      this.renderReqServices();
+    });
+  },
+
+  // วาดใหม่เฉพาะตัวเลขของแถวเดียว + ยอดรวม (ไม่แตะ input ที่กำลังพิมพ์อยู่)
+  refreshReqSvcRow(i) {
+    const d = this.draft, row = d.services[i];
+    const el = this.el('cpServices').querySelector(`.req-svc[data-i="${i}"]`);
+    if (!row || !el) return;
+    const pr = this.procOf(row.key);
+    const qty = this.svcQty(row);
+    const totalMice = this.reqTotalMice();
+    const over = totalMice > 0 && (+row.mice || 0) > totalMice;
+    el.querySelector('.rs-qty').textContent = qty ? `${qty.toLocaleString('en-US')} ครั้ง` : '—';
+    el.querySelector('.rs-calc i').textContent = `@ ${this.baht(pr.price)} บาท`;
+    el.querySelector('.rs-amt').textContent = qty ? this.baht(this.svcAmount(row)) : '—';
+    el.classList.toggle('over', over);
+    let warn = el.querySelector('.rs-warn');
+    if (over && !warn) { warn = document.createElement('div'); warn.className = 'rs-warn'; el.appendChild(warn); }
+    if (over) warn.textContent = `ขอทำ ${(+row.mice).toLocaleString('en-US')} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice.toLocaleString('en-US')} ตัว`;
+    else if (warn) warn.remove();
+
+    const total = d.services.reduce((s, r) => s + this.svcAmount(r), 0);
+    const sum = this.el('cpSvcSum');
+    sum.className = 'req-sum' + (total ? ' ok' : '');
+    sum.innerHTML = total
+      ? `รวมค่าใช้จ่ายหัตถการที่ร้องขอ <b>${this.baht(total)} บาท</b> — ประมาณการจากอัตราปัจจุบัน`
+      : '';
+  },
+
+  captureReqServices() {
+    const box = this.el('cpServices'); if (!box) return;
+    box.querySelectorAll('.req-svc').forEach((el, i) => {
+      const row = this.draft.services[i]; if (!row) return;
+      row.key = el.querySelector('.rs-key').value;
+      row.mice = el.querySelector('.rs-mice').value;
+      row.days = el.querySelector('.rs-days').value;
+    });
   },
 
   // ---- แผนการใช้สัตว์ทดลอง: dated activity list -------------------------
@@ -3512,6 +3661,7 @@ const App = {
     this.captureReqGroups();
     this.captureReqHumane();
     this.captureReqPeople();
+    this.captureReqServices();
     const d = this.draft, m = d.meta;
     const name = (m.name || '').trim();
     const objective = (m.objective || '').trim();
@@ -3580,6 +3730,21 @@ const App = {
       }
     }
 
+    // หัตถการที่ร้องขอ — ทิ้งแถวที่ยังว่างทั้งแถว ส่วนแถวที่กรอกมาต้องครบและสมเหตุผล
+    d.services = (d.services || []).filter(x => (x.mice !== '' && x.mice != null) || (x.days !== '' && x.days != null));
+    for (const x of d.services) {
+      const label = this.procOf(x.key).label;
+      const mice = Math.round(+x.mice), days = Math.round(+x.days);
+      if (!Number.isFinite(mice) || mice < 1) { this.toast(`กรุณาระบุจำนวนหนูของ "${label}" (อย่างน้อย 1 ตัว)`); this.renderReqServices(); return; }
+      if (!Number.isFinite(days) || days < 1) { this.toast(`กรุณาระบุจำนวนวันของ "${label}" (อย่างน้อย 1 วัน)`); this.renderReqServices(); return; }
+      // ทำหัตถการกับหนูมากกว่าที่ขอมาทั้งโครงการไม่ได้ — จับตรงนี้ ไม่ใช่ปล่อยให้
+      // ผู้ตรวจมาเจอเอง (ตัวเลขด้านบนแก้ได้ตลอด เลยต้องเช็กตอนยื่น ไม่ใช่ตอนพิมพ์)
+      if (mice > totalMice) {
+        this.toast(`"${label}" ขอทำ ${mice} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice} ตัว`);
+        this.renderReqServices(); return;
+      }
+    }
+
     const request = {
       lotNo: (m.lotNo || '').trim(),
       protocolNo: (m.protocolNo || '').trim(),
@@ -3604,6 +3769,13 @@ const App = {
       },
       diagram: d.diagram, aup: d.aup, approvalDoc: d.approvalDoc,
       extraDocs: (d.extraDocs || []).filter(x => x.file).map(x => ({ label: (x.label || '').trim() || x.file.name, file: x.file })),
+      // หัตถการที่ร้องขอ — เก็บราคา ณ วันที่ยื่นติดไปกับแถวด้วย คำขอที่ผ่านการอนุมัติ
+      // แล้วคือข้อตกลง ปรับราคากลางทีหลังไม่ควรทำให้ยอดในคำขอเก่าขยับเอง
+      services: d.services.map(x => {
+        const pr = this.procOf(x.key);
+        const mice = Math.round(+x.mice), days = Math.round(+x.days);
+        return { key: x.key, label: pr.label, price: pr.price, mice, days, qty: mice * days, amount: mice * days * pr.price };
+      }),
       appointments: d.appointments.map(a => a.userId === '__new__'
         ? { role: a.role, userId: '__new__', firstName: a.firstName, lastName: a.lastName || '', email: a.email, name: `${a.firstName} ${a.lastName || ''}`.trim() }
         : { role: a.role, userId: a.userId, name: DB.users.find(u => u.id === a.userId)?.name || a.name }),
