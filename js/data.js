@@ -36,7 +36,7 @@
 // scope: 'all'    = sees every project without being appointed to it
 //        'member' = only projects they are appointed to
 const POSITIONS = {
-  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewAssets', 'manageAssets', 'viewFinance', 'manageFinance', 'cageCard'] },
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewAssets', 'manageAssets', 'viewFinance', 'manageFinance', 'manageRates', 'cageCard'] },
   AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
   VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
   SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
@@ -103,6 +103,7 @@ const CAPABILITIES = [
   { key: 'manageAssets',  label: 'เพิ่ม / แก้ทะเบียนพัสดุ · รับเข้า-เบิกออก' },
   { key: 'viewFinance',   label: 'ดูสรุปการเงินรายเดือน' },
   { key: 'manageFinance', label: 'บันทึกค่าใช้จ่ายอื่น / ตั้งอัตราค่าฝากเลี้ยง' },
+  { key: 'manageRates',   label: 'จัดการรายการหัตถการและราคา' },
 ];
 
 // mock user accounts. `position` = the ONE system-level job (a POSITIONS key).
@@ -658,15 +659,22 @@ const ASSETS = [
 const BOARDING_RATE = 20;              // บาท / ตัว / วัน
 
 // หัตถการที่โครงการ "ฝากหน่วยทำ" — คิดเป็นครั้ง แยกจากค่าฝากเลี้ยงรายวัน
-// ราคาผูกไว้กับรายการ ณ ตอนบันทึก (services[].price) เพื่อไม่ให้ยอดเดือนเก่า
-// เปลี่ยนตามเมื่อมีการปรับราคาในภายหลัง
+// แก้ไขได้ในแอปที่ การเงิน → จัดการรายการหัตถการ (ผู้ดูแลระบบเท่านั้น)
+//
+//   key    รหัสถาวร — รายการที่บันทึกไปแล้วอ้างถึงตัวนี้ ตั้งแล้วห้ามแก้
+//   price  ราคาปัจจุบัน ใช้ตอน "เลือก" เท่านั้น — รายการที่บันทึกไปแล้วเก็บราคา
+//          ของตัวเองไว้ (services[].price) ปรับราคาที่นี่จึงไม่ทำให้ยอดเดือนเก่าขยับ
+//   active false = เลิกให้บริการ ไม่โผล่ในช่องเลือกอีก แต่ประวัติเก่ายังอ่านชื่อได้
+//          (ลบทิ้งจริงทำได้เฉพาะรายการที่ไม่เคยมีใครใช้)
+//
+// ⚠️ ราคาด้านล่างเป็นตัวเลขตัวอย่าง ยังไม่ใช่อัตราจริงของศูนย์ฯ
 const PROCEDURES = [
-  { key: 'gavage',   label: 'ป้อนสารทางปาก (Oral gavage)',  price: 35 },
-  { key: 'inject',   label: 'ฉีดสารทดสอบ (IP / SC / IV)',   price: 40 },
-  { key: 'blood',    label: 'เจาะเลือดเพื่อส่งตรวจ',          price: 120 },
-  { key: 'weigh',    label: 'ชั่งน้ำหนัก + บันทึกข้อมูลให้',   price: 15 },
-  { key: 'euth',     label: 'การุณยฆาตตามหลักมนุษยธรรม',     price: 150 },
-  { key: 'necropsy', label: 'ผ่าซาก / เก็บอวัยวะส่งตรวจ',     price: 350 },
+  { key: 'gavage',   label: 'ป้อนสารทางปาก (Oral gavage)',  price: 35,  active: true },
+  { key: 'inject',   label: 'ฉีดสารทดสอบ (IP / SC / IV)',   price: 40,  active: true },
+  { key: 'blood',    label: 'เจาะเลือดเพื่อส่งตรวจ',          price: 120, active: true },
+  { key: 'weigh',    label: 'ชั่งน้ำหนัก + บันทึกข้อมูลให้',   price: 15,  active: true },
+  { key: 'euth',     label: 'การุณยฆาตตามหลักมนุษยธรรม',     price: 150, active: true },
+  { key: 'necropsy', label: 'ผ่าซาก / เก็บอวัยวะส่งตรวจ',     price: 350, active: true },
 ];
 
 // หมวดค่าใช้จ่ายอื่น — ที่ไม่ได้มาจากทะเบียนพัสดุ

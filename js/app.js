@@ -776,15 +776,22 @@ const App = {
   // itself". They are separate screens because they are separate questions: the
   // register is a running inventory, the balance is a closed monthly period. What
   // การเงิน does NOT do is store the numbers again — it reads the same register.
+  //
+  // อัตราค่าบริการ is top level rather than a page inside การเงิน because it is not
+  // a finance record at all: it is ONE facility-wide price list that every project
+  // is charged against. Burying shared master data inside the screen that happens
+  // to consume it makes it look like a per-month, per-project setting — which is
+  // exactly what it is not.
   TABS: [
-    { key: 'projects', label: 'โครงการ', icon: '🧪', cap: 'view' },
-    { key: 'assets',   label: 'พัสดุ',   icon: '📦', cap: 'viewAssets' },
-    { key: 'finance',  label: 'การเงิน', icon: '💰', cap: 'viewFinance' },
+    { key: 'projects', label: 'โครงการ',       icon: '🧪', cap: 'view' },
+    { key: 'assets',   label: 'พัสดุ',         icon: '📦', cap: 'viewAssets' },
+    { key: 'finance',  label: 'การเงิน',       icon: '💰', cap: 'viewFinance' },
+    { key: 'rates',    label: 'อัตราค่าบริการ', icon: '🧾', cap: 'manageRates' },
   ],
   visibleTabs() { return this.TABS.filter(t => this.can(t.cap)); },
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
-    if (name === 'assets' || name === 'finance') return name;
+    if (name === 'assets' || name === 'finance' || name === 'rates') return name;
     if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport'].includes(name)) return 'projects';
     return '';
   },
@@ -819,6 +826,7 @@ const App = {
       case 'users':    this.go('users'); break;
       case 'assets':   this.go('assets'); break;
       case 'finance':  this.go('finance'); break;
+      case 'rates':    this.go('rates'); break;
       case 'build':
       case 'ochreport': this.go(name, ds.projectId || this.route.projectId); break;
       case 'logout':   this.go('login'); break;
@@ -849,6 +857,7 @@ const App = {
     if (name === 'users') return this.renderUsers();
     if (name === 'assets') return this.renderAssets();
     if (name === 'finance') return this.renderFinance();
+    if (name === 'rates') return this.renderRates();
     if (this.PROJECT_MODULES[name]) return this.renderProjectModule(name);
     // A name nothing matches used to fall out here silently: route said one thing,
     // the screen still showed the last one. Land somewhere real instead of
@@ -1681,6 +1690,15 @@ const App = {
     return { rows, amount: rows.reduce((s, x) => s + (x.qty || 0) * (x.price || 0), 0) };
   },
   procOf(k) { return PROCEDURES.find(x => x.key === k) || { key: k, label: k || 'หัตถการ', price: 0 }; },
+  // ตัวเลือกใน <select> — รายการที่เปิดให้บริการ บวกรายการที่แถวนี้เลือกไว้อยู่แล้ว
+  // แม้จะเลิกให้บริการไปแล้ว ไม่งั้นการเปิดคำขอเก่ามาแก้จะทำให้ค่าที่เลือกไว้หายเงียบ ๆ
+  procOptions(selected) {
+    const list = this.activeProcedures();
+    const cur = PROCEDURES.find(x => x.key === selected);
+    if (cur && cur.active === false) list.push(cur);
+    return list.map(x => `<option value="${x.key}" ${selected === x.key ? 'selected' : ''}>${
+      this.esc(x.label)}${x.active === false ? ' (เลิกให้บริการแล้ว)' : ''}</option>`).join('');
+  },
   // โครงการที่มีสิทธิ์ถูกเรียกเก็บในเดือนนั้น — โครงการที่ยังไม่ผ่านอนุมัติยังไม่มีหนู
   billableProjects() { return DB.projects.filter(p => this.isReal(p)); },
 
@@ -1987,6 +2005,9 @@ const App = {
   // ---- หัตถการที่โครงการฝากหน่วยทำ ----
   openServiceForm(p) {
     if (!p) return;
+    const live = this.activeProcedures();
+    if (!live.length) { this.toast('ยังไม่มีรายการหัตถการที่เปิดให้บริการ'); return; }
+    const first = live[0];
     const def = this.monthDefaultDate(this.finMonthKey());
     this.openModal(`
       <div class="modal-head"><div><h3>🧾 บันทึกหัตถการที่ฝากทำ</h3>
@@ -1994,17 +2015,17 @@ const App = {
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
       <div class="modal-body">
         <div class="field"><label>หัตถการ</label>
-          <select id="svKey">${PROCEDURES.map(x =>
+          <select id="svKey">${this.activeProcedures().map(x =>
             `<option value="${x.key}" data-price="${x.price}">${x.label} — ${this.baht(x.price)} บาท/ครั้ง</option>`).join('')}</select></div>
         <div class="form-row3">
           <div class="field"><label>วันที่ทำ</label>${this.dateChip('svDate', def, 'เลือกวันที่')}</div>
           <div class="field"><label>จำนวน (ครั้ง) <span style="color:var(--red)">*</span></label>
             <input id="svQty" type="number" min="1" step="1" value="1"></div>
           <div class="field"><label>ราคาต่อครั้ง (บาท)</label>
-            <input id="svPrice" type="number" min="0" step="1" value="${PROCEDURES[0].price}"></div>
+            <input id="svPrice" type="number" min="0" step="1" value="${first.price}"></div>
         </div>
         <div class="form-row2">
-          <div class="field"><label>รวมเป็นเงิน</label><input id="svTotal" value="${this.baht(PROCEDURES[0].price)}" disabled></div>
+          <div class="field"><label>รวมเป็นเงิน</label><input id="svTotal" value="${this.baht(first.price)}" disabled></div>
           <div class="field"><label>หมายเหตุ</label><input id="svNote" placeholder="เช่น เก็บเลือดกลุ่ม Treatment-3"></div>
         </div>
         <p class="af-hint">💡 ราคาที่กรอกจะติดอยู่กับรายการนี้ถาวร — ปรับราคากลางภายหลังแล้วยอดเดือนที่ปิดไปจะไม่ขยับตาม</p>
@@ -2041,7 +2062,7 @@ const App = {
   },
 
   // ---- อัตราค่าฝากเลี้ยง: อัตรากลาง (p = null) หรือของโครงการเดียว ----
-  openRateForm(p) {
+  openRateForm(p, back = 'finance') {
     const isGlobal = !p;
     const cur = isGlobal ? DB.finance.boardingRate : this.billingOf(p).rate;
     this.openModal(`
@@ -2082,7 +2103,194 @@ const App = {
       }
       this.closeModal();
       this.toast('บันทึกอัตราแล้ว');
-      this.renderFinance();
+      // เรียกจากหน้าไหนก็กลับไปวาดหน้านั้น ไม่เด้งผู้ใช้ข้ามหน้า
+      if (back === 'rates') this.renderRates(); else this.renderFinance();
+    };
+  },
+
+  // =========================================================
+  // จัดการรายการหัตถการและอัตราค่าบริการ (ผู้ดูแลระบบ)
+  // =========================================================
+  // แคตตาล็อกนี้เป็นต้นทางของราคาที่ทั้งฟอร์มคำขอของ PI และหน้าการเงินหยิบไปใช้
+  // สิ่งที่หน้านี้ต้องทำให้ถูกคือ "แก้ราคาแล้วประวัติต้องไม่ขยับ" — ทำได้เพราะทุกที่
+  // ที่บันทึกหัตถการจะ copy ราคาไปเก็บในแถวของตัวเอง หน้านี้จึงแก้ได้อย่างสบายใจ
+  activeProcedures() { return PROCEDURES.filter(x => x.active !== false); },
+
+  // นับว่ารายการหนึ่งถูกอ้างถึงที่ไหนบ้าง — ตัวตัดสินว่าลบทิ้งได้ไหม
+  //   quoted = อยู่ในคำขอของ PI · billed = ถูกบันทึกว่าทำจริงแล้วในหน้าการเงิน
+  procUsage(key) {
+    let quoted = 0, billed = 0;
+    DB.projects.forEach(p => {
+      ((p.request && p.request.services) || []).forEach(x => { if (x.key === key) quoted++; });
+      ((p.billing && p.billing.services) || []).forEach(x => { if (x.key === key) billed++; });
+    });
+    return { quoted, billed, total: quoted + billed };
+  },
+
+  // รหัสถาวรของรายการใหม่ — สร้างครั้งเดียวตอนเพิ่ม แก้ไม่ได้อีกเลย
+  // ชื่อภาษาอังกฤษได้รหัสที่อ่านออก ส่วนชื่อภาษาไทยล้วนจะไม่เหลืออักษรให้ใช้
+  // (regex ตัดทิ้งหมด) จึงตกไปเป็นเลขลำดับ svc-N แทนที่จะได้รหัสโล้น ๆ ซ้ำกัน
+  newProcKey(label) {
+    const base = (label || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 20);
+    const taken = k => PROCEDURES.some(x => x.key === k);
+    if (base.length >= 2) {
+      let key = base, n = 2;
+      while (taken(key)) key = `${base}-${n++}`;
+      return key;
+    }
+    let n = PROCEDURES.length + 1;
+    while (taken(`svc-${n}`)) n++;
+    return `svc-${n}`;
+  },
+
+  renderRates() {
+    if (!this.can('manageRates')) { this.toast('หน้านี้สำหรับผู้ดูแลระบบเท่านั้น'); return this.go(this.homeRoute()); }
+
+    const rows = PROCEDURES.map((x, i) => {
+      const use = this.procUsage(x.key);
+      const off = x.active === false;
+      return `<tr class="${off ? 'rt-off' : ''}" data-key="${x.key}">
+        <td><b>${this.esc(x.label)}</b>
+          <div class="rt-key"><span class="mono">${this.esc(x.key)}</span>${off ? ' · <span class="rt-tag">เลิกให้บริการ</span>' : ''}</div></td>
+        <td class="num rt-price"><b>${this.baht(x.price)}</b><i>บาท / ครั้ง</i></td>
+        <td class="num">${use.total
+          ? `${use.total} รายการ<i class="rt-use">คำขอ ${use.quoted} · เรียกเก็บแล้ว ${use.billed}</i>`
+          : '<span class="rt-none">ยังไม่มีใครใช้</span>'}</td>
+        <td class="rt-act">
+          <button class="btn btn-sm" data-edit="${x.key}">แก้ไข</button>
+          <button class="btn btn-sm" data-toggle="${x.key}">${off ? 'เปิดใช้อีกครั้ง' : 'เลิกให้บริการ'}</button>
+          ${use.total ? '' : `<button class="btn btn-sm btn-danger" data-del="${x.key}">ลบ</button>`}
+        </td>
+      </tr>`;
+    }).join('');
+
+    const activeN = this.activeProcedures().length;
+
+    this.shell('',
+      `<div class="page">
+        <div class="page-head">
+          <div><h2>🧾 อัตราค่าบริการ</h2>
+            <div class="desc">อัตรากลางของทั้งหน่วย — <b>ทุกโครงการคิดจากชุดเดียวกันนี้</b>
+              · เป็นต้นทางของราคาทั้งในคำขอของผู้วิจัยและในการเรียกเก็บรายเดือน · แก้ได้เฉพาะผู้ดูแลระบบ</div></div>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-primary" id="rtAdd">+ เพิ่มหัตถการ</button>
+        </div>
+
+        <div class="rt-safe">
+          <b>🔒 แก้ราคาที่นี่ไม่กระทบยอดเก่า</b>
+          ทุกครั้งที่มีการบันทึกหัตถการ ระบบจะคัดลอกราคา ณ ตอนนั้นไปเก็บไว้กับรายการนั้นเลย
+          คำขอที่ยื่นไปแล้วและยอดที่ปิดไปแล้วจึงไม่ขยับตาม ราคาใหม่มีผลกับรายการที่บันทึก<b>หลังจากนี้</b>เท่านั้น
+        </div>
+
+        <div class="report-canvas" style="padding:0;overflow:auto">
+          <table class="data rt-table">
+            <thead><tr><th>หัตถการ</th><th class="num">ราคา</th><th class="num">ถูกใช้ไปแล้ว</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="empty-note" style="margin-top:10px">
+          ${PROCEDURES.length} รายการ · เปิดให้บริการอยู่ ${activeN} รายการ ·
+          รายการที่มีคนใช้ไปแล้วลบไม่ได้ — ใช้ <b>เลิกให้บริการ</b> แทน ประวัติเก่าจะยังอ่านชื่อได้อยู่</p>
+
+        <div class="fin-foot" style="margin-top:16px">
+          <div><b>อัตราค่าฝากเลี้ยงกลาง</b> ${this.baht(DB.finance.boardingRate)} บาท / ตัว / วัน
+            <i>ใช้กับทุกโครงการที่ไม่ได้ตั้งอัตราของตัวเอง</i></div>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-sm" id="rtBoard">แก้อัตรากลาง</button>
+        </div>
+      </div>`
+    );
+
+    this.el('rtAdd').onclick = () => this.openProcForm(null);
+    this.el('rtBoard').onclick = () => this.openRateForm(null, 'rates');
+    document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () =>
+      this.openProcForm(PROCEDURES.find(x => x.key === b.dataset.edit)));
+    document.querySelectorAll('[data-toggle]').forEach(b => b.onclick = () => {
+      const pr = PROCEDURES.find(x => x.key === b.dataset.toggle);
+      if (!pr) return;
+      const off = pr.active === false;
+      if (off) {                                   // เปิดใช้อีกครั้ง — ไม่ต้องถาม
+        pr.active = true;
+        this.log('เปิดใช้หัตถการอีกครั้ง', `${pr.label} · ${this.baht(pr.price)} บาท/ครั้ง`);
+        this.toast('เปิดใช้รายการนี้แล้ว');
+        return this.renderRates();
+      }
+      const use = this.procUsage(pr.key);
+      this.confirmDialog({
+        title: 'เลิกให้บริการหัตถการนี้',
+        body: `<b>${this.esc(pr.label)}</b><br>จะไม่ปรากฏในช่องเลือกของฟอร์มคำขอและหน้าการเงินอีก`
+          + (use.total ? `<br>รายการที่บันทึกไว้แล้ว <b>${use.total}</b> รายการยังอยู่ครบและยังคิดเงินตามเดิม` : '')
+          + '<br>เปิดใช้ใหม่ได้ทุกเมื่อ',
+        okLabel: 'เลิกให้บริการ', danger: false,
+        onOk: () => {
+          pr.active = false;
+          this.log('เลิกให้บริการหัตถการ', pr.label);
+          this.toast('เลิกให้บริการรายการนี้แล้ว');
+          this.renderRates();
+        },
+      });
+    });
+    document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      const pr = PROCEDURES.find(x => x.key === b.dataset.del);
+      if (!pr) return;
+      // ปุ่มลบจะไม่ถูกวาดถ้ามีคนใช้อยู่แล้ว — เช็กซ้ำตรงนี้กันสถานะค้างจากหน้าเก่า
+      if (this.procUsage(pr.key).total) { this.toast('รายการนี้ถูกใช้ไปแล้ว ลบไม่ได้'); return this.renderRates(); }
+      this.confirmDialog({
+        title: 'ลบหัตถการนี้ถาวร',
+        body: `<b>${this.esc(pr.label)}</b> · ${this.baht(pr.price)} บาท/ครั้ง<br>ยังไม่มีใครใช้รายการนี้ จึงลบทิ้งได้ — แต่ลบแล้วเรียกคืนไม่ได้`,
+        okLabel: 'ลบถาวร',
+        onOk: () => {
+          PROCEDURES.splice(PROCEDURES.indexOf(pr), 1);
+          this.log('ลบหัตถการออกจากรายการ', pr.label);
+          this.toast('ลบรายการแล้ว');
+          this.renderRates();
+        },
+      });
+    });
+  },
+
+  // ---- เพิ่ม / แก้หัตถการ ----
+  openProcForm(pr) {
+    const isNew = !pr;
+    const use = isNew ? { total: 0 } : this.procUsage(pr.key);
+    this.openModal(`
+      <div class="modal-head"><div><h3>${isNew ? '➕ เพิ่มหัตถการ' : '✎ แก้ไขหัตถการ'}</h3>
+        <div class="desc">${isNew ? 'รายการใหม่จะปรากฏในช่องเลือกทันที' : `รหัส <span class="mono">${this.esc(pr.key)}</span> · แก้ไม่ได้`}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>ชื่อหัตถการ <span style="color:var(--red)">*</span></label>
+          <input id="pcLabel" placeholder="เช่น เจาะเลือดเพื่อส่งตรวจ" value="${this.esc(isNew ? '' : pr.label)}"></div>
+        <div class="field"><label>ราคาต่อครั้ง (บาท) <span style="color:var(--red)">*</span></label>
+          <input id="pcPrice" type="number" min="0" step="1" placeholder="0" value="${isNew ? '' : pr.price}"></div>
+        <p class="af-hint">${use.total
+          ? `💡 รายการนี้ถูกใช้ไปแล้ว <b>${use.total}</b> รายการ — ราคาใหม่มีผลกับสิ่งที่บันทึก<b>หลังจากนี้</b>เท่านั้น ยอดเดิมไม่ขยับ`
+          : '💡 ราคาที่ตั้งไว้จะถูกคัดลอกไปเก็บกับทุกรายการที่บันทึก ทำให้ปรับราคาภายหลังได้โดยยอดเก่าไม่เปลี่ยน'}</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="pcCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="pcSave">${isNew ? 'เพิ่มรายการ' : 'บันทึกการแก้ไข'}</button>
+      </div>`, { compact: true });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('pcCancel').onclick = () => this.closeModal();
+    this.el('pcSave').onclick = () => {
+      const label = this.el('pcLabel').value.trim();
+      const price = Number(this.el('pcPrice').value);
+      if (!label) return this.toast('กรอกชื่อหัตถการก่อน');
+      if (!Number.isFinite(price) || price < 0) return this.toast('ราคาต้องเป็นตัวเลขไม่ติดลบ');
+      const dup = PROCEDURES.some(x => x.label.trim() === label && (isNew || x.key !== pr.key));
+      if (dup) return this.toast('มีหัตถการชื่อนี้อยู่แล้ว');
+      if (isNew) {
+        PROCEDURES.push({ key: this.newProcKey(label), label, price, active: true });
+        this.log('เพิ่มหัตถการในรายการ', `${label} · ${this.baht(price)} บาท/ครั้ง`);
+      } else {
+        const was = pr.price;
+        pr.label = label; pr.price = price;
+        this.log('แก้ไขหัตถการ', `${label} · ราคา ${this.baht(was)} → ${this.baht(price)} บาท/ครั้ง`);
+      }
+      this.closeModal();
+      this.toast(isNew ? 'เพิ่มรายการแล้ว' : 'บันทึกการแก้ไขแล้ว');
+      this.renderRates();
     };
   },
 
@@ -3152,8 +3360,10 @@ const App = {
     this.el('cpAddDoc').onclick = () => { this.draft.extraDocs.push({ _id: this.uid(), label: '', file: null }); this.renderReqExtraDocs(); };
     this.el('cpAddPerson').onclick = () => { this.captureReqPeople(); this.draft.appointments.push({ role: 'COPI', userId: '', name: '' }); this.renderReqPeople(); };
     this.el('cpAddSvc').onclick = () => {
+      const live = this.activeProcedures();
+      if (!live.length) return this.toast('ยังไม่มีรายการหัตถการที่เปิดให้บริการ');
       this.captureReqServices();
-      this.draft.services.push({ _id: this.uid(), key: PROCEDURES[0].key, mice: '', days: '' });
+      this.draft.services.push({ _id: this.uid(), key: live[0].key, mice: '', days: '' });
       this.renderReqServices();
     };
 
@@ -3327,7 +3537,7 @@ const App = {
       return `
       <div class="req-svc${over ? ' over' : ''}" data-i="${i}">
         <select class="rs-key" data-i="${i}">
-          ${PROCEDURES.map(x => `<option value="${x.key}" ${row.key === x.key ? 'selected' : ''}>${x.label}</option>`).join('')}
+          ${this.procOptions(row.key)}
         </select>
         <div class="rs-num"><label>หนู (ตัว)</label>
           <input class="rs-mice" type="number" min="1" step="1" data-i="${i}" value="${this.esc(row.mice)}" placeholder="0"></div>
