@@ -752,8 +752,8 @@ const App = {
     return this.myProjectRoles(project).some(r => ROLES[r] && ROLES[r].caps.includes(cap));
   },
   // can the current user see this project in the list at all?
-  // needs the `view` capability first — that is what keeps GM (พัสดุ only)
-  // out of every project even though their position scope is 'all'.
+  // needs the `view` capability first — that is what keeps GM (พัสดุ + การเงิน
+  // only) out of every project even though their position scope is 'all'.
   hasAccess(project) {
     if (!this.can('view', project)) return false;
     // A project still in the creation pipeline (requested / aec_ok / rejected) is
@@ -769,17 +769,22 @@ const App = {
   // but has no enterProject, so a card click takes them to the safety form instead.
   canEnter(project) { return this.hasAccess(project) && this.can('enterProject', project); },
 
-  // ---- top-level tabs (โครงการ / พัสดุ) -----------------------------------
-  // Visibility is per capability: GM sees only พัสดุ, everyone else sees
-  // โครงการ and — if entitled — พัสดุ alongside it.
+  // ---- top-level tabs (โครงการ / พัสดุ / การเงิน) -------------------------
+  // Visibility is per capability: GM sees พัสดุ + การเงิน only, everyone else
+  // sees โครงการ and — if entitled — the other two alongside it.
+  // พัสดุ answers "what do we have"; การเงิน answers "did the month pay for
+  // itself". They are separate screens because they are separate questions: the
+  // register is a running inventory, the balance is a closed monthly period. What
+  // การเงิน does NOT do is store the numbers again — it reads the same register.
   TABS: [
     { key: 'projects', label: 'โครงการ', icon: '🧪', cap: 'view' },
     { key: 'assets',   label: 'พัสดุ',   icon: '📦', cap: 'viewAssets' },
+    { key: 'finance',  label: 'การเงิน', icon: '💰', cap: 'viewFinance' },
   ],
   visibleTabs() { return this.TABS.filter(t => this.can(t.cap)); },
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
-    if (name === 'assets') return name;
+    if (name === 'assets' || name === 'finance') return name;
     if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport'].includes(name)) return 'projects';
     return '';
   },
@@ -813,6 +818,7 @@ const App = {
       case 'roles':    this.go('roles', this.route.projectId); break;
       case 'users':    this.go('users'); break;
       case 'assets':   this.go('assets'); break;
+      case 'finance':  this.go('finance'); break;
       case 'build':
       case 'ochreport': this.go(name, ds.projectId || this.route.projectId); break;
       case 'logout':   this.go('login'); break;
@@ -842,6 +848,7 @@ const App = {
     if (name === 'roles') return this.renderRoles();
     if (name === 'users') return this.renderUsers();
     if (name === 'assets') return this.renderAssets();
+    if (name === 'finance') return this.renderFinance();
     if (this.PROJECT_MODULES[name]) return this.renderProjectModule(name);
     // A name nothing matches used to fall out here silently: route said one thing,
     // the screen still showed the last one. Land somewhere real instead of
@@ -1527,6 +1534,558 @@ const App = {
     };
   },
 
+  // =========================================================
+  // การเงิน — ปิดยอดรายเดือน
+  // =========================================================
+  // หน้านี้ไม่เก็บตัวเลขของตัวเอง นอกจากสองอย่างที่ไม่มีที่อื่นในระบบรู้:
+  // อัตราค่าฝากเลี้ยง กับค่าใช้จ่ายที่ต้องกรอกเอง (น้ำ ไฟ ค่าจ้าง) ที่เหลือ
+  // อ่านสดจากทะเบียนพัสดุและจากโครงการทุกครั้งที่เปิดหน้า — ยอดจึงตรงกับ
+  // ทะเบียนเสมอ ไม่มีทางหลุดจากกันเหมือนตอนที่จดยอดไว้สองที่
+  //
+  // รอบเป็น "เดือน" เพราะหน่วยงานปิดยอดและตั้งเบิกเป็นเดือน:
+  //   รายรับ  = ค่าฝากเลี้ยง (ตัว × วันที่อยู่จริงในเดือนนั้น × อัตรา) + หัตถการที่ฝากทำ
+  //   รายจ่าย = วัสดุที่เบิกออก + ค่าเสื่อมครุภัณฑ์เดือนนั้น + ค่าซ่อมที่ปิดงาน + ค่าใช้จ่ายอื่น
+
+  // ---- เดือน (คีย์ 'YYYY-MM') ----
+  monthKey(iso) { return String(iso || todayISO()).slice(0, 7); },
+  finMonthKey() { return this.finMonth || this.monthKey(todayISO()); },
+  monthLabel(key) {
+    const [y, m] = key.split('-').map(Number);
+    return `${this.TH_MONTHS[m - 1]} ${y + 543}`;
+  },
+  // เลื่อนเดือน — ใช้ Date เพื่อให้ข้ามปีเองโดยไม่ต้องคิดเลข 12 เอง
+  shiftMonth(key, delta) {
+    const [y, m] = key.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  },
+  monthBounds(key) {
+    const [y, m] = key.split('-').map(Number);
+    const last = new Date(y, m, 0).getDate();
+    return { start: this.isoOf(y, m, 1), end: this.isoOf(y, m, last), days: last };
+  },
+  inMonth(iso, key) { return !!iso && String(iso).slice(0, 7) === key; },
+  // วันตั้งต้นของฟอร์มที่เปิดจากหน้าการเงิน — "วันนี้" ถ้ากำลังดูเดือนปัจจุบัน
+  // ไม่งั้นเป็นวันสุดท้ายของเดือนที่ดูอยู่ กรอกย้อนหลังตอนปิดยอดจึงไม่ต้อง
+  // เปลี่ยนวันที่เองทุกครั้ง (และไม่มีทางบันทึกหลุดไปเดือนที่ไม่ได้ตั้งใจ)
+  monthDefaultDate(key) {
+    const today = todayISO();
+    return this.monthKey(today) === key ? today : this.monthBounds(key).end;
+  },
+  // เดือนแรกสุดที่มี "รายการ" เกิดขึ้นจริง — ปุ่มย้อนเดือนหยุดที่นี่
+  // นับเฉพาะสิ่งที่มีคนทำ (เบิกของ · ปิดงานซ่อม · ลงค่าใช้จ่าย · เริ่มเก็บค่าฝากเลี้ยง)
+  // ไม่นับวันที่ซื้อครุภัณฑ์ เพราะค่าเสื่อมเดินทุกเดือนตั้งแต่วันนั้น การเอามาเป็น
+  // ขอบล่างจะเปิดทางให้ย้อนไปหลายสิบเดือนที่มีแต่ค่าเสื่อมและไม่มีอะไรให้อ่าน
+  financeFloor() {
+    const dates = [
+      ...DB.assets.flatMap(a => (a.moves || []).map(m => m.date)),
+      ...DB.assets.flatMap(a => (a.repairs || []).map(r => r.fixedDate)),
+      ...DB.finance.expenses.map(e => e.date),
+      ...DB.projects.filter(p => this.isReal(p)).map(p => this.boardStart(p)),
+    ].filter(Boolean).sort();
+    return dates.length ? this.monthKey(dates[0]) : this.monthKey(todayISO());
+  },
+  // จำนวนวันแบบนับปลายทั้งสองข้าง — หนูที่เข้าและออกวันเดียวกันคือ 1 วัน
+  daysInclusive(fromISO, toISO) {
+    const a = new Date(fromISO), b = new Date(toISO);
+    if (isNaN(a) || isNaN(b) || b < a) return 0;
+    return Math.round((b - a) / 86400000) + 1;
+  },
+  minISO(a, b) { return (!a || (b && b < a)) ? b : a; },
+  maxISO(a, b) { return (!a || (b && b > a)) ? b : a; },
+
+  // =========================================================
+  // รายจ่าย
+  // =========================================================
+  // วัสดุ — มูลค่าเกิดตอน "เบิกออก" ราคาที่ใช้คือราคาต่อหน่วยของรายการนั้น
+  stockUsedInMonth(key) {
+    return DB.assets.filter(a => a.kind === 'consumable').map(a => {
+      const outs = (a.moves || []).filter(m => m.type === 'out' && this.inMonth(m.date, key));
+      const qty = outs.reduce((s, m) => s + (m.qty || 0), 0);
+      return { a, qty, times: outs.length, amount: qty * (a.price || 0) };
+    }).filter(r => r.qty > 0).sort((x, y) => y.amount - x.amount);
+  },
+  // ค่าเสื่อมของ "เดือนนั้น" = ค่าเสื่อมรายปี ÷ 12
+  // คิดเต็มเดือนถ้าของอยู่ในระหว่างอายุการใช้งานตอนต้นเดือน — ไม่เฉลี่ยรายวัน
+  // ในเดือนแรกและเดือนสุดท้าย เพราะทะเบียนครุภัณฑ์ของหน่วยงานคิดเป็นเดือนอยู่แล้ว
+  // และความละเอียดระดับวันไม่เปลี่ยนการตัดสินใจอะไรเลย
+  depInMonth(key) {
+    const { start, end } = this.monthBounds(key);
+    return DB.assets.filter(a => {
+      if (a.kind !== 'asset' || !(a.lifeYears > 0) || a.status === 'disposed') return false;
+      if (!a.acquiredDate || a.acquiredDate > end) return false;      // ยังไม่ได้ซื้อในเดือนนั้น
+      const ageAtStart = Math.max(0, (new Date(start) - new Date(a.acquiredDate)) / (365.25 * 86400000));
+      return ageAtStart < a.lifeYears;                                 // ตัดครบไปก่อนแล้ว → ไม่มีค่าเสื่อมอีก
+    }).map(a => ({ a, amount: this.depPerYear(a) / 12 }))
+      .sort((x, y) => y.amount - x.amount);
+  },
+  // ค่าซ่อม — ลงเป็นค่าใช้จ่ายในเดือนที่ "ปิดงานซ่อม" ไม่ใช่เดือนที่แจ้ง
+  // เพราะก่อนปิดงานยังไม่รู้ราคา (งานที่ยังค้างอยู่จึงยังไม่เข้ายอดเดือนไหนเลย)
+  repairsInMonth(key) {
+    const out = [];
+    DB.assets.forEach(a => (a.repairs || []).forEach(r => {
+      if (r.status === 'fixed' && this.inMonth(r.fixedDate, key) && (r.cost || 0) > 0) out.push({ a, r, amount: r.cost });
+    }));
+    return out.sort((x, y) => y.amount - x.amount);
+  },
+  otherInMonth(key) {
+    return DB.finance.expenses.filter(e => this.inMonth(e.date, key))
+      .slice().sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+  },
+  expenseCat(k) { return EXPENSE_CATEGORIES.find(c => c.key === k) || { label: k || 'อื่น ๆ', icon: '📄' }; },
+
+  // =========================================================
+  // รายรับ — ค่าฝากเลี้ยงของแต่ละโครงการ
+  // =========================================================
+  billingOf(p) {
+    if (!p.billing) p.billing = { rate: null, services: [] };
+    if (!p.billing.services) p.billing.services = [];
+    return p.billing;
+  },
+  // อัตราของโครงการ ถ้าไม่ได้ตั้งไว้ก็ใช้อัตรากลาง
+  boardingRate(p) {
+    const b = this.billingOf(p);
+    return (b.rate != null && b.rate !== '') ? Number(b.rate) : DB.finance.boardingRate;
+  },
+  // วันแรกที่หน่วยเริ่มเก็บค่าฝากเลี้ยง = วันที่หนูเข้ากรงจริง (ตกลงจากใบขอ)
+  boardStart(p) { return (p.facility && p.facility.moveInDate) || p.startDate; },
+  // โครงการที่ปิดแล้วหยุดคิดที่แผนรายการสุดท้าย — ตัวเดียวกับ "End" บนใบติดหน้ากรง
+  boardEnd(p) {
+    if (p.status !== 'closed') return null;
+    const dates = ((p.request && p.request.plan) || []).map(x => x.date).filter(Boolean).sort();
+    return dates.length ? dates[dates.length - 1] : null;
+  },
+  // "วัน-ตัว" ในเดือนนั้น — นับรายตัว ไม่ใช่เอาจำนวนหนูวันนี้คูณจำนวนวัน
+  // หนูที่ตายกลางเดือนต้องหยุดคิดตั้งแต่วันถัดจากวันตาย ไม่งั้นหน่วยเก็บเงิน
+  // ค่าเลี้ยงสัตว์ที่ไม่มีอยู่แล้ว
+  mouseDaysInMonth(p, key) {
+    const { start, end } = this.monthBounds(key);
+    const from = this.maxISO(this.boardStart(p), start);
+    const hardEnd = this.minISO(this.boardEnd(p) || todayISO(), end);
+    if (!from || !hardEnd || hardEnd < from) return { days: 0, mice: 0 };
+    let days = 0, mice = 0;
+    (p.cages || []).forEach(c => (c.mice || []).forEach(m => {
+      const died = m.death && m.death.date ? m.death.date : null;
+      const to = died ? this.minISO(died, hardEnd) : hardEnd;
+      const d = this.daysInclusive(from, to);
+      if (d > 0) { days += d; mice++; }
+    }));
+    return { days, mice };
+  },
+  boardingInMonth(p, key) {
+    const md = this.mouseDaysInMonth(p, key);
+    return { ...md, rate: this.boardingRate(p), amount: md.days * this.boardingRate(p) };
+  },
+  servicesInMonth(p, key) {
+    const rows = this.billingOf(p).services.filter(x => this.inMonth(x.date, key));
+    return { rows, amount: rows.reduce((s, x) => s + (x.qty || 0) * (x.price || 0), 0) };
+  },
+  procOf(k) { return PROCEDURES.find(x => x.key === k) || { key: k, label: k || 'หัตถการ', price: 0 }; },
+  // โครงการที่มีสิทธิ์ถูกเรียกเก็บในเดือนนั้น — โครงการที่ยังไม่ผ่านอนุมัติยังไม่มีหนู
+  billableProjects() { return DB.projects.filter(p => this.isReal(p)); },
+
+  // ยอดรวมทั้งเดือน — ตัวเดียวที่หน้าจอกับการ์ดสรุปใช้ร่วมกัน จะได้ไม่คิดคนละที
+  financeTotals(key) {
+    const projects = this.billableProjects().map(p => {
+      const board = this.boardingInMonth(p, key);
+      const svc = this.servicesInMonth(p, key);
+      return { p, board, svc, total: board.amount + svc.amount };
+    }).filter(r => r.total > 0 || r.board.days > 0);
+
+    const used = this.stockUsedInMonth(key);
+    const dep = this.depInMonth(key);
+    const rep = this.repairsInMonth(key);
+    const oth = this.otherInMonth(key);
+
+    const income = {
+      boarding: projects.reduce((s, r) => s + r.board.amount, 0),
+      service: projects.reduce((s, r) => s + r.svc.amount, 0),
+    };
+    income.total = income.boarding + income.service;
+
+    const expense = {
+      stock: used.reduce((s, r) => s + r.amount, 0),
+      dep: dep.reduce((s, r) => s + r.amount, 0),
+      repair: rep.reduce((s, r) => s + r.amount, 0),
+      other: oth.reduce((s, r) => s + (r.amount || 0), 0),
+    };
+    expense.total = expense.stock + expense.dep + expense.repair + expense.other;
+
+    return {
+      key, projects, used, dep, rep, oth, income, expense,
+      net: income.total - expense.total,
+      // ค่าเสื่อมไม่ใช่เงินที่จ่ายออกไปในเดือนนั้น — หัวหน้าหน่วยอ่านสองบรรทัดนี้
+      // คู่กันเสมอ: บรรทัดบนบอก "คุ้มทุนไหม" บรรทัดล่างบอก "เงินสดพอไหม"
+      netCash: income.total - (expense.total - expense.dep),
+    };
+  },
+
+  renderFinance() {
+    if (!this.can('viewFinance')) { this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้านี้'); return this.go(this.homeRoute()); }
+    const canEdit = this.can('manageFinance');
+    const key = this.finMonthKey();
+    const t = this.financeTotals(key);
+    const thisMonth = this.monthKey(todayISO());
+    const isCurrent = key === thisMonth;
+    const isEarliest = key <= this.financeFloor();
+    const b = this.monthBounds(key);
+
+    // ---- รายรับ ----
+    const incRows = t.projects.length ? t.projects.map(r => `
+      <tr data-proj="${r.p.id}">
+        <td><b>${this.esc(r.p.name)}</b>
+          <div class="fin-sub">${r.p.status === 'closed' ? 'ปิดโครงการแล้ว · ' : ''}${
+            this.esc((r.p.request && r.p.request.protocolNo) || r.p.id)}</div></td>
+        <td class="num">${r.board.mice || '–'}</td>
+        <td class="num">${r.board.days ? r.board.days.toLocaleString('en-US') : '–'}</td>
+        <td class="num">${this.baht(r.board.rate)}<i class="fin-unit">/ตัว/วัน</i></td>
+        <td class="num"><b>${this.baht(r.board.amount)}</b></td>
+        <td class="num">${r.svc.amount ? `<b>${this.baht(r.svc.amount)}</b><i class="fin-unit">${r.svc.rows.length} รายการ</i>` : '–'}</td>
+        <td class="num fin-tot"><b>${this.baht(r.total)}</b></td>
+        <td class="fin-act">${canEdit ? `<button class="btn btn-sm" data-svc="${r.p.id}">+ หัตถการ</button>
+          <button class="btn btn-sm" data-rate="${r.p.id}">อัตรา</button>` : ''}</td>
+      </tr>` + (r.svc.rows.length ? r.svc.rows.map(x => {
+        const pr = this.procOf(x.key);
+        // ตำแหน่งจริงในลิสต์ของโครงการ — สองแถวที่ค่าเหมือนกันทุกช่องยังลบถูกตัว
+        const at = this.billingOf(r.p).services.indexOf(x);
+        return `<tr class="fin-det">
+          <td colspan="5"><span class="fin-dot">↳</span> ${this.thaiDate(x.date)} · ${this.esc(pr.label)}
+            <span class="fin-x">${x.qty} × ${this.baht(x.price)}</span>
+            ${x.note ? `<i class="fin-note">${this.esc(x.note)}</i>` : ''}</td>
+          <td class="num">${this.baht((x.qty || 0) * (x.price || 0))}</td>
+          <td class="num"></td>
+          <td class="fin-act">${canEdit ? `<button class="icon-btn sm" data-delsvc="${r.p.id}|${at}" title="ลบรายการนี้">✕</button>` : ''}</td>
+        </tr>`;
+      }).join('') : '')).join('')
+      : `<tr><td colspan="8" class="empty-note" style="text-align:center;padding:22px">ไม่มีโครงการที่เข้าเกณฑ์เก็บค่าฝากเลี้ยงในเดือนนี้</td></tr>`;
+
+    // ---- รายจ่าย: หัวหมวด + รายการย่อยใต้หมวด ----
+    const grp = (icon, label, amount, hint) => `<tr class="fin-grp">
+      <td>${icon} <b>${label}</b>${hint ? `<div class="fin-sub">${hint}</div>` : ''}</td>
+      <td class="num"></td><td class="num fin-tot"><b>${this.baht(amount)}</b></td><td class="fin-act"></td></tr>`;
+
+    const expRows = [
+      grp('📦', 'วัสดุที่เบิกออก', t.expense.stock, 'ตัดเป็นค่าใช้จ่ายตอนเบิก ไม่ใช่ตอนซื้อ'),
+      ...(t.used.length ? t.used.map(r => `<tr class="fin-det">
+          <td><span class="fin-dot">↳</span> ${this.esc(r.a.name)}
+            <i class="fin-note">เบิก ${r.times} ครั้ง</i></td>
+          <td class="num">${r.qty} ${this.esc(r.a.unit)} × ${this.baht(r.a.price)}</td>
+          <td class="num">${this.baht(r.amount)}</td><td class="fin-act"></td></tr>`)
+        : [`<tr class="fin-det"><td colspan="4" class="empty-note">ไม่มีการเบิกวัสดุในเดือนนี้</td></tr>`]),
+
+      grp('🏷️', 'ค่าเสื่อมราคาครุภัณฑ์', t.expense.dep, 'ค่าเสื่อมรายปี ÷ 12 · ไม่ใช่เงินสดที่จ่ายออกไป'),
+      ...(t.dep.length ? t.dep.map(r => `<tr class="fin-det">
+          <td><span class="fin-dot">↳</span> ${this.esc(r.a.name)}
+            <i class="fin-note">${this.esc(r.a.code || '')}</i></td>
+          <td class="num">${this.baht(r.a.price)} ÷ ${r.a.lifeYears} ปี</td>
+          <td class="num">${this.baht(r.amount)}</td><td class="fin-act"></td></tr>`)
+        : [`<tr class="fin-det"><td colspan="4" class="empty-note">ไม่มีครุภัณฑ์ที่ยังตัดค่าเสื่อมในเดือนนี้</td></tr>`]),
+
+      grp('🔧', 'ค่าซ่อมครุภัณฑ์', t.expense.repair, 'ลงยอดในเดือนที่ปิดงานซ่อม — ก่อนปิดงานยังไม่รู้ราคา'),
+      ...(t.rep.length ? t.rep.map(r => `<tr class="fin-det">
+          <td><span class="fin-dot">↳</span> ${this.esc(r.a.name)}
+            <i class="fin-note">${this.esc(r.r.symptom)}</i></td>
+          <td class="num">${this.esc(r.r.vendor || '—')}</td>
+          <td class="num">${this.baht(r.amount)}</td><td class="fin-act"></td></tr>`)
+        : [`<tr class="fin-det"><td colspan="4" class="empty-note">ไม่มีงานซ่อมที่ปิดในเดือนนี้</td></tr>`]),
+
+      grp('💡', 'ค่าใช้จ่ายอื่น', t.expense.other, 'น้ำ ไฟ ค่าจ้าง — ไม่มีที่อื่นในระบบบันทึกไว้ จึงกรอกที่นี่'),
+      ...(t.oth.length ? t.oth.map(e => {
+        const c = this.expenseCat(e.category);
+        return `<tr class="fin-det">
+          <td><span class="fin-dot">↳</span> ${c.icon} ${this.esc(e.label)}
+            <i class="fin-note">${this.thaiDate(e.date)}${e.note ? ' · ' + this.esc(e.note) : ''}</i></td>
+          <td class="num">${this.esc(c.label)}</td>
+          <td class="num">${this.baht(e.amount)}</td>
+          <td class="fin-act">${canEdit ? `<button class="icon-btn sm" data-editexp="${e.id}" title="แก้ไข">✎</button>
+            <button class="icon-btn sm" data-delexp="${e.id}" title="ลบ">✕</button>` : ''}</td></tr>`;
+      }) : [`<tr class="fin-det"><td colspan="4" class="empty-note">ยังไม่ได้บันทึกค่าใช้จ่ายอื่นของเดือนนี้</td></tr>`]),
+    ].join('');
+
+    const netTone = t.net >= 0 ? 'good' : 'bad';
+
+    this.shell('', `
+      <div class="page wide">
+        <div class="page-head">
+          <div><h2>💰 การเงิน</h2>
+            <div class="desc">ปิดยอดรายเดือน · รายรับจากค่าฝากเลี้ยงและหัตถการ · รายจ่ายอ่านสดจากทะเบียนพัสดุ</div></div>
+          <span class="spacer" style="flex:1"></span>
+          <div class="fin-month">
+            <button class="icon-btn" id="finPrev" title="เดือนก่อนหน้า" ${isEarliest ? 'disabled' : ''}>◀</button>
+            <div class="fin-month-lbl"><b>${this.monthLabel(key)}</b>
+              <i>${this.thaiDate(b.start)} – ${this.thaiDate(b.end)}</i></div>
+            <button class="icon-btn" id="finNext" title="เดือนถัดไป" ${isCurrent ? 'disabled' : ''}>▶</button>
+            ${isCurrent ? '' : `<button class="btn btn-sm" id="finNow">เดือนนี้</button>`}
+          </div>
+        </div>
+
+        <div class="as-sum fin-sum">
+          <div class="as-card good"><span>รายรับ</span><b>${this.baht(t.income.total)}</b>
+            <i>ค่าฝากเลี้ยง ${this.baht(t.income.boarding)} · หัตถการ ${this.baht(t.income.service)}</i></div>
+          <div class="as-card bad"><span>รายจ่าย</span><b>${this.baht(t.expense.total)}</b>
+            <i>วัสดุ ${this.baht(t.expense.stock)} · ค่าเสื่อม ${this.baht(t.expense.dep)} · ซ่อม ${this.baht(t.expense.repair)} · อื่น ${this.baht(t.expense.other)}</i></div>
+          <div class="as-card total ${netTone}"><span>${t.net >= 0 ? 'เหลือ' : 'ขาด'}</span><b>${this.baht(Math.abs(t.net))}</b>
+            <i>รายรับ − รายจ่ายทั้งหมด</i></div>
+          <div class="as-card"><span>ผลต่างเงินสด</span><b>${this.baht(t.netCash)}</b>
+            <i>ไม่รวมค่าเสื่อม ${this.baht(t.expense.dep)} ซึ่งไม่ได้จ่ายออกจริง</i></div>
+        </div>
+
+        <section class="as-sec">
+          <div class="as-sec-head">
+            <div><h3>📥 รายรับ <span class="as-n">${t.projects.length} โครงการ</span></h3>
+              <div class="desc">ค่าฝากเลี้ยง = จำนวนหนู × วันที่อยู่จริงในเดือนนี้ × อัตราของโครงการ · หนูที่ตายหยุดคิดตั้งแต่วันถัดไป</div></div>
+            <span class="spacer" style="flex:1"></span>
+            <div class="as-sec-sum"><span>รวมรายรับ</span><b class="good">${this.baht(t.income.total)}</b></div>
+          </div>
+          <div class="report-canvas" style="padding:0;overflow:auto">
+            <table class="data fin-table">
+              <thead><tr><th>โครงการ</th><th class="num">หนู (ตัว)</th><th class="num">วัน-ตัว</th>
+                <th class="num">อัตรา</th><th class="num">ค่าฝากเลี้ยง</th><th class="num">หัตถการ</th>
+                <th class="num">รวม</th><th></th></tr></thead>
+              <tbody>${incRows}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="as-sec">
+          <div class="as-sec-head">
+            <div><h3>📤 รายจ่าย</h3>
+              <div class="desc">สามหมวดแรกอ่านสดจากทะเบียนพัสดุ ไม่ต้องกรอกซ้ำ · หมวดสุดท้ายกรอกเองที่นี่</div></div>
+            <span class="spacer" style="flex:1"></span>
+            ${canEdit ? `<button class="btn btn-primary btn-sm" id="finAddExp">+ ค่าใช้จ่ายอื่น</button>` : ''}
+            <div class="as-sec-sum"><span>รวมรายจ่าย</span><b class="bad">${this.baht(t.expense.total)}</b></div>
+          </div>
+          <div class="report-canvas" style="padding:0;overflow:auto">
+            <table class="data fin-table">
+              <thead><tr><th>หมวด / รายการ</th><th class="num">รายละเอียด</th><th class="num">จำนวนเงิน</th><th></th></tr></thead>
+              <tbody>${expRows}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="fin-foot">
+          <div><b>อัตราค่าฝากเลี้ยงกลาง</b> ${this.baht(DB.finance.boardingRate)} บาท / ตัว / วัน
+            <i>โครงการที่ตกลงอัตราพิเศษไว้จะใช้อัตราของตัวเองแทน</i></div>
+          <span class="spacer" style="flex:1"></span>
+          ${canEdit ? `<button class="btn btn-sm" id="finRate">แก้อัตรากลาง</button>` : ''}
+        </div>
+      </div>`);
+
+    this.el('finPrev').onclick = () => {
+      if (isEarliest) return;                      // ไม่มีข้อมูลก่อนหน้านี้แล้ว
+      this.finMonth = this.shiftMonth(key, -1); this.renderFinance();
+    };
+    this.el('finNext').onclick = () => {
+      if (isCurrent) return;                       // ไม่ให้เดินไปเดือนอนาคตที่ยังไม่มีข้อมูล
+      this.finMonth = this.shiftMonth(key, 1); this.renderFinance();
+    };
+    if (this.el('finNow')) this.el('finNow').onclick = () => { this.finMonth = null; this.renderFinance(); };
+    if (canEdit) {
+      this.el('finAddExp').onclick = () => this.openExpenseForm(null);
+      this.el('finRate').onclick = () => this.openRateForm(null);
+      document.querySelectorAll('[data-editexp]').forEach(x => x.onclick = () =>
+        this.openExpenseForm(DB.finance.expenses.find(e => e.id === x.dataset.editexp)));
+      document.querySelectorAll('[data-delexp]').forEach(x => x.onclick = () => {
+        const e = DB.finance.expenses.find(y => y.id === x.dataset.delexp);
+        if (!e) return;
+        this.confirmDialog({
+          title: 'ลบค่าใช้จ่ายนี้',
+          body: `<b>${this.esc(e.label)}</b> · ${this.baht(e.amount)} บาท<br>ยอดรวมของเดือนจะลดลงทันที และลบแล้วเรียกคืนไม่ได้`,
+          okLabel: 'ลบรายการ',
+          onOk: () => {
+            DB.finance.expenses = DB.finance.expenses.filter(y => y.id !== e.id);
+            this.log('ลบค่าใช้จ่ายอื่น', `${e.label} · ${this.baht(e.amount)} บาท`);
+            this.toast('ลบรายการแล้ว');
+            this.renderFinance();
+          },
+        });
+      });
+      document.querySelectorAll('[data-svc]').forEach(x => x.onclick = () =>
+        this.openServiceForm(Data.getProject(x.dataset.svc)));
+      document.querySelectorAll('[data-rate]').forEach(x => x.onclick = () =>
+        this.openRateForm(Data.getProject(x.dataset.rate)));
+      document.querySelectorAll('[data-delsvc]').forEach(x => x.onclick = () => {
+        const [pid, idx] = x.dataset.delsvc.split('|');
+        const p = Data.getProject(pid);
+        if (!p) return;
+        const list = this.billingOf(p).services;
+        const i = Number(idx);
+        const gone = list[i];
+        if (!gone) return;
+        this.confirmDialog({
+          title: 'ลบหัตถการนี้',
+          body: `${this.esc(this.procOf(gone.key).label)} · ${gone.qty} ครั้ง — ยอดรายรับของเดือนจะลดลงทันที`,
+          okLabel: 'ลบรายการ',
+          onOk: () => {
+            list.splice(i, 1);
+            this.log('ลบหัตถการที่เรียกเก็บ', `${this.procOf(gone.key).label} · ${gone.qty} ครั้ง`, p.name);
+            this.toast('ลบรายการแล้ว');
+            this.renderFinance();
+          },
+        });
+      });
+    }
+  },
+
+  // ---- ค่าใช้จ่ายอื่น: เพิ่ม / แก้ ----
+  openExpenseForm(e) {
+    const isNew = !e;
+    const def = isNew ? this.monthDefaultDate(this.finMonthKey()) : e.date;
+    this.openModal(`
+      <div class="modal-head"><div><h3>${isNew ? '➕ บันทึกค่าใช้จ่ายอื่น' : '✎ แก้ค่าใช้จ่าย'}</h3>
+        <div class="desc">ค่าน้ำ ค่าไฟ ค่าจ้าง และรายจ่ายที่ไม่ได้มาจากทะเบียนพัสดุ</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>รายการ <span style="color:var(--red)">*</span></label>
+          <input id="exLabel" placeholder="เช่น ค่าไฟฟ้า — ห้องเลี้ยงสัตว์ AR01–AR04" value="${this.esc(isNew ? '' : e.label)}"></div>
+        <div class="form-row3">
+          <div class="field"><label>หมวด</label>
+            <select id="exCat">${EXPENSE_CATEGORIES.map(c =>
+              `<option value="${c.key}" ${!isNew && e.category === c.key ? 'selected' : ''}>${c.icon} ${c.label}</option>`).join('')}</select></div>
+          <div class="field"><label>วันที่</label>${this.dateChip('exDate', def, 'เลือกวันที่')}</div>
+          <div class="field"><label>จำนวนเงิน (บาท) <span style="color:var(--red)">*</span></label>
+            <input id="exAmt" type="number" min="0" step="1" placeholder="0" value="${isNew ? '' : e.amount}"></div>
+        </div>
+        <div class="field"><label>หมายเหตุ <span class="muted-lbl">(เลขที่ใบแจ้งหนี้ / รายละเอียด)</span></label>
+          <input id="exNote" placeholder="เช่น ตามใบแจ้งหนี้ กฟภ." value="${this.esc(isNew ? '' : e.note)}"></div>
+        <p class="af-hint">💡 รายการจะเข้ายอดของเดือนตาม <b>วันที่</b> ที่กรอก — ลงวันของเดือนไหนก็เข้ายอดเดือนนั้น</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="exCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="exSave">${isNew ? 'บันทึก' : 'บันทึกการแก้ไข'}</button>
+      </div>`, { compact: true });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('exCancel').onclick = () => this.closeModal();
+    let date = def;
+    const chip = this.el('exDate');
+    chip.onclick = (ev) => this.openThaiCalendar(ev.currentTarget, date, iso => {
+      date = iso || def; this.setDateChip(chip, date, 'เลือกวันที่');
+    });
+    this.el('exSave').onclick = () => {
+      const label = this.el('exLabel').value.trim();
+      const amount = Number(this.el('exAmt').value);
+      if (!label) return this.toast('กรอกชื่อรายการก่อน');
+      if (!date) return this.toast('เลือกวันที่ก่อน');
+      if (!(amount > 0)) return this.toast('จำนวนเงินต้องมากกว่า 0');
+      const rec = { category: this.el('exCat').value, label, date, amount, note: this.el('exNote').value.trim() };
+      if (isNew) {
+        DB.finance.expenses.push({ id: 'EX' + this.uid(), by: this.user.name, ...rec });
+        this.log('บันทึกค่าใช้จ่ายอื่น', `${label} · ${this.baht(amount)} บาท · ${this.thaiDate(date)}`);
+      } else {
+        Object.assign(e, rec);
+        this.log('แก้ค่าใช้จ่ายอื่น', `${label} · ${this.baht(amount)} บาท · ${this.thaiDate(date)}`);
+      }
+      this.closeModal();
+      // เด้งไปเดือนของรายการที่เพิ่งบันทึก ไม่งั้นกรอกแล้วเหมือนไม่มีอะไรเกิดขึ้น
+      this.finMonth = this.monthKey(date) === this.monthKey(todayISO()) ? null : this.monthKey(date);
+      this.toast(isNew ? 'บันทึกค่าใช้จ่ายแล้ว' : 'แก้ไขแล้ว');
+      this.renderFinance();
+    };
+  },
+
+  // ---- หัตถการที่โครงการฝากหน่วยทำ ----
+  openServiceForm(p) {
+    if (!p) return;
+    const def = this.monthDefaultDate(this.finMonthKey());
+    this.openModal(`
+      <div class="modal-head"><div><h3>🧾 บันทึกหัตถการที่ฝากทำ</h3>
+        <div class="desc">${this.esc(p.name)} — คิดเป็นครั้ง แยกจากค่าฝากเลี้ยงรายวัน</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>หัตถการ</label>
+          <select id="svKey">${PROCEDURES.map(x =>
+            `<option value="${x.key}" data-price="${x.price}">${x.label} — ${this.baht(x.price)} บาท/ครั้ง</option>`).join('')}</select></div>
+        <div class="form-row3">
+          <div class="field"><label>วันที่ทำ</label>${this.dateChip('svDate', def, 'เลือกวันที่')}</div>
+          <div class="field"><label>จำนวน (ครั้ง) <span style="color:var(--red)">*</span></label>
+            <input id="svQty" type="number" min="1" step="1" value="1"></div>
+          <div class="field"><label>ราคาต่อครั้ง (บาท)</label>
+            <input id="svPrice" type="number" min="0" step="1" value="${PROCEDURES[0].price}"></div>
+        </div>
+        <div class="form-row2">
+          <div class="field"><label>รวมเป็นเงิน</label><input id="svTotal" value="${this.baht(PROCEDURES[0].price)}" disabled></div>
+          <div class="field"><label>หมายเหตุ</label><input id="svNote" placeholder="เช่น เก็บเลือดกลุ่ม Treatment-3"></div>
+        </div>
+        <p class="af-hint">💡 ราคาที่กรอกจะติดอยู่กับรายการนี้ถาวร — ปรับราคากลางภายหลังแล้วยอดเดือนที่ปิดไปจะไม่ขยับตาม</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="svCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="svSave">บันทึก</button>
+      </div>`, { compact: true });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('svCancel').onclick = () => this.closeModal();
+    const sel = this.el('svKey'), qty = this.el('svQty'), price = this.el('svPrice'), tot = this.el('svTotal');
+    const recalc = () => { tot.value = this.baht((Number(qty.value) || 0) * (Number(price.value) || 0)); };
+    sel.onchange = () => { price.value = sel.selectedOptions[0].dataset.price; recalc(); };
+    qty.oninput = recalc; price.oninput = recalc;
+    let date = def;
+    const chip = this.el('svDate');
+    chip.onclick = (ev) => this.openThaiCalendar(ev.currentTarget, date, iso => {
+      date = iso || def; this.setDateChip(chip, date, 'เลือกวันที่');
+    });
+    this.el('svSave').onclick = () => {
+      const n = Number(qty.value), pr = Number(price.value);
+      if (!date) return this.toast('เลือกวันที่ก่อน');
+      if (!(n > 0)) return this.toast('จำนวนครั้งต้องมากกว่า 0');
+      if (!(pr >= 0)) return this.toast('ราคาต่อครั้งไม่ถูกต้อง');
+      this.billingOf(p).services.push({ date, key: sel.value, qty: n, price: pr, by: this.user.name,
+        note: this.el('svNote').value.trim() });
+      this.log('บันทึกหัตถการที่เรียกเก็บ', `${this.procOf(sel.value).label} · ${n} ครั้ง · ${this.baht(n * pr)} บาท`, p.name);
+      this.closeModal();
+      this.finMonth = this.monthKey(date) === this.monthKey(todayISO()) ? null : this.monthKey(date);
+      this.toast('บันทึกหัตถการแล้ว');
+      this.renderFinance();
+    };
+  },
+
+  // ---- อัตราค่าฝากเลี้ยง: อัตรากลาง (p = null) หรือของโครงการเดียว ----
+  openRateForm(p) {
+    const isGlobal = !p;
+    const cur = isGlobal ? DB.finance.boardingRate : this.billingOf(p).rate;
+    this.openModal(`
+      <div class="modal-head"><div><h3>💵 ${isGlobal ? 'อัตราค่าฝากเลี้ยงกลาง' : 'อัตราค่าฝากเลี้ยงของโครงการ'}</h3>
+        <div class="desc">${isGlobal ? 'ใช้กับทุกโครงการที่ไม่ได้ตั้งอัตราของตัวเอง' : this.esc(p.name)}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="field"><label>อัตรา (บาท / ตัว / วัน)</label>
+          <input id="rtVal" type="number" min="0" step="1" placeholder="${isGlobal ? '' : String(DB.finance.boardingRate)}"
+            value="${cur == null ? '' : cur}"></div>
+        <p class="af-hint">${isGlobal
+          ? '⚠️ เปลี่ยนอัตรากลางแล้ว ยอดของ <b>ทุกเดือน</b> ที่ยังคิดจากอัตรากลางจะเปลี่ยนตามทันที รวมถึงเดือนที่ปิดยอดไปแล้ว'
+          : `💡 เว้นว่างไว้ = ใช้อัตรากลาง (${this.baht(DB.finance.boardingRate)} บาท/ตัว/วัน)`}</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="rtCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="rtSave">บันทึก</button>
+      </div>`, { compact: true });
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('rtCancel').onclick = () => this.closeModal();
+    this.el('rtSave').onclick = () => {
+      const raw = this.el('rtVal').value.trim();
+      if (isGlobal) {
+        const v = Number(raw);
+        if (!(v > 0)) return this.toast('อัตรากลางต้องมากกว่า 0');
+        DB.finance.boardingRate = v;
+        this.log('แก้อัตราค่าฝากเลี้ยงกลาง', `${this.baht(v)} บาท/ตัว/วัน`);
+      } else {
+        if (raw === '') this.billingOf(p).rate = null;
+        else {
+          const v = Number(raw);
+          if (!(v >= 0)) return this.toast('อัตราไม่ถูกต้อง');
+          this.billingOf(p).rate = v;
+        }
+        this.log('แก้อัตราค่าฝากเลี้ยงของโครงการ',
+          raw === '' ? 'กลับไปใช้อัตรากลาง' : `${this.baht(Number(raw))} บาท/ตัว/วัน`, p.name);
+      }
+      this.closeModal();
+      this.toast('บันทึกอัตราแล้ว');
+      this.renderFinance();
+    };
+  },
+
   // ---- user account helpers ----
   adminCount() { return DB.users.filter(u => u.position === 'ADMIN').length; },
   isLastAdmin(u) { return u.position === 'ADMIN' && this.adminCount() <= 1; },
@@ -1726,7 +2285,7 @@ const App = {
     const projRoles = proj ? this.myProjectRoles(proj) : [];
     const projRole = projRoles.join(' + ');
     const sysLabel = `${this.positionLabel()} (${this.positionKey()})`;
-    // top-level tabs — only those the position is entitled to (GM: พัสดุ only)
+    // top-level tabs — only those the position is entitled to (GM: พัสดุ + การเงิน)
     const activeTab = this.tabOfRoute(this.route.name);
     // always rendered: the lit tab is both the "you are here" marker and the way
     // back up (the redundant leading breadcrumb was removed in favour of it)

@@ -36,7 +36,7 @@
 // scope: 'all'    = sees every project without being appointed to it
 //        'member' = only projects they are appointed to
 const POSITIONS = {
-  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewAssets', 'manageAssets', 'cageCard'] },
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewAssets', 'manageAssets', 'viewFinance', 'manageFinance', 'cageCard'] },
   AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
   VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
   SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
@@ -51,14 +51,16 @@ const POSITIONS = {
   IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
   QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
   AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
-  // EX reads details like AEC (no enterProject) but keeps พัสดุ
-  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewAssets'] },
+  // EX reads details like AEC (no enterProject) but keeps พัสดุ — and reads the
+  // money too: an executive needs the monthly balance without being able to book
+  // an expense into it (no manageFinance).
+  EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewAssets', 'viewFinance'] },
   // OCH inspects on site like a site-safety officer: sees the project cards but
   // deliberately has NO enterProject — clicking a card opens a safety report form.
   OCH:      { key: 'OCH',      label: 'เจ้าหน้าที่ชีวอนามัย',           scope: 'all',    caps: ['view', 'createProject', 'ochReport'] },
-  // GM works the พัสดุ side only — no `view` at all, so hasAccess()
+  // GM works the พัสดุ + การเงิน side only — no `view` at all, so hasAccess()
   // keeps them out of every project and the โครงการ tab stays hidden.
-  GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewAssets', 'manageAssets'] },
+  GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewAssets', 'manageAssets', 'viewFinance', 'manageFinance'] },
   EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
 };
 const POSITION_ORDER = ['ADMIN', 'AV', 'VET', 'SCI', 'ACT', 'AEC', 'IACUC', 'QA', 'AUDIT', 'EX', 'OCH', 'GM', 'EXTERNAL'];
@@ -99,6 +101,8 @@ const CAPABILITIES = [
   { key: 'ochReport',     label: 'รายงานความปลอดภัย / ชีวอนามัย' },
   { key: 'viewAssets',    label: 'เข้าถึงงานพัสดุ (วัสดุ + ครุภัณฑ์)' },
   { key: 'manageAssets',  label: 'เพิ่ม / แก้ทะเบียนพัสดุ · รับเข้า-เบิกออก' },
+  { key: 'viewFinance',   label: 'ดูสรุปการเงินรายเดือน' },
+  { key: 'manageFinance', label: 'บันทึกค่าใช้จ่ายอื่น / ตั้งอัตราค่าฝากเลี้ยง' },
 ];
 
 // mock user accounts. `position` = the ONE system-level job (a POSITIONS key).
@@ -639,9 +643,73 @@ const ASSETS = [
       { date: isoDaysAgo(12), type: 'out', qty: 4,  by: 'ACT — จนท.ดูแลสัตว์ทดลอง', note: 'ทำความสะอาดห้อง AR01–AR02' }] }),
 ];
 
+// ============================================================
+// การเงิน  (facility-wide)
+// ============================================================
+// หน่วยสัตว์ทดลองเลี้ยงตัวเองด้วย "ค่าฝากเลี้ยง" ที่เก็บจากโครงการ ส่วนรายจ่าย
+// มาจากสี่ทาง — สามทางแรกระบบรู้อยู่แล้วจากทะเบียนพัสดุ จึงไม่ต้องกรอกซ้ำ:
+//   1. วัสดุที่ "เบิกออก" ในเดือนนั้น        (มูลค่าเกิดตอนเบิก ไม่ใช่ตอนซื้อ)
+//   2. ค่าเสื่อมครุภัณฑ์ของเดือนนั้น          (ค่าเสื่อมรายปี ÷ 12)
+//   3. ค่าซ่อมที่แจ้งในเดือนนั้น
+//   4. ค่าน้ำ ค่าไฟ ค่าจ้าง ฯลฯ — ไม่มีที่อื่นในระบบบันทึกไว้ จึงกรอกเองในหน้านี้
+// ตัวเลขทั้งหมดคิดเป็น "รายเดือน" เพราะหน่วยงานปิดยอดและตั้งเบิกเป็นเดือน
+
+// อัตรากลางค่าฝากเลี้ยง — โครงการหนึ่งตั้งอัตราของตัวเองทับได้ (project.billing.rate)
+const BOARDING_RATE = 20;              // บาท / ตัว / วัน
+
+// หัตถการที่โครงการ "ฝากหน่วยทำ" — คิดเป็นครั้ง แยกจากค่าฝากเลี้ยงรายวัน
+// ราคาผูกไว้กับรายการ ณ ตอนบันทึก (services[].price) เพื่อไม่ให้ยอดเดือนเก่า
+// เปลี่ยนตามเมื่อมีการปรับราคาในภายหลัง
+const PROCEDURES = [
+  { key: 'gavage',   label: 'ป้อนสารทางปาก (Oral gavage)',  price: 35 },
+  { key: 'inject',   label: 'ฉีดสารทดสอบ (IP / SC / IV)',   price: 40 },
+  { key: 'blood',    label: 'เจาะเลือดเพื่อส่งตรวจ',          price: 120 },
+  { key: 'weigh',    label: 'ชั่งน้ำหนัก + บันทึกข้อมูลให้',   price: 15 },
+  { key: 'euth',     label: 'การุณยฆาตตามหลักมนุษยธรรม',     price: 150 },
+  { key: 'necropsy', label: 'ผ่าซาก / เก็บอวัยวะส่งตรวจ',     price: 350 },
+];
+
+// หมวดค่าใช้จ่ายอื่น — ที่ไม่ได้มาจากทะเบียนพัสดุ
+const EXPENSE_CATEGORIES = [
+  { key: 'utility', label: 'ค่าน้ำ / ค่าไฟ',        icon: '\u{1F4A1}' },
+  { key: 'wage',    label: 'ค่าจ้าง / ค่าตอบแทน',    icon: '\u{1F477}' },
+  { key: 'service', label: 'จ้างเหมาบริการ',         icon: '\u{1F9FE}' },
+  { key: 'other',   label: 'อื่น ๆ',                icon: '\u{1F4C4}' },
+];
+
+// วันที่ในเดือนที่ผ่านมา n เดือน — ใช้หว่านข้อมูลตัวอย่างให้กระจายหลายเดือน
+function isoMonthsAgo(n, day) {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() - n);
+  d.setDate(day);
+  return d.toISOString().slice(0, 10);
+}
+
+let _expSeq = 0;
+function makeExpense(monthsAgo, day, category, label, amount, note) {
+  _expSeq++;
+  return { id: 'EX' + _expSeq, date: isoMonthsAgo(monthsAgo, day), category, label, amount, note: note || '',
+           by: 'GM — จนท.บริหารงานทั่วไป' };
+}
+
+// ค่าสาธารณูปโภค/ค่าจ้างย้อนหลัง 4 เดือน — ค่าไฟแกว่งตามภาระความเย็นของห้องเลี้ยง
+const OTHER_EXPENSES = [];
+[[0, 62000], [1, 58500], [2, 64200], [3, 55800]].forEach(([m, power]) => {
+  OTHER_EXPENSES.push(
+    makeExpense(m, 5,  'utility', 'ค่าไฟฟ้า — ห้องเลี้ยงสัตว์ AR01–AR04', power, 'ตามใบแจ้งหนี้ กฟภ.'),
+    makeExpense(m, 5,  'utility', 'ค่าน้ำประปา', 4200 + m * 150, ''),
+    makeExpense(m, 25, 'wage',    'ค่าตอบแทนพนักงานดูแลสัตว์ทดลอง (2 อัตรา)', 34000, ''),
+    makeExpense(m, 25, 'service', 'จ้างเหมากำจัดซากและขยะติดเชื้อ', 6800, 'เก็บสัปดาห์ละ 2 ครั้ง'),
+  );
+});
+
 const DB = {
   users: USERS,
   assets: ASSETS,
+  // การเงิน — เก็บเฉพาะสิ่งที่ระบบไม่รู้จากที่อื่น: อัตรากลาง และค่าใช้จ่ายที่กรอกเอง
+  // ยอดรายเดือนที่เหลือคำนวณสดจากทะเบียนพัสดุและจากโครงการ ไม่เก็บซ้ำ
+  finance: { boardingRate: BOARDING_RATE, expenses: OTHER_EXPENSES },
   // ตัวตนที่ใช้งานอยู่ — สลับได้จากแผงสาธิตมุมขวาล่าง
   // ตั้งต้นเป็น ADMIN เพราะเห็นทุกโครงการและทุกฟังก์ชัน จึงเป็นจุดเริ่มที่ดีสำหรับการสาธิต
   // (ของจริงค่านี้มาจากการล็อกอิน ไม่ได้ตั้งไว้ในไฟล์)
@@ -707,6 +775,22 @@ const DB = {
       diets: dietsP1,
       groups: groupsP1,
       cages: cagesP1,
+      // ค่าบริการที่หน่วยเรียกเก็บจากโครงการนี้
+      //   rate      — อัตราค่าฝากเลี้ยงเฉพาะโครงการ (null = ใช้อัตรากลาง)
+      //   services  — หัตถการที่ฝากหน่วยทำ หนึ่งแถวต่อหนึ่งครั้งที่ทำ
+      //               price ติดมากับแถว เพื่อให้ยอดเดือนที่ปิดไปแล้วไม่ขยับ
+      //               เมื่อมีการปรับราคากลางภายหลัง
+      billing: {
+        rate: null,
+        services: [
+          { date: isoDaysAgo(12), key: 'weigh',  qty: 48, price: 15,  by: 'Sci — นักวิทยาศาสตร์', note: 'ชั่งน้ำหนักแรกเข้าทั้งโครงการ' },
+          { date: isoDaysAgo(7),  key: 'gavage', qty: 36, price: 35,  by: 'AHS — นักวิจัยปฏิบัติการ', note: 'เริ่มให้สารทดสอบ 3 กลุ่ม' },
+          { date: isoDaysAgo(5),  key: 'weigh',  qty: 46, price: 15,  by: 'Sci — นักวิทยาศาสตร์', note: 'รอบชั่งประจำสัปดาห์' },
+          { date: isoDaysAgo(3),  key: 'blood',  qty: 8,  price: 120, by: 'AHS — นักวิจัยปฏิบัติการ', note: 'เก็บเลือดกลุ่ม Treatment-3' },
+          { date: isoDaysAgo(2),  key: 'euth',   qty: 1,  price: 150, by: 'AV — สัตวแพทย์ประจำหน่วย', note: 'D-01-2 humane endpoint' },
+          { date: isoDaysAgo(1),  key: 'necropsy', qty: 1, price: 350, by: 'Sci — นักวิทยาศาสตร์', note: 'ผ่าซาก D-01-2 เก็บตับ' },
+        ],
+      },
       // (seedTeam below replaces these with the standard demo team)
       members: [
         { userId: 'u_pi', roles: ['PI'] },
@@ -760,6 +844,15 @@ const DB = {
       diets: dietsDone,
       groups: groupsDone,
       cages: cagesDone,
+      // โครงการนำร่อง — ตกลงอัตราพิเศษไว้ 15 บาท/ตัว/วัน ต่ำกว่าอัตรากลาง
+      billing: {
+        rate: 15,
+        services: [
+          { date: '2026-01-08', key: 'weigh', qty: 12, price: 15, by: 'Sci — นักวิทยาศาสตร์', note: 'ชั่งน้ำหนักแรกเข้า' },
+          { date: '2026-02-10', key: 'weigh', qty: 12, price: 15, by: 'Sci — นักวิทยาศาสตร์', note: 'รอบเดือนกุมภาพันธ์' },
+          { date: '2026-04-02', key: 'euth',  qty: 12, price: 150, by: 'AV — สัตวแพทย์ประจำหน่วย', note: 'สิ้นสุดการทดลอง' },
+        ],
+      },
       members: [{ userId: 'u_pi', roles: ['PI'] }],
     },
   ],
