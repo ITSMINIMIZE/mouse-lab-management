@@ -2132,3 +2132,22 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 .af-hint { font-size: 12.5px; color: var(--text-muted); background: var(--surface-2); padding: 9px 12px; border-radius: var(--radius-sm); line-height: 1.6; }
 .choice i { display: block; font-size: 11px; font-style: normal; font-weight: 500; opacity: .75; margin-top: 2px; }
 .choice:disabled { opacity: .55; cursor: default; }
+
+/* ---------- พัสดุ: สองกล่อง (วัสดุ / ครุภัณฑ์) ----------
+   กล่องหนึ่งกล่องคือทะเบียนหนึ่งชุด มีหัวเรื่อง คำอธิบายว่ามูลค่าคิดยังไง และ
+   ยอดรวมของกล่องนั้นเอง — ยอดอยู่ติดกับตารางที่มันสรุป ไม่ต้องเลื่อนขึ้นไปดู
+   การ์ดข้างบน */
+.as-sec { margin-bottom: 22px; }
+.as-sec-head { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.as-sec-head h3 { font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.as-sec-head .desc { color: var(--text-muted); font-size: 12.5px; margin-top: 3px; max-width: 620px; }
+.as-n { font-size: 12px; font-weight: 700; color: var(--text-muted); background: var(--surface-2);
+        border: 1px solid var(--border); border-radius: 999px; padding: 1px 9px; }
+.as-sec-sum { text-align: right; white-space: nowrap; }
+.as-sec-sum span { display: block; font-size: 11.5px; color: var(--text-muted); }
+.as-sec-sum b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.as-sec-sum b.good { color: var(--green); }
+.as-sec-sum b.bad { color: var(--red); }
+.as-table .as-age { display: block; font-size: 11px; font-style: normal; color: var(--text-muted); margin-top: 2px; }
+.as-bar .as-cats { margin-bottom: 0; }
+

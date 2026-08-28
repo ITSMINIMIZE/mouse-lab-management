@@ -752,8 +752,8 @@ const App = {
     return this.myProjectRoles(project).some(r => ROLES[r] && ROLES[r].caps.includes(cap));
   },
   // can the current user see this project in the list at all?
-  // needs the `view` capability first — that is what keeps GM (ครุภัณฑ์ only)
-  // only) out of every project even though their position scope is 'all'.
+  // needs the `view` capability first — that is what keeps GM (พัสดุ only)
+  // out of every project even though their position scope is 'all'.
   hasAccess(project) {
     if (!this.can('view', project)) return false;
     // A project still in the creation pipeline (requested / aec_ok / rejected) is
@@ -769,15 +769,12 @@ const App = {
   // but has no enterProject, so a card click takes them to the safety form instead.
   canEnter(project) { return this.hasAccess(project) && this.can('enterProject', project); },
 
-  // ---- top-level tabs (โครงการ / ครุภัณฑ์) --------------------------------
-  // Visibility is per capability: GM sees only ครุภัณฑ์, everyone else sees
-  // โครงการ and — if entitled — ครุภัณฑ์ alongside it.
-  // การเงิน used to be a third tab. It was removed once ครุภัณฑ์ grew its own
-  // balance summary: two screens both answering "what did the unit spend" is one
-  // screen too many, and the money lives where the items are.
+  // ---- top-level tabs (โครงการ / พัสดุ) -----------------------------------
+  // Visibility is per capability: GM sees only พัสดุ, everyone else sees
+  // โครงการ and — if entitled — พัสดุ alongside it.
   TABS: [
     { key: 'projects', label: 'โครงการ', icon: '🧪', cap: 'view' },
-    { key: 'assets',   label: 'ครุภัณฑ์', icon: '📦', cap: 'viewAssets' },
+    { key: 'assets',   label: 'พัสดุ',   icon: '📦', cap: 'viewAssets' },
   ],
   visibleTabs() { return this.TABS.filter(t => this.can(t.cap)); },
   // which tab a route belongs to (for highlighting)
@@ -847,9 +844,9 @@ const App = {
     if (name === 'assets') return this.renderAssets();
     if (this.PROJECT_MODULES[name]) return this.renderProjectModule(name);
     // A name nothing matches used to fall out here silently: route said one thing,
-    // the screen still showed the last one. Removing the การเงิน route is what
-    // exposed it. Land somewhere real instead of half-navigating — and never
-    // bounce to a target that is itself unrouted, or this recurses forever.
+    // the screen still showed the last one. Land somewhere real instead of
+    // half-navigating — and never bounce to a target that is itself unrouted,
+    // or this recurses forever.
     const home = this.homeRoute();
     return this.go(home === name ? 'roles' : home);
   },
@@ -887,7 +884,7 @@ const App = {
     );
   },
   // =========================================================
-  // ครุภัณฑ์ และ วัสดุ
+  // พัสดุ — วัสดุ และ ครุภัณฑ์
   // =========================================================
   // ทะเบียนเดียว สองชนิด เพราะทั้งคู่คือของที่ซื้อด้วยเงินหน่วยงานและต้องสรุปยอด
   // รวมกัน แต่คิดมูลค่าคนละแบบ:
@@ -939,16 +936,21 @@ const App = {
   openRepairs(a) { return (a.repairs || []).filter(r => r.status === 'open'); },
   lowStock(a) { return a.kind === 'consumable' && a.minQty != null && (a.qty || 0) <= a.minQty; },
 
+  // หน้าพัสดุ = สองกล่อง ไม่ใช่ตารางเดียวที่มีตัวกรองชนิด
+  // วัสดุอยู่บน ครุภัณฑ์อยู่ล่าง — เรียงตามความถี่ที่ต้องดู ไม่ใช่ตามมูลค่า:
+  // ของที่ต้องเช็กเกือบทุกวันคือ "ของจะหมดหรือยัง" ส่วนทะเบียนครุภัณฑ์เปิดดู
+  // เดือนละครั้งตอนปิดยอด สองกล่องยังมีคอลัมน์คนละชุดด้วย เพราะคำถามที่ถาม
+  // ต่างกันจริง ๆ (คงเหลือ/จุดสั่งซื้อ ↔ ค่าเสื่อม/มูลค่าตามบัญชี) — ตารางเดียว
+  // ที่สลับความหมายไปมาตามชนิดคือสิ่งที่การแยกนี้แก้
   renderAssets() {
     if (!this.can('viewAssets')) { this.toast('คุณไม่มีสิทธิ์เข้าถึงหน้านี้'); return this.go(this.homeRoute()); }
     const canEdit = this.can('manageAssets');
-    this.assetFilter = this.assetFilter || { kind: 'ALL', cat: 'ALL', q: '' };
+    this.assetFilter = this.assetFilter || { cat: 'ALL', q: '' };
     const f = this.assetFilter;
     const all = DB.assets;
 
     const match = a =>
-      (f.kind === 'ALL' || a.kind === f.kind)
-      && (f.cat === 'ALL' || a.category === f.cat)
+      (f.cat === 'ALL' || a.category === f.cat)
       && (!f.q || [a.name, a.code, a.brand, a.model, a.serial, a.room].join(' ').toLowerCase().includes(f.q.toLowerCase()));
     const list = all.filter(match);
 
@@ -971,13 +973,8 @@ const App = {
     const alerts = [];
     const openRep = all.filter(a => this.openRepairs(a).length);
     const low = stock.filter(a => this.lowStock(a));
-    if (openRep.length) alerts.push(`<button class="as-alert warn" data-jump="repair">🔧 มีงานซ่อมค้างอยู่ <b>${openRep.length}</b> รายการ</button>`);
     if (low.length) alerts.push(`<button class="as-alert bad" data-jump="low">📉 วัสดุต่ำกว่าจุดสั่งซื้อ <b>${low.length}</b> รายการ</button>`);
-
-    const kindTabs = [['ALL', 'ทั้งหมด', all.length],
-      ['asset', 'ครุภัณฑ์', all.filter(a => a.kind === 'asset').length],
-      ['consumable', 'วัสดุสิ้นเปลือง', all.filter(a => a.kind === 'consumable').length]]
-      .map(([k, l, n]) => `<button class="btn as-kind ${f.kind === k ? 'on' : ''}" data-kind="${k}">${l} <b>${n}</b></button>`).join('');
+    if (openRep.length) alerts.push(`<button class="as-alert warn" data-jump="repair">🔧 มีงานซ่อมค้างอยู่ <b>${openRep.length}</b> รายการ</button>`);
 
     const catChips = ['ALL', ...ASSET_CATEGORIES.map(c => c.key)]
       .filter(k => k === 'ALL' || all.some(a => a.category === k))
@@ -987,86 +984,135 @@ const App = {
           k === 'ALL' ? 'ทุกหมวด' : `${c.icon} ${c.label}`}</button>`;
       }).join('');
 
-    const rows = list.length ? list.map(a => {
-      const st = this.assetStatus(a);
+    // ชื่อ + รหัส + ยี่ห้อ — ช่องแรกของทั้งสองตาราง เหมือนกันทั้งคู่
+    const nameCell = a => {
       const cat = this.catOf(a);
-      const open = this.openRepairs(a).length;
-      const isAsset = a.kind === 'asset';
-      const value = isAsset
-        ? `<b>${this.baht(this.bookValue(a))}</b><i>ทุน ${this.baht(a.price)}${
-            a.lifeYears ? ` · ${a.lifeYears} ปี` : ''}</i>`
-        : `<b>${this.baht(this.bookValue(a))}</b><i>${this.baht(a.price)} / ${this.esc(a.unit)}</i>`;
-      const qty = isAsset
-        ? `<span class="as-dep${this.depDone(a) ? ' done' : ''}">${
-            this.depDone(a) ? 'ตัดค่าเสื่อมครบแล้ว' : `ค่าเสื่อม ${this.baht(this.depPerYear(a))}/ปี`}</span>`
-        : `<span class="as-qty${this.lowStock(a) ? ' low' : ''}">${a.qty} ${this.esc(a.unit)}${
-            a.minQty != null ? `<i>ขั้นต่ำ ${a.minQty}</i>` : ''}</span>`;
+      return `<td>${cat.icon} <b>${this.esc(a.name)}</b>
+        <div class="as-sub">${a.code ? `<span class="mono">${this.esc(a.code)}</span> · ` : ''}${
+          [a.brand, a.model].filter(Boolean).map(x => this.esc(x)).join(' ') || '—'}</div></td>`;
+    };
+    const whereCell = a => `<td>${a.room ? `${this.esc(a.room)}${
+      a.rack && a.rack !== '—' ? ' · ' + this.esc(a.rack) : ''}` : '—'}</td>`;
+
+    // ---- กล่องบน: วัสดุ — คำถามคือ "เหลือเท่าไร ต้องสั่งหรือยัง" ----
+    const stockList = list.filter(a => a.kind === 'consumable');
+    const stockRows = stockList.length ? stockList.map(a => {
+      const used = this.usedThisYear(a);
       return `<tr class="as-row" data-id="${a.id}">
-        <td>${cat.icon} <b>${this.esc(a.name)}</b>
-          <div class="as-sub">${a.code ? `<span class="mono">${this.esc(a.code)}</span> · ` : ''}${
-            [a.brand, a.model].filter(Boolean).map(x => this.esc(x)).join(' ') || '—'}</div></td>
-        <td>${a.room ? `${this.esc(a.room)}${a.rack && a.rack !== '—' ? ' · ' + this.esc(a.rack) : ''}` : '—'}</td>
-        <td>${qty}</td>
-        <td class="num as-val">${value}</td>
+        ${nameCell(a)}
+        ${whereCell(a)}
+        <td><span class="as-qty${this.lowStock(a) ? ' low' : ''}">${a.qty} ${this.esc(a.unit)}${
+          a.minQty != null ? `<i>จุดสั่งซื้อ ${a.minQty}</i>` : ''}</span></td>
+        <td class="num as-val"><b>${this.baht(used)}</b><i>ตัดเป็นค่าใช้จ่ายแล้ว</i></td>
+        <td class="num as-val"><b>${this.baht(this.bookValue(a))}</b><i>${this.baht(a.price)} / ${this.esc(a.unit)}</i></td>
+        <td>${this.lowStock(a)
+          ? `<span class="as-st bad">ต่ำกว่าจุดสั่งซื้อ</span>`
+          : `<span class="as-st ok">พอใช้</span>`}</td>
+      </tr>`;
+    }).join('') : `<tr><td colspan="6" class="empty-note" style="text-align:center;padding:22px">ไม่พบวัสดุที่ตรงกับที่ค้นหา</td></tr>`;
+
+    // ---- กล่องล่าง: ครุภัณฑ์ — คำถามคือ "เหลือมูลค่าเท่าไร ใช้งานได้อยู่ไหม" ----
+    const assetList = list.filter(a => a.kind === 'asset');
+    const assetRows = assetList.length ? assetList.map(a => {
+      const st = this.assetStatus(a);
+      const open = this.openRepairs(a).length;
+      const age = this.assetAgeYears(a);
+      return `<tr class="as-row" data-id="${a.id}">
+        ${nameCell(a)}
+        ${whereCell(a)}
+        <td><span class="as-dep${this.depDone(a) ? ' done' : ''}">${
+          this.depDone(a) ? 'ตัดค่าเสื่อมครบแล้ว' : `${this.baht(this.depPerYear(a))} / ปี`}</span>
+          <i class="as-age">ใช้มา ${age.toFixed(1)} ปี${a.lifeYears ? ` จาก ${a.lifeYears} ปี` : ''}</i></td>
+        <td class="num as-val"><b>${this.baht(this.bookValue(a))}</b><i>ทุน ${this.baht(a.price)}</i></td>
+        <td class="num as-val">${this.repairCostThisYear(a)
+          ? `<b>${this.baht(this.repairCostThisYear(a))}</b><i>ซ่อม 12 เดือน</i>`
+          : '<span class="as-none">–</span>'}</td>
         <td><span class="as-st ${st.tone}">${st.label}</span>${
           open ? `<span class="as-open">🔧 ${open}</span>` : ''}</td>
       </tr>`;
-    }).join('') : `<tr><td colspan="5" class="empty-note" style="text-align:center;padding:26px">ไม่พบรายการที่ตรงกับที่ค้นหา</td></tr>`;
+    }).join('') : `<tr><td colspan="6" class="empty-note" style="text-align:center;padding:22px">ไม่พบครุภัณฑ์ที่ตรงกับที่ค้นหา</td></tr>`;
 
     this.shell('', `
       <div class="page wide">
         <div class="page-head">
-          <div><h2>📦 ครุภัณฑ์ และ วัสดุ</h2>
-            <div class="desc">ทะเบียนของหน่วยสัตว์ทดลอง · ครุภัณฑ์ตัดค่าเสื่อมตามอายุการใช้งาน · วัสดุตัดเป็นค่าใช้จ่ายตอนเบิกออก</div></div>
+          <div><h2>📦 พัสดุ</h2>
+            <div class="desc">ทะเบียนของหน่วยสัตว์ทดลอง · วัสดุตัดเป็นค่าใช้จ่ายตอนเบิกออก · ครุภัณฑ์ตัดค่าเสื่อมตามอายุการใช้งาน</div></div>
           <span class="spacer" style="flex:1"></span>
           ${canEdit ? `<button class="btn btn-primary" id="asAdd">+ เพิ่มรายการ</button>` : ''}
         </div>
 
         <div class="as-sum">
+          <div class="as-card"><span>มูลค่าวัสดุคงคลัง</span><b>${this.baht(sum.stockValue)}</b>
+            <i>${stock.length} รายการ · เบิกใช้ 12 เดือน ${this.baht(sum.usedYear)}</i></div>
           <div class="as-card"><span>มูลค่าครุภัณฑ์ตามบัญชี</span><b>${this.baht(sum.bookAsset)}</b>
             <i>ราคาทุนรวม ${this.baht(sum.costAsset)}</i></div>
           <div class="as-card"><span>ค่าเสื่อมราคา / ปี</span><b>${this.baht(sum.depYear)}</b>
             <i>เฉพาะที่ยังไม่ตัดครบ</i></div>
-          <div class="as-card"><span>มูลค่าวัสดุคงคลัง</span><b>${this.baht(sum.stockValue)}</b>
-            <i>${stock.length} รายการ</i></div>
           <div class="as-card total"><span>ค่าใช้จ่ายรอบ 12 เดือน</span><b>${this.baht(sum.expenseYear)}</b>
             <i>ค่าเสื่อม ${this.baht(sum.depYear)} · วัสดุ ${this.baht(sum.usedYear)} · ซ่อม ${this.baht(sum.repairYear)}</i></div>
         </div>
         ${alerts.length ? `<div class="as-alerts">${alerts.join('')}</div>` : ''}
 
         <div class="as-bar">
-          <div class="as-kinds">${kindTabs}</div>
+          <input id="asSearch" class="as-search" placeholder="ค้นหาชื่อ · เลขครุภัณฑ์ · รหัสวัสดุ · ยี่ห้อ · ห้อง" value="${this.esc(f.q)}">
           <span class="spacer" style="flex:1"></span>
-          <input id="asSearch" class="as-search" placeholder="ค้นหาชื่อ · เลขครุภัณฑ์ · ยี่ห้อ · ห้อง" value="${this.esc(f.q)}">
+          <div class="as-cats">${catChips}</div>
         </div>
-        <div class="as-cats">${catChips}</div>
 
-        <div class="report-canvas" style="padding:0;overflow:auto">
-          <table class="data as-table">
-            <thead><tr><th>รายการ</th><th>ที่ตั้ง</th><th>คงเหลือ / ค่าเสื่อม</th><th class="num">มูลค่า (บาท)</th><th>สถานะ</th></tr></thead>
-            <tbody>${rows}</tbody>
-          </table>
-        </div>
+        <section class="as-sec" id="secStock">
+          <div class="as-sec-head">
+            <div><h3>📦 วัสดุสิ้นเปลือง <span class="as-n">${stockList.length}</span></h3>
+              <div class="desc">ใช้แล้วหมดไป · นับเป็นจำนวนคงเหลือ · มูลค่าตัดเป็นค่าใช้จ่ายตอนเบิกออก</div></div>
+            <span class="spacer" style="flex:1"></span>
+            <div class="as-sec-sum"><span>มูลค่าคงคลัง</span><b>${this.baht(sum.stockValue)}</b></div>
+          </div>
+          <div class="report-canvas" style="padding:0;overflow:auto">
+            <table class="data as-table">
+              <thead><tr><th>รายการ</th><th>ที่เก็บ</th><th>คงเหลือ</th>
+                <th class="num">เบิกใช้ 12 เดือน</th><th class="num">มูลค่าคงคลัง</th><th>สถานะ</th></tr></thead>
+              <tbody>${stockRows}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="as-sec" id="secAsset">
+          <div class="as-sec-head">
+            <div><h3>🏷️ ครุภัณฑ์ <span class="as-n">${assetList.length}</span></h3>
+              <div class="desc">ของคงทน · มีเลขครุภัณฑ์รายชิ้น · มูลค่าทยอยตัดเป็นค่าเสื่อมตามอายุการใช้งาน</div></div>
+            <span class="spacer" style="flex:1"></span>
+            <div class="as-sec-sum"><span>มูลค่าตามบัญชี</span><b>${this.baht(sum.bookAsset)}</b></div>
+          </div>
+          <div class="report-canvas" style="padding:0;overflow:auto">
+            <table class="data as-table">
+              <thead><tr><th>รายการ</th><th>ที่ตั้ง</th><th>ค่าเสื่อมราคา</th>
+                <th class="num">มูลค่าตามบัญชี</th><th class="num">ค่าซ่อม</th><th>สถานะ</th></tr></thead>
+              <tbody>${assetRows}</tbody>
+            </table>
+          </div>
+        </section>
         <p class="empty-note" style="margin-top:10px">แสดง ${list.length} จาก ${all.length} รายการ · แตะแถวเพื่อดูรายละเอียด</p>
       </div>`);
 
     if (canEdit) this.el('asAdd').onclick = () => this.openAssetForm(null);
-    document.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { f.kind = b.dataset.kind; this.renderAssets(); });
     document.querySelectorAll('[data-cat]').forEach(b => b.onclick = () => { f.cat = b.dataset.cat; this.renderAssets(); });
     document.querySelectorAll('.as-row').forEach(r => r.onclick = () => this.openAssetDetail(DB.assets.find(a => a.id === r.dataset.id)));
     document.querySelectorAll('[data-jump]').forEach(b => b.onclick = () => {
       // ไม่ได้ทำหน้าใหม่ — กรองให้เห็นเฉพาะที่ต้องจัดการ
-      f.kind = b.dataset.jump === 'low' ? 'consumable' : 'ALL';
       f.cat = 'ALL'; f.q = '';
       this.assetJump = b.dataset.jump;
       this.renderAssets();
     });
-    // เมื่อกดแถบเตือน ให้เหลือเฉพาะรายการที่เข้าเงื่อนไข
+    // เมื่อกดแถบเตือน ให้เหลือเฉพาะรายการที่เข้าเงื่อนไข — กล่องที่ไม่เหลืออะไร
+    // ต้องบอกว่าว่างเพราะไม่เข้าเงื่อนไข ไม่ใช่ปล่อยหัวตารางลอย
     if (this.assetJump) {
       const want = this.assetJump === 'low' ? (a => this.lowStock(a)) : (a => this.openRepairs(a).length);
       document.querySelectorAll('.as-row').forEach(r => {
         const a = DB.assets.find(x => x.id === r.dataset.id);
         if (!want(a)) r.remove();
+      });
+      document.querySelectorAll('.as-sec tbody').forEach(tb => {
+        if (!tb.children.length) tb.innerHTML =
+          `<tr><td colspan="6" class="empty-note" style="text-align:center;padding:22px">ไม่มีรายการที่เข้าเงื่อนไขในกล่องนี้</td></tr>`;
       });
       this.assetJump = null;
     }
@@ -1680,7 +1726,7 @@ const App = {
     const projRoles = proj ? this.myProjectRoles(proj) : [];
     const projRole = projRoles.join(' + ');
     const sysLabel = `${this.positionLabel()} (${this.positionKey()})`;
-    // top-level tabs — only those the position is entitled to (GM: ครุภัณฑ์ only)
+    // top-level tabs — only those the position is entitled to (GM: พัสดุ only)
     const activeTab = this.tabOfRoute(this.route.name);
     // always rendered: the lit tab is both the "you are here" marker and the way
     // back up (the redundant leading breadcrumb was removed in favour of it)
@@ -1857,7 +1903,7 @@ const App = {
       btn.innerHTML = `<span class="spin"></span> กำลังเข้าสู่ระบบ…`;
       setTimeout(() => {
         DB.currentUserId = match.id;
-        // land on the first tab this position is entitled to (GM starts at ครุภัณฑ์)
+        // land on the first tab this position is entitled to (GM starts at พัสดุ)
         this.go(this.homeRoute());
       }, 350);
     });
@@ -2508,8 +2554,6 @@ const App = {
       this.el(id).addEventListener('input', () => this.captureReqHumane()));
     this.el('cpAddDoc').onclick = () => { this.draft.extraDocs.push({ _id: this.uid(), label: '', file: null }); this.renderReqExtraDocs(); };
     this.el('cpAddPerson').onclick = () => { this.captureReqPeople(); this.draft.appointments.push({ role: 'COPI', userId: '', name: '' }); this.renderReqPeople(); };
-
-    // file pickers + clears — capture everything first, the whole page re-renders
     const captureAll = () => { this.captureReqMeta(); this.captureReqDiets(); this.captureReqGroups(); this.captureReqHumane(); this.captureReqPeople(); };
     // extraDocs labels are written to the draft on input, so nothing to capture there
     this.el('root').querySelectorAll('[data-file]').forEach(inp => {

@@ -51,12 +51,12 @@ const POSITIONS = {
   IACUC:    { key: 'IACUC',    label: 'คณะกรรมการกำกับดูแล',          scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
   QA:       { key: 'QA',       label: 'หน่วยประกันคุณภาพ',             scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
   AUDIT:    { key: 'AUDIT',    label: 'ผู้ตรวจสอบ',                    scope: 'all',    caps: ['view', 'enterProject', 'createProject'] },
-  // EX reads details like AEC (no enterProject) but keeps ครุภัณฑ์
+  // EX reads details like AEC (no enterProject) but keeps พัสดุ
   EX:       { key: 'EX',       label: 'ผู้บริหารหน่วยสัตว์ทดลอง',       scope: 'all',    caps: ['view', 'createProject', 'viewAssets'] },
   // OCH inspects on site like a site-safety officer: sees the project cards but
   // deliberately has NO enterProject — clicking a card opens a safety report form.
   OCH:      { key: 'OCH',      label: 'เจ้าหน้าที่ชีวอนามัย',           scope: 'all',    caps: ['view', 'createProject', 'ochReport'] },
-  // GM works the ครุภัณฑ์ side only — no `view` at all, so hasAccess()
+  // GM works the พัสดุ side only — no `view` at all, so hasAccess()
   // keeps them out of every project and the โครงการ tab stays hidden.
   GM:       { key: 'GM',       label: 'เจ้าหน้าที่บริหารงานทั่วไป',      scope: 'all',    caps: ['viewAssets', 'manageAssets'] },
   EXTERNAL: { key: 'EXTERNAL', label: 'บุคคลภายนอก',                  scope: 'member', caps: ['view', 'enterProject', 'viewCage', 'createProject'] },
@@ -97,8 +97,8 @@ const CAPABILITIES = [
   { key: 'approve',       label: 'สร้างโครงการจริง / ตีกลับ (สัตวแพทย์)' },
   { key: 'manageUsers',   label: 'จัดการบัญชีผู้ใช้ระบบ' },
   { key: 'ochReport',     label: 'รายงานความปลอดภัย / ชีวอนามัย' },
-  { key: 'viewAssets',    label: 'เข้าถึงงานครุภัณฑ์' },
-  { key: 'manageAssets',  label: 'เพิ่ม / แก้ทะเบียนครุภัณฑ์-วัสดุ' },
+  { key: 'viewAssets',    label: 'เข้าถึงงานพัสดุ (วัสดุ + ครุภัณฑ์)' },
+  { key: 'manageAssets',  label: 'เพิ่ม / แก้ทะเบียนพัสดุ · รับเข้า-เบิกออก' },
 ];
 
 // mock user accounts. `position` = the ONE system-level job (a POSITIONS key).
