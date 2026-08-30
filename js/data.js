@@ -1055,14 +1055,68 @@ const DB = {
       { rejectStage: 'aec', rejectReason: 'จำนวนสัตว์ต่อกลุ่มยังไม่สอดคล้องกับการคำนวณทางสถิติ และแผนภาพการทดลองไม่ครบถ้วน', reviewedBy: 'AEC — สำนักเลขาฯ จริยธรรม', reviewedAt: isoDaysAgo(1) }),
   );
 
-  // AV has finished — the project EXISTS and is live, with empty cages waiting for
-  // Sci to weigh the mice in. No group is assigned to any cage yet.
-  DB.projects.push(builtProject());
+  // สองสถานะก่อนโครงการเดินจริง — แม่พิมพ์เดียวกัน ต่างกันแค่ระยะที่ไปถึง
+  DB.projects.push(
+    // สร้างกรงแล้ว แต่สัตว์ยังไม่มาส่ง — ยังไม่มีเอกสารกักโรคสักใบ
+    builtProject({ id: 'P9', name: 'Bone Healing Study', protocolNo: 'MU-AEC-2569-024',
+      objective: 'ศึกษาการสมานของกระดูกหลังได้รับสารกระตุ้นในหนูทดลอง',
+      phase: 'awaiting_intake',
+      quarantine: { intake: null, program: null, daily: [], release: null } }),
+    // สัตว์มาถึงและกักอยู่ — เอกสารครบทั้งสองใบ พิมพ์ได้ทันที
+    builtProject({ id: 'P8', name: 'Renal Function Study', protocolNo: 'MU-AEC-2569-021',
+      objective: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
+      phase: 'quarantine', quarantine: quarantineDemo() }),
+  );
 
   // an AV-built project that is already live but still empty: shelves may hold
   // UNEQUAL numbers of cages, every cage has no mice, no diet and no treatment group.
-  function builtProject() {
-    const id = 'P8';
+  // ชุดเอกสารกักกันโรคตัวอย่าง — ตรวจรับครบ 10 ตัว (ไม่ผ่าน 1) และดูแลมาแล้ว 5 วัน
+  // มีไว้ให้เปิดหน้ากักกันโรคแล้วพิมพ์เอกสารได้ทั้งสองใบทันทีโดยไม่ต้องกรอกอะไรก่อน
+  function quarantineDemo() {
+    return {
+      intake: {
+        date: isoDaysAgo(5), time: '09:20', code: 'MU-AEC-2569-021',
+        ageWeeks: 7, weightMin: 22, weightMax: 28, by: 'Sci — นักวิทยาศาสตร์',
+        rows: (() => {
+          const cages = ['Q-01', 'Q-02', 'Q-03', 'Q-04', 'Q-05'];
+          return Array.from({ length: 10 }, (_, i) => ({
+            cage: cages[Math.floor(i / 2)], tag: `RT-${String(i + 1).padStart(2, '0')}`,
+            weight: rand(22, 28),
+            // ตัวอย่างมีตัวที่ไม่ผ่านหนึ่งตัว เพื่อให้เห็นว่าใบรายงานแสดงยังไง
+            appearance: i === 6 ? 'abnormal' : 'normal',
+            result: i === 6 ? 'fail' : 'pass',
+            note: i === 6 ? 'ขนหยอง ซึม ตาแฉะ — แยกออกจากกลุ่ม' : '',
+          }));
+        })(),
+      },
+      program: {
+        vendor: 'Nomura Siam NLAC [Mahidol University]', transport: 'BKK to CNX by Airplane',
+        strain: 'ICR', sex: 'M / F', vet: 'สพ.ญ. กมล ศรีวิไล',
+        cages: 5, perCage: 2,
+        startDate: isoDaysAgo(5), untilDate: isoDaysAgo(-2),
+        countComplete: true, appearanceOk: true, appearanceNote: '',
+        healthCert: true, healthCertNote: 'HC-2569/0142 ออกโดย NLAC',
+        preventive: false, preventiveNote: '',
+        remark: 'สัตว์ถึงหน่วยเวลา 08:50 น. สภาพกล่องปกติ',
+      },
+      daily: [0, 1, 2, 3, 4].map(i => ({
+        date: isoDaysAgo(5 - i), time: ['08:40', '08:35', '09:05', '08:50', '08:45'][i],
+        by: 'ACT — จนท.ดูแลสัตว์ทดลอง',
+        items: {
+          animals: i === 1 ? 'abnormal' : 'normal',
+          feed: 'normal', water: 'normal', cage: 'normal',
+        },
+        jobs: i % 2 === 0 ? ['Feed: Add', 'Water: Change'] : ['Feed: Add', 'Water: Add', 'Cage: Change Bottom/Pan'],
+        note: i === 1 ? 'RT-07 ขนหยอง ซึม แยกกรงและแจ้งสัตวแพทย์แล้ว' : '',
+      })),
+      release: null,
+    };
+  }
+
+  // โครงการที่ AV สร้างกรงเสร็จแล้ว — ใช้สร้างตัวอย่างของ "ทั้งสองสถานะก่อนเดินจริง"
+  // จากแม่พิมพ์เดียวกัน ต่างกันแค่ระยะที่ไปถึง: ยังไม่มาส่ง กับ มาถึงแล้วกำลังกัก
+  function builtProject(o) {
+    const id = o.id;
     const diets = [
       { id: `${id}-D1`, name: 'อาหารทั่วไป', isDefault: true,  color: '#94a3b8', desc: 'อาหารมาตรฐาน', capacity: 10 },
       { id: `${id}-D2`, name: 'ไขมันสูง',    isDefault: false, color: '#d97706', desc: 'อาหารไขมันสูง', capacity: 6 },
@@ -1097,54 +1151,17 @@ const DB = {
       });
     });
     return {
-      id, name: 'Renal Function Study',
-      description: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
+      id, name: o.name,
+      description: o.objective,
       startDate: todayISO(), status: 'active', createdBy: 'u_pi', approval: 'approved',
       // โครงการตัวอย่างที่ค้างอยู่ในช่วงกักโรค — เปิดหน้ากักกันโรคแล้วพิมพ์เอกสาร
       // ได้ทั้งสองใบทันทีโดยไม่ต้องกรอกอะไรก่อน
-      phase: 'quarantine',
-      quarantine: {
-        intake: {
-          date: isoDaysAgo(5), time: '09:20', code: 'MU-AEC-2569-021',
-          ageWeeks: 7, weightMin: 22, weightMax: 28, by: 'Sci — นักวิทยาศาสตร์',
-          rows: (() => {
-            const cages = ['Q-01', 'Q-02', 'Q-03', 'Q-04', 'Q-05'];
-            return Array.from({ length: 10 }, (_, i) => ({
-              cage: cages[Math.floor(i / 2)], tag: `RT-${String(i + 1).padStart(2, '0')}`,
-              weight: rand(22, 28),
-              // ตัวอย่างมีตัวที่ไม่ผ่านหนึ่งตัว เพื่อให้เห็นว่าใบรายงานแสดงยังไง
-              appearance: i === 6 ? 'abnormal' : 'normal',
-              result: i === 6 ? 'fail' : 'pass',
-              note: i === 6 ? 'ขนหยอง ซึม ตาแฉะ — แยกออกจากกลุ่ม' : '',
-            }));
-          })(),
-        },
-        program: {
-          vendor: 'Nomura Siam NLAC [Mahidol University]', transport: 'BKK to CNX by Airplane',
-          strain: 'ICR', sex: 'M / F', vet: 'สพ.ญ. กมล ศรีวิไล',
-          cages: 5, perCage: 2,
-          startDate: isoDaysAgo(5), untilDate: isoDaysAgo(-2),
-          countComplete: true, appearanceOk: true, appearanceNote: '',
-          healthCert: true, healthCertNote: 'HC-2569/0142 ออกโดย NLAC',
-          preventive: false, preventiveNote: '',
-          remark: 'สัตว์ถึงหน่วยเวลา 08:50 น. สภาพกล่องปกติ',
-        },
-        daily: [0, 1, 2, 3, 4].map(i => ({
-          date: isoDaysAgo(5 - i), time: ['08:40', '08:35', '09:05', '08:50', '08:45'][i],
-          by: 'ACT — จนท.ดูแลสัตว์ทดลอง',
-          items: {
-            animals: i === 1 ? 'abnormal' : 'normal',
-            feed: 'normal', water: 'normal', cage: 'normal',
-          },
-          jobs: i % 2 === 0 ? ['Feed: Add', 'Water: Change'] : ['Feed: Add', 'Water: Add', 'Cage: Change Bottom/Pan'],
-          note: i === 1 ? 'RT-07 ขนหยอง ซึม แยกกรงและแจ้งสัตวแพทย์แล้ว' : '',
-        })),
-        release: null,
-      },
+      phase: o.phase,
+      quarantine: o.quarantine,
       requestDate: isoDaysAgo(6),
       request: {
         // หัวโปรโตคอลครบชุดเหมือนที่ฟอร์มคำขอสร้างให้ — ใบติดหน้ากรงอ่านจากตรงนี้
-        lotNo: '1', protocolNo: 'MU-AEC-2569-021', pi: 'ดร. นภา ศรีสุข',
+        lotNo: '1', protocolNo: o.protocolNo, pi: 'ดร. นภา ศรีสุข',
         approvedDate: isoDaysAgo(8), untilDate: isoDaysAgo(-357),
         species: 'Mus musculus', strain: 'ICR',
         sexes: ['M', 'F'], ageMin: 7, ageMax: 9, weightMin: 22, weightMax: 28,
@@ -1166,7 +1183,7 @@ const DB = {
           totalThreshold: 6, weightLossPct: 20,
           note: '< 140 mg/dl of blood glucose in 2-hour after glucose loading',
         },
-        totalMice: 10, objective: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
+        totalMice: 10, objective: o.objective,
         diets: [ { name: 'อาหารทั่วไป', isDefault: true, plannedMice: 10 }, { name: 'ไขมันสูง', isDefault: false, plannedMice: 6 } ],
         groups: [ { name: 'Control', isControl: true, plannedMice: 4 }, { name: 'Treatment', isControl: false, plannedMice: 6 } ],
         // รายการสุดท้ายของแผน = ช่อง "End" บนใบติดหน้ากรง
