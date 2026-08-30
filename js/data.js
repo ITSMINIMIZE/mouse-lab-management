@@ -1111,10 +1111,18 @@ const DB = {
   DB.projects.push(
     // stage 1 — PI submitted, waiting for AEC
     requestProject('P5', 'Cardio Safety Study', 'u_pi', 'requested', demoReq),
-    // stage 2 — AEC approved, waiting for AV to build
+    // stage 2 — AEC approved, waiting for AV to build.
+    // คำขอนี้ขอแต่งตั้งคนที่ "ยังไม่มีบัญชี" มาด้วยหนึ่งคน — เป็นตัวอย่างของงานที่
+    // สัตวแพทย์ต้องทำตอนจัดสรรกรง คือตรวจชื่อ/อีเมล/รหัสผ่านที่ผู้วิจัยกรอกมาแล้ว
+    // เปิดบัญชีให้ (อีเมลในตัวอย่างสะกดผิดไว้ตั้งใจ ให้เห็นว่าแก้ได้ก่อนเปิดบัญชี)
     requestProject('P7', 'Hepatic Clearance Assay', 'u_pi', 'aec_ok',
       { ...demoReq, objective: 'ศึกษาการกำจัดสารผ่านตับในหนูทดลอง', totalMice: 16,
-        groups: [ { name: 'Control', isControl: true, plannedMice: 8 }, { name: 'Treatment', isControl: false, plannedMice: 8 } ] },
+        groups: [ { name: 'Control', isControl: true, plannedMice: 8 }, { name: 'Treatment', isControl: false, plannedMice: 8 } ],
+        appointments: [
+          { role: 'COPI', userId: 'u_copi', name: 'CoPI — นักวิจัยร่วม' },
+          { role: 'AHS', userId: '__new__', firstName: 'ธนกฤต', lastName: 'พงษ์ไพบูลย์',
+            email: 'thanakrit.cmu.ac.th', password: 'labwork2569', name: 'ธนกฤต พงษ์ไพบูลย์' },
+        ] },
       { aecReview: { by: 'AEC — สำนักเลขาฯ จริยธรรม', at: isoDaysAgo(1) } }),
     // rejected at the AEC stage
     requestProject('P6', 'Metabolic Screen', 'u_pi', 'rejected', demoReq,

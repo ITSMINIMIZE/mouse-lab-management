@@ -4714,11 +4714,16 @@ const App = {
       humaneEndpoint: req.humaneEndpoint || '',
       appointments: [],   // VET / SCI / ACT appointed from internal staff
       // password AV sets for each requested new-account person, keyed by email
-      // รหัสผ่านมาจากคำขอของ PI แล้ว — เก็บไว้ตรงนี้เพื่อให้ AV แก้ได้ถ้าจำเป็น
-      // (คำขอเก่าที่ยื่นก่อนมีช่องนี้จะว่าง AV จึงยังต้องกรอกให้)
-      newPasswords: Object.fromEntries((p.request?.appointments || [])
-        .filter(a => a.userId === '__new__')
-        .map(a => [a.email, a.password || ''])),
+      // การแต่งตั้งที่ PI ขอมา — คัดลอกมาเป็น "ร่าง" ที่สัตวแพทย์แก้ได้ทั้งหมด
+      // เปลี่ยนตำแหน่ง เปลี่ยนตัวคน แก้ข้อมูลบัญชีใหม่ หรือลบทิ้งทั้งแถวก็ได้
+      // เพราะการแต่งตั้งยังไม่มีผลจนกว่าจะกดสร้างกรงเสร็จ
+      // ไม่แก้ทับ p.request เพราะนั่นคือ "คำขอที่ผู้วิจัยยื่น" ซึ่งเป็นหลักฐาน ไม่ใช่ร่าง
+      requestedTeam: (p.request?.appointments || []).map((a, i) => ({
+        rid: 'rq' + i, srcIndex: i, role: a.role, userId: a.userId,
+        firstName: a.firstName || '', lastName: a.lastName || '',
+        email: a.email || '', password: a.password || '',
+        fromRequest: true,
+      })),
     };
     this.go('build', p.id);
   },
@@ -4803,7 +4808,8 @@ const App = {
 
           <div class="form-card">
             <div class="form-card-title">ทีมวิจัยตามคำขอ (CoPI / AHS)</div>
-            <p class="empty-note" style="margin-top:0">ผู้ที่มีบัญชีแล้วจะถูกแต่งตั้งอัตโนมัติ · สำหรับผู้ที่ <b>ยังไม่มีบัญชี</b> กรุณาตั้งรหัสผ่านเพื่อเปิดบัญชีและยืนยัน</p>
+            <p class="empty-note" style="margin-top:0">นี่คือ<b>คำขอ</b> ไม่ใช่คำสั่ง — เปลี่ยนตำแหน่ง เปลี่ยนตัวคน แก้ข้อมูลที่กรอกผิดมา
+              หรือถอดออกได้ทุกแถว · <b>การแต่งตั้งมีผลเมื่อกดสร้างกรงเท่านั้น</b> · คนที่ยังไม่มีบัญชีจะถูกเปิดบัญชีให้ตามข้อมูลที่เห็นตรงนี้</p>
             <div id="bpRequested"></div>
           </div>
 
@@ -5102,28 +5108,92 @@ const App = {
     });
   },
 
-  // the CoPI/AHS the PI requested: existing users are auto-appointed; a person
-  // with no account yet gets a password field so AV can open the account here.
+  // การแต่งตั้งที่ผู้วิจัยขอมา — เป็น "คำขอ" ไม่ใช่คำสั่ง สัตวแพทย์จึงแก้ได้ทุกอย่าง
+  // จนถึงวินาทีที่กดสร้างกรง: เปลี่ยนตำแหน่ง เปลี่ยนตัวคน แก้ข้อมูลบัญชีที่กรอกผิดมา
+  // หรือถอดออกทั้งแถว · คำขอต้นฉบับใน p.request ไม่ถูกแตะ เทียบย้อนหลังได้เสมอ
   renderRequestedTeam(p) {
-    const reqs = (p.request?.appointments || []);
-    if (!reqs.length) { this.el('bpRequested').innerHTML = '<p class="empty-note">คำขอนี้ไม่ได้ร้องขอแต่งตั้งใคร</p>'; return; }
-    const rows = reqs.map((a, i) => {
-      if (a.userId === '__new__') {
-        return `<div class="bp-req new" data-email="${a.email}">
-          <div class="bp-req-main"><span class="role-tag">${a.role}</span> <b>${a.name}</b> <span class="empty-note">· ${a.email} · ยังไม่มีบัญชี</span></div>
-          <div class="bp-req-pw">
-            <input type="text" class="bp-pw" data-email="${a.email}" placeholder="ตั้งรหัสผ่าน (≥6)" value="${this.draft.newPasswords[a.email] || ''}">
-            <span class="bp-pw-note">${a.password ? 'รหัสผ่านที่ผู้วิจัยตั้งมาในคำขอ — แก้ได้ถ้าจำเป็น' : 'คำขอนี้ไม่ได้ตั้งรหัสผ่านมา กรุณาตั้งให้'}</span>
+    const box = this.el('bpRequested'); if (!box) return;
+    const team = this.draft.requestedTeam;
+    if (!team.length) {
+      box.innerHTML = `<p class="empty-note">${(p.request?.appointments || []).length
+        ? 'ถอดรายชื่อที่ขอมาออกหมดแล้ว — สร้างกรงได้เลย หรือกดคืนค่าเพื่อเอากลับมา'
+        : 'คำขอนี้ไม่ได้ร้องขอแต่งตั้งใคร'}</p>
+        ${(p.request?.appointments || []).length ? `<button class="btn btn-sm" id="bpReqReset">↺ คืนรายชื่อตามคำขอเดิม</button>` : ''}`;
+      if (this.el('bpReqReset')) this.el('bpReqReset').onclick = () => { this.resetRequestedTeam(p); };
+      return;
+    }
+    const staff = DB.users.filter(u => u.position !== 'ADMIN');
+    box.innerHTML = team.map(t => {
+      const isNew = t.userId === '__new__';
+      const u = isNew ? null : DB.users.find(x => x.id === t.userId);
+      return `<div class="bp-req ${isNew ? 'new' : ''}" data-rid="${t.rid}">
+        <div class="rp-row">
+          <select class="bt-role" data-rid="${t.rid}">
+            <option value="COPI" ${t.role === 'COPI' ? 'selected' : ''}>CoPI — นักวิจัยร่วม</option>
+            <option value="AHS" ${t.role === 'AHS' ? 'selected' : ''}>AHS — นักวิจัยปฏิบัติการ</option>
+          </select>
+          <select class="bt-user" data-rid="${t.rid}">
+            ${staff.map(x => `<option value="${x.id}" ${t.userId === x.id ? 'selected' : ''}>${this.esc(x.name)} · ${this.esc(x.email)}</option>`).join('')}
+            <option value="__new__" ${isNew ? 'selected' : ''}>➕ เปิดบัญชีใหม่</option>
+          </select>
+          <span class="bt-state">${isNew ? '' : (u ? 'แต่งตั้งทันที ✓' : '⚠️ ไม่พบบัญชี')}</span>
+          <button type="button" class="icon-btn bt-del" data-rid="${t.rid}" title="ถอดออกจากการแต่งตั้ง">🗑️</button>
+        </div>
+        ${isNew ? `
+          <div class="bp-new-grid">
+            <input class="bt-first" data-rid="${t.rid}" placeholder="ชื่อ *" value="${this.esc(t.firstName)}">
+            <input class="bt-last" data-rid="${t.rid}" placeholder="สกุล" value="${this.esc(t.lastName)}">
+            <input class="bt-email" data-rid="${t.rid}" type="email" placeholder="อีเมล *" value="${this.esc(t.email)}">
+            <input class="bt-pw" data-rid="${t.rid}" type="text" placeholder="รหัสผ่าน (≥6) *" value="${this.esc(t.password)}">
           </div>
-        </div>`;
-      }
-      const u = DB.users.find(x => x.id === a.userId);
-      return `<div class="bp-req"><div class="bp-req-main"><span class="role-tag">${a.role}</span> <b>${u ? u.name : a.name}</b> <span class="empty-note">· ${u ? u.email : ''} · แต่งตั้งอัตโนมัติ ✓</span></div></div>`;
-    }).join('');
-    this.el('bpRequested').innerHTML = rows;
-    this.el('bpRequested').querySelectorAll('.bp-pw').forEach(inp => {
-      inp.oninput = () => { this.draft.newPasswords[inp.dataset.email] = inp.value; };
+          <span class="bp-pw-note">${t.fromRequest
+            ? 'ข้อมูลมาจากคำขอของผู้วิจัย — แก้ตรงนี้ได้ คำขอเดิมไม่ถูกแก้ตาม'
+            : 'บัญชีใหม่ที่สัตวแพทย์เพิ่มเอง'}</span>` : ''}
+      </div>`;
+    }).join('') + `<div class="bp-req-foot">
+        <button class="btn btn-sm" id="bpReqAdd">+ เพิ่มรายชื่อ</button>
+        <button class="btn btn-sm" id="bpReqReset">↺ คืนค่าตามคำขอเดิม</button>
+      </div>`;
+
+    const row = rid => team.find(t => t.rid === rid);
+    const bind = (cls, field, trim) => box.querySelectorAll(cls).forEach(inp => {
+      inp.oninput = () => { const t = row(inp.dataset.rid); if (t) t[field] = trim ? inp.value.trim() : inp.value; };
     });
+    bind('.bt-first', 'firstName', true);
+    bind('.bt-last', 'lastName', true);
+    bind('.bt-email', 'email', true);
+    bind('.bt-pw', 'password', false);
+    box.querySelectorAll('.bt-role').forEach(sel => sel.onchange = () => {
+      const t = row(sel.dataset.rid); if (t) t.role = sel.value;
+    });
+    box.querySelectorAll('.bt-user').forEach(sel => sel.onchange = () => {
+      const t = row(sel.dataset.rid); if (!t) return;
+      t.userId = sel.value;
+      // สลับมาเป็นบัญชีใหม่ ต้องมีช่องให้กรอก จึงต้องวาดแถวใหม่
+      this.renderRequestedTeam(p);
+    });
+    box.querySelectorAll('.bt-del').forEach(b => b.onclick = () => {
+      const i = team.findIndex(t => t.rid === b.dataset.rid);
+      if (i >= 0) team.splice(i, 1);
+      this.renderRequestedTeam(p);
+    });
+    this.el('bpReqAdd').onclick = () => {
+      team.push({ rid: 'rq' + this.uid(), srcIndex: null, role: 'COPI', userId: staff[0] ? staff[0].id : '__new__',
+        firstName: '', lastName: '', email: '', password: '', fromRequest: false });
+      this.renderRequestedTeam(p);
+    };
+    this.el('bpReqReset').onclick = () => this.resetRequestedTeam(p);
+  },
+
+  // คืนร่างให้ตรงกับคำขอเดิม — ทางถอยเมื่อแก้เพลินจนงง
+  resetRequestedTeam(p) {
+    this.draft.requestedTeam = (p.request?.appointments || []).map((a, i) => ({
+      rid: 'rq' + i, srcIndex: i, role: a.role, userId: a.userId,
+      firstName: a.firstName || '', lastName: a.lastName || '',
+      email: a.email || '', password: a.password || '', fromRequest: true,
+    }));
+    this.renderRequestedTeam(p);
+    this.toast('คืนรายชื่อตามคำขอเดิมแล้ว');
   },
 
   submitBuildProject(p) {
@@ -5164,24 +5234,47 @@ const App = {
     // corrected any field, so validate what AV is about to create — not what the
     // request said. Uniqueness must be re-checked here: the request passed the test
     // when it was submitted, but that was days ago and the address is editable now.
-    // open the accounts the PI requested for people who had none — AV sets the
-    // password here; each new account is EXTERNAL and keeps its requested role.
-    const requested = (p.request?.appointments || []);
-    const newOnes = requested.filter(a => a.userId === '__new__');
-    for (const a of newOnes) {
-      const pw = (d.newPasswords[a.email] || '').trim();
-      if (pw.length < 6) { this.toast(`ตั้งรหัสผ่านให้ "${a.name}" อย่างน้อย 6 ตัวอักษร`); return; }
+    // ตรวจจาก "ร่างที่สัตวแพทย์แก้แล้ว" ไม่ใช่จากคำขอเดิม — AV เปลี่ยนได้ทุกช่อง
+    // และความซ้ำของอีเมลต้องเช็กใหม่ตรงนี้ ตอนยื่นคำขออาจผ่านมาแล้วหลายวัน
+    const team = d.requestedTeam || [];
+    const newOnes = team.filter(t => t.userId === '__new__');
+    for (const t of newOnes) {
+      const who = t.firstName || t.email || 'บัญชีใหม่';
+      if (!t.firstName) { this.toast('กรอกชื่อของบัญชีใหม่ที่จะเปิดให้ครบ'); return; }
+      if (!this.validEmail(t.email)) { this.toast(`อีเมลของ "${who}" ไม่ถูกต้อง`); return; }
+      if (DB.users.some(u => u.email.toLowerCase() === t.email.toLowerCase())) {
+        this.toast(`อีเมล ${t.email} ถูกใช้แล้ว`); return;
+      }
+      if (newOnes.filter(x => (x.email || '').toLowerCase() === t.email.toLowerCase()).length > 1) {
+        this.toast(`อีเมล ${t.email} ซ้ำกันเองในรายการนี้`); return;
+      }
+      if ((t.password || '').trim().length < 6) { this.toast(`ตั้งรหัสผ่านให้ "${who}" อย่างน้อย 6 ตัวอักษร`); return; }
     }
-    // create them (email uniqueness was checked at request time)
-    newOnes.forEach(a => {
+    // คนเดิมถูกเลือกซ้ำสองแถวไม่ได้ — จะกลายเป็นสมาชิกสองบรรทัดในโครงการเดียว
+    const picked = team.filter(t => t.userId !== '__new__').map(t => t.userId);
+    const dupUser = picked.find((id, i) => picked.indexOf(id) !== i);
+    if (dupUser) {
+      this.toast(`เลือก "${DB.users.find(u => u.id === dupUser)?.name || dupUser}" ซ้ำสองรายการ`); return;
+    }
+    newOnes.forEach(t => {
+      const full = `${t.firstName} ${t.lastName || ''}`.trim();
       const nu = { id: 'u_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-        firstName: a.firstName, lastName: a.lastName || '', email: a.email,
-        password: d.newPasswords[a.email].trim(), position: 'EXTERNAL', projectRole: null,
-        name: a.name };
+        firstName: t.firstName, lastName: t.lastName || '', email: t.email,
+        password: t.password.trim(), position: 'EXTERNAL', projectRole: null,
+        name: full };
       DB.users.push(nu);
-      a._createdId = nu.id;   // so we can appoint the fresh account below
-      this.log('เปิดบัญชีผู้ใช้ (จากคำขอโครงการ)', `${nu.name} (${nu.email}) · EXTERNAL`, p.name);
+      t._createdId = nu.id;   // so we can appoint the fresh account below
+      this.log('เปิดบัญชีผู้ใช้ (ตอนสร้างโครงการ)', `${full} (${nu.email}) · EXTERNAL`, p.name);
     });
+    // สัตวแพทย์ถอดใครออกจากคำขอบ้าง — บันทึกไว้ให้ตรวจสอบย้อนหลังได้
+    // เทียบด้วย srcIndex ไม่ใช่ค่าในแถว เพราะ AV แก้ชื่อ/อีเมลได้ ถ้าเทียบด้วยค่า
+    // คนที่แค่ถูกแก้อีเมลจะถูกรายงานว่าโดนถอดออก ทั้งที่ยังอยู่ในทีม
+    const kept = new Set(team.map(t => t.srcIndex).filter(i => i != null));
+    const dropped = (p.request?.appointments || []).filter((a, i) => !kept.has(i));
+    if (dropped.length) {
+      this.log('ปรับรายชื่อแต่งตั้งจากคำขอ',
+        `ถอดออก ${dropped.length} ราย: ${dropped.map(a => a.name || a.email).join(', ')}`, p.name);
+    }
 
     // both layers carry a capacity (max mice) the PI cannot exceed when grouping cages
     const diets = d.diets.map((x, i) => ({ id: `${p.id}-D${i + 1}`, name: x.name.trim(), isDefault: !!x.isDefault, color: x.color, desc: (x.desc || '').trim(), capacity: x.capacity || 1 }));
@@ -5218,7 +5311,7 @@ const App = {
       if (!m) { m = { userId, roles: [] }; members.push(m); }
       if (!m.roles.includes(role)) m.roles.push(role);
     };
-    requested.forEach(a => add(a.userId === '__new__' ? a._createdId : a.userId, a.role));
+    team.forEach(t => add(t.userId === '__new__' ? t._createdId : t.userId, t.role));
     d.appointments.forEach(a => add(a.userId, a.role));
 
     // AV is the LAST step of creation — the project goes live right here.
