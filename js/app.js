@@ -3452,7 +3452,7 @@ const App = {
       aup: req.aup || null,
       approvalDoc: req.approvalDoc || null,
       extraDocs: (req.extraDocs || []).map(x => ({ _id: this.uid(), label: x.label || '', file: x.file || null })),
-      appointments: (req.appointments || []).map(a => ({ ...a })),
+      appointments: (req.appointments || []).map(a => ({ password: '', ...a })),
       services: (req.services || []).map(x => ({ _id: this.uid(), key: x.key, mice: x.mice ?? '', days: x.days ?? '' })),
     };
     if (!this.draft.diets.some(x => x.isDefault)) this.draft.diets[0].isDefault = true;
@@ -3918,7 +3918,8 @@ const App = {
             <div class="form-card-title">ร้องขอแต่งตั้งเจ้าหน้าที่ประจำโครงการ
               <button class="btn btn-ghost btn-sm" id="cpAddPerson" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มรายชื่อ</button>
             </div>
-            <p class="empty-note" style="margin-top:0">ร้องขอแต่งตั้ง <b>CoPI (นักวิจัยร่วม)</b> และ <b>AHS (นักวิจัยปฏิบัติการ)</b> แต่ละตำแหน่งมีได้มากกว่า 1 คน · หากยังไม่มีบัญชี สัตวแพทย์จะเป็นผู้เปิดบัญชีและแต่งตั้งให้ภายหลัง</p>
+            <p class="empty-note" style="margin-top:0">ร้องขอแต่งตั้ง <b>CoPI (นักวิจัยร่วม)</b> และ <b>AHS (นักวิจัยปฏิบัติการ)</b> แต่ละตำแหน่งมีได้มากกว่า 1 คน
+              · หากยังไม่มีบัญชี ให้กรอกข้อมูลและ<b>ตั้งรหัสผ่านเริ่มต้น</b>ไว้เลย สัตวแพทย์จะเปิดบัญชีตามนั้นตอนสร้างโครงการ</p>
             <div id="cpPeople"></div>
           </div>
 
@@ -3986,7 +3987,7 @@ const App = {
     ['cpHumaneTh', 'cpHumaneWl', 'cpHumaneNote'].forEach(id =>
       this.el(id).addEventListener('input', () => this.captureReqHumane()));
     this.el('cpAddDoc').onclick = () => { this.draft.extraDocs.push({ _id: this.uid(), label: '', file: null }); this.renderReqExtraDocs(); };
-    this.el('cpAddPerson').onclick = () => { this.captureReqPeople(); this.draft.appointments.push({ role: 'COPI', userId: '', name: '' }); this.renderReqPeople(); };
+    this.el('cpAddPerson').onclick = () => { this.captureReqPeople(); this.draft.appointments.push({ role: 'COPI', userId: '', name: '', password: '' }); this.renderReqPeople(); };
     this.el('cpAddSvc').onclick = () => {
       const live = this.activeProcedures();
       if (!live.length) return this.toast('ยังไม่มีรายการหัตถการที่เปิดให้บริการ');
@@ -4421,11 +4422,16 @@ const App = {
       // (first/last/email) — AV only needs to set a password when confirming.
       const newFields = isNew ? `
         <div class="rp-new">
-          <div class="rp-new-hd">ข้อมูลบัญชีใหม่ — สัตวแพทย์จะตั้งรหัสผ่านให้ตอนสร้างโครงการ</div>
+          <div class="rp-new-hd">ข้อมูลบัญชีใหม่ — ตั้งรหัสผ่านเริ่มต้นให้เลย สัตวแพทย์จะเปิดบัญชีตามนี้ตอนสร้างโครงการ</div>
           <div class="rp-new-grid">
             <input class="rp-first" data-i="${i}" placeholder="ชื่อ *" value="${esc(a.firstName)}">
             <input class="rp-last" data-i="${i}" placeholder="สกุล" value="${esc(a.lastName)}">
             <input class="rp-email" data-i="${i}" type="email" placeholder="อีเมล *" value="${esc(a.email)}">
+          </div>
+          <div class="rp-pw-row">
+            <input class="rp-pw" data-i="${i}" type="password" placeholder="รหัสผ่านเริ่มต้น * (อย่างน้อย 6 ตัวอักษร)" value="${esc(a.password)}">
+            <button type="button" class="mini-btn rp-pw-eye" data-i="${i}" aria-label="แสดงรหัสผ่าน">👁</button>
+            <span class="rp-pw-hint">เจ้าตัวเปลี่ยนเองได้ภายหลังที่ <b>เมนูผู้ใช้ → เปลี่ยนรหัสผ่าน</b></span>
           </div>
         </div>` : '';
       return `
@@ -4449,6 +4455,14 @@ const App = {
     this.el('cpPeople').querySelectorAll('.rp-role').forEach(s => s.onchange = () => { this.captureReqPeople(); });
     this.el('cpPeople').querySelectorAll('.rp-user').forEach(s => s.onchange = () => { this.captureReqPeople(); this.renderReqPeople(); });
     this.el('cpPeople').querySelectorAll('.rp-del').forEach(b => b.onclick = () => { this.captureReqPeople(); this.draft.appointments.splice(+b.dataset.i, 1); this.renderReqPeople(); });
+    // ดู/ซ่อนรหัสผ่าน — คนกรอกให้คนอื่นต้องอ่านทวนได้ว่าพิมพ์ถูกไหม
+    this.el('cpPeople').querySelectorAll('.rp-pw-eye').forEach(b => b.onclick = () => {
+      const inp = this.el('cpPeople').querySelector(`.rp-pw[data-i="${b.dataset.i}"]`);
+      const shown = inp.type === 'text';
+      inp.type = shown ? 'password' : 'text';
+      b.textContent = shown ? '👁' : '🙈';
+      b.setAttribute('aria-label', shown ? 'แสดงรหัสผ่าน' : 'ซ่อนรหัสผ่าน');
+    });
   },
 
   captureReqPeople() {
@@ -4461,7 +4475,9 @@ const App = {
         // the new-account inputs may not be rendered yet (this capture runs right
         // after the dropdown changes to __new__, before the re-render) — keep any
         // existing values in that case so the fields aren't wiped.
-        const first = row.querySelector('.rp-first'), last = row.querySelector('.rp-last'), email = row.querySelector('.rp-email');
+        const first = row.querySelector('.rp-first'), last = row.querySelector('.rp-last'),
+              email = row.querySelector('.rp-email'), pw = row.querySelector('.rp-pw');
+        if (pw) a.password = pw.value;
         if (first) a.firstName = first.value.trim();
         if (last) a.lastName = last.value.trim();
         if (email) a.email = email.value.trim();
@@ -4561,10 +4577,11 @@ const App = {
       if (!a.userId) { this.toast('กรุณาเลือกบุคลากรหรือกรอกข้อมูลบัญชีใหม่ให้ครบ'); return; }
       if (a.userId === '__new__') {
         if (!a.firstName) { this.toast('กรุณากรอกชื่อผู้ที่ขอแต่งตั้ง'); return; }
-        if (!/^\S+@\S+\.\S+$/.test(a.email || '')) { this.toast(`อีเมลของ "${a.firstName}" ไม่ถูกต้อง`); return; }
+        if (!this.validEmail(a.email)) { this.toast(`อีเมลของ "${a.firstName}" ไม่ถูกต้อง`); return; }
         const dup = DB.users.some(u => u.email.toLowerCase() === a.email.toLowerCase())
           || d.appointments.filter(x => x.userId === '__new__').some((x, idx, arr) => x.email.toLowerCase() === a.email.toLowerCase() && arr.indexOf(x) !== idx);
         if (dup) { this.toast(`อีเมล ${a.email} ถูกใช้แล้ว`); return; }
+        if ((a.password || '').trim().length < 6) { this.toast(`ตั้งรหัสผ่านเริ่มต้นให้ "${a.firstName}" อย่างน้อย 6 ตัวอักษร`); return; }
       }
     }
 
@@ -4615,7 +4632,8 @@ const App = {
         return { key: x.key, label: pr.label, price: pr.price, mice, days, qty: mice * days, amount: mice * days * pr.price };
       }),
       appointments: d.appointments.map(a => a.userId === '__new__'
-        ? { role: a.role, userId: '__new__', firstName: a.firstName, lastName: a.lastName || '', email: a.email, name: `${a.firstName} ${a.lastName || ''}`.trim() }
+        ? { role: a.role, userId: '__new__', firstName: a.firstName, lastName: a.lastName || '', email: a.email,
+            password: (a.password || '').trim(), name: `${a.firstName} ${a.lastName || ''}`.trim() }
         : { role: a.role, userId: a.userId, name: DB.users.find(u => u.id === a.userId)?.name || a.name }),
     };
 
@@ -4681,7 +4699,11 @@ const App = {
       humaneEndpoint: req.humaneEndpoint || '',
       appointments: [],   // VET / SCI / ACT appointed from internal staff
       // password AV sets for each requested new-account person, keyed by email
-      newPasswords: {},
+      // รหัสผ่านมาจากคำขอของ PI แล้ว — เก็บไว้ตรงนี้เพื่อให้ AV แก้ได้ถ้าจำเป็น
+      // (คำขอเก่าที่ยื่นก่อนมีช่องนี้จะว่าง AV จึงยังต้องกรอกให้)
+      newPasswords: Object.fromEntries((p.request?.appointments || [])
+        .filter(a => a.userId === '__new__')
+        .map(a => [a.email, a.password || ''])),
     };
     this.go('build', p.id);
   },
@@ -5074,7 +5096,10 @@ const App = {
       if (a.userId === '__new__') {
         return `<div class="bp-req new" data-email="${a.email}">
           <div class="bp-req-main"><span class="role-tag">${a.role}</span> <b>${a.name}</b> <span class="empty-note">· ${a.email} · ยังไม่มีบัญชี</span></div>
-          <div class="bp-req-pw"><input type="text" class="bp-pw" data-email="${a.email}" placeholder="ตั้งรหัสผ่าน (≥6)" value="${this.draft.newPasswords[a.email] || ''}"></div>
+          <div class="bp-req-pw">
+            <input type="text" class="bp-pw" data-email="${a.email}" placeholder="ตั้งรหัสผ่าน (≥6)" value="${this.draft.newPasswords[a.email] || ''}">
+            <span class="bp-pw-note">${a.password ? 'รหัสผ่านที่ผู้วิจัยตั้งมาในคำขอ — แก้ได้ถ้าจำเป็น' : 'คำขอนี้ไม่ได้ตั้งรหัสผ่านมา กรุณาตั้งให้'}</span>
+          </div>
         </div>`;
       }
       const u = DB.users.find(x => x.id === a.userId);
@@ -5120,6 +5145,10 @@ const App = {
     if (d.appointments.some(a => !a.userId)) { this.toast('กรุณาเลือกบุคลากรให้ครบทุกรายการที่แต่งตั้ง'); return; }
     if (!this.el('bpRoom').value.trim()) { this.el('bpRoom').focus(); this.toast('กรุณากรอกเลขห้องปฏิบัติการ'); return; }
 
+    // open the accounts the PI requested for people who had none. AV may have
+    // corrected any field, so validate what AV is about to create — not what the
+    // request said. Uniqueness must be re-checked here: the request passed the test
+    // when it was submitted, but that was days ago and the address is editable now.
     // open the accounts the PI requested for people who had none — AV sets the
     // password here; each new account is EXTERNAL and keeps its requested role.
     const requested = (p.request?.appointments || []);
@@ -8803,6 +8832,11 @@ const App = {
   },
 
   // escape user-typed text before it goes into a template string
+  // ตรวจอีเมลแบบพอเหมาะ — เดิมใช้ /^\S+@\S+\.\S+$/ ซึ่งปล่อยผ่านทุกอักขระที่ไม่ใช่
+  // ช่องว่าง จึงรับ "user@cmu,ac.th" (ลูกน้ำแทนจุด) ซึ่งเป็นการพิมพ์ผิดที่เจอบ่อยที่สุด
+  // ไม่ได้ตั้งใจให้ครบตาม RFC — แค่ให้ดักคำผิดที่คนกรอกจริง ๆ ทำ
+  validEmail(v) { return /^[^\s@,;]+@[^\s@,;]+\.[A-Za-z][^\s@,;]*$/.test(String(v || '').trim()); },
+
   esc(v) { return String(v ?? '').replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c])); },
 
   careItem() { return this.CARE_ITEMS[this.careWiz.step]; },
@@ -10203,7 +10237,7 @@ const App = {
       const email = this.el('uEmail').value.trim();
       const pass = this.el('uPass').value;
       if (!firstName) { this.el('uFirst').focus(); this.toast('กรุณากรอกชื่อ'); return; }
-      if (!/^\S+@\S+\.\S+$/.test(email)) { this.el('uEmail').focus(); this.toast('อีเมลไม่ถูกต้อง'); return; }
+      if (!this.validEmail(email)) { this.el('uEmail').focus(); this.toast('อีเมลไม่ถูกต้อง'); return; }
       if (DB.users.some(x => x.email.toLowerCase() === email.toLowerCase() && (!user || x.id !== user.id))) { this.toast('อีเมลนี้ถูกใช้แล้ว'); return; }
       if (isNew && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
       if (!isNew && pass && pass.length < 6) { this.el('uPass').focus(); this.toast('รหัสผ่านอย่างน้อย 6 ตัวอักษร'); return; }
