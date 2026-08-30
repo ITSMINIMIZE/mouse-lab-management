@@ -1732,8 +1732,14 @@ const App = {
     const b = this.billingOf(p);
     return (b.rate != null && b.rate !== '') ? Number(b.rate) : DB.finance.boardingRate;
   },
-  // วันแรกที่หน่วยเริ่มเก็บค่าฝากเลี้ยง = วันที่หนูเข้ากรงจริง (ตกลงจากใบขอ)
-  boardStart(p) { return (p.facility && p.facility.moveInDate) || p.startDate; },
+  // วันแรกที่หน่วยเริ่มเก็บค่าฝากเลี้ยง = วันที่สัตว์ "มาถึงหน่วย" ซึ่งคือวันตรวจรับ
+  // เข้ากักโรค ไม่ใช่วันที่เข้ากรงโครงการ — ระหว่างกักหน่วยก็ให้อาหาร ให้น้ำ เปลี่ยน
+  // วัสดุรองนอนและบันทึกดูแลทุกวันอยู่แล้ว ถ้านับจากวันเข้ากรงเท่ากับยกสัปดาห์กักโรค
+  // ให้ฟรี (โครงการที่ยังกักอยู่จะไม่ถูกเรียกเก็บอะไรเลยทั้งที่สัตว์อยู่ในหน่วยแล้ว)
+  boardStart(p) {
+    const it = p.quarantine && p.quarantine.intake;
+    return (it && it.date) || (p.facility && p.facility.moveInDate) || p.startDate;
+  },
   // โครงการที่ปิดแล้วหยุดคิดที่แผนรายการสุดท้าย — ตัวเดียวกับ "End" บนใบติดหน้ากรง
   boardEnd(p) {
     if (p.status !== 'closed') return null;
@@ -1748,13 +1754,21 @@ const App = {
     const from = this.maxISO(this.boardStart(p), start);
     const hardEnd = this.minISO(this.boardEnd(p) || todayISO(), end);
     if (!from || !hardEnd || hardEnd < from) return { days: 0, mice: 0 };
+    const inCages = (p.cages || []).flatMap(c => c.mice || []);
+    // ยังไม่เข้ากรง (กำลังกักโรค หรือปล่อยแล้วแต่ยังไม่ชั่งน้ำหนักแรกเข้า) — นับจาก
+    // จำนวนที่ "ตรวจรับผ่าน" แทน ตัวที่ตรวจไม่ผ่านถูกส่งคืน ไม่ถือเป็นของที่หน่วยเลี้ยง
+    if (!inCages.length) {
+      const n = this.qzPassed(p);
+      const d = this.daysInclusive(from, hardEnd);
+      return (n && d > 0) ? { days: d * n, mice: n } : { days: 0, mice: 0 };
+    }
     let days = 0, mice = 0;
-    (p.cages || []).forEach(c => (c.mice || []).forEach(m => {
+    inCages.forEach(m => {
       const died = m.death && m.death.date ? m.death.date : null;
       const to = died ? this.minISO(died, hardEnd) : hardEnd;
       const d = this.daysInclusive(from, to);
       if (d > 0) { days += d; mice++; }
-    }));
+    });
     return { days, mice };
   },
   boardingInMonth(p, key) {
@@ -1927,7 +1941,8 @@ const App = {
         <section class="as-sec">
           <div class="as-sec-head">
             <div><h3>📥 รายรับ <span class="as-n">${t.projects.length} โครงการ</span></h3>
-              <div class="desc">ค่าฝากเลี้ยง = จำนวนหนู × วันที่อยู่จริงในเดือนนี้ × อัตราของโครงการ · หนูที่ตายหยุดคิดตั้งแต่วันถัดไป</div></div>
+              <div class="desc">ค่าฝากเลี้ยง = จำนวนสัตว์ × วันที่อยู่จริงในเดือนนี้ × อัตราของโครงการ
+                · เริ่มนับตั้งแต่<b>วันที่รับเข้ากักโรค</b> ไม่ใช่วันเข้ากรง · หนูที่ตายหยุดคิดตั้งแต่วันถัดไป</div></div>
             <span class="spacer" style="flex:1"></span>
             <div class="as-sec-sum"><span>รวมรายรับ</span><b class="good">${this.baht(t.income.total)}</b></div>
           </div>

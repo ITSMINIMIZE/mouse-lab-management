@@ -164,6 +164,16 @@ function isoDaysAgo(n) {
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
 }
+// เลื่อนวันจากวันที่ ISO — ใช้ผูกวันในข้อมูลตัวอย่างให้สัมพันธ์กันเอง
+// (แทนที่จะนับ isoDaysAgo แยกกันคนละที่แล้วหลุดจากกัน)
+function isoPlus(iso, days) {
+  const d = new Date(iso);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+function daysBetweenISO(a, b) {
+  return Math.round((new Date(b) - new Date(a)) / 86400000);
+}
 function rand(min, max) {
   return Math.round((min + Math.random() * (max - min)) * 10) / 10;
 }
@@ -565,6 +575,61 @@ const QUARANTINE_TRANSPORT = [
   'BKK to CNX by Airplane',
 ];
 
+// ชุดเอกสารกักโรคตัวอย่าง — ผูกกับ "วันเริ่มกักจริง" ของโครงการนั้น ไม่ใช่นับ
+// ถอยหลังจากวันนี้แยกกันคนละที่ วันบนใบฟอร์ม แผนการใช้สัตว์ และสถานะจึงตรงกันเสมอ
+//   o.start      วันเริ่มกัก (ISO) · สิ้นสุดคิดจากระยะมาตรฐาน 7 วัน
+//   o.count      จำนวนสัตว์ที่รับเข้า · o.failAt = ลำดับตัวที่ตรวจไม่ผ่าน (null = ผ่านหมด)
+//   o.released   ปล่อยออกแล้วหรือยัง
+function quarantineDemo(o) {
+  const until = isoPlus(o.start, QUARANTINE_DAYS - 1);
+  // บันทึกดูแลมีได้ถึงวันนี้เท่านั้น — ของที่ยังกักอยู่จึงมีไม่ครบ 7 แถวโดยธรรมชาติ
+  const lastLog = (todayISO() < until) ? todayISO() : until;
+  const logDays = Math.max(0, daysBetweenISO(o.start, lastLog) + 1);
+  const perCage = 2;
+  const cageCount = Math.ceil(o.count / perCage);
+  const failAt = o.failAt ?? null;
+  return {
+    intake: {
+      date: o.start, time: '09:20', code: o.protocolNo,
+      ageWeeks: o.ageWeeks, weightMin: o.weightMin, weightMax: o.weightMax,
+      by: 'Sci — นักวิทยาศาสตร์',
+      rows: Array.from({ length: o.count }, (_, i) => ({
+        cage: `Q-${String(Math.floor(i / perCage) + 1).padStart(2, '0')}`,
+        tag: `${o.tagPrefix}-${String(i + 1).padStart(2, '0')}`,
+        weight: rand(o.weightMin, o.weightMax),
+        appearance: i === failAt ? 'abnormal' : 'normal',
+        result: i === failAt ? 'fail' : 'pass',
+        note: i === failAt ? 'ขนหยอง ซึม ตาแฉะ — แยกออกจากกลุ่ม' : '',
+      })),
+    },
+    program: {
+      vendor: 'Nomura Siam NLAC [Mahidol University]', transport: 'BKK to CNX by Airplane',
+      strain: o.strain, sex: o.sex, vet: 'สพ.ญ. กมล ศรีวิไล',
+      cages: cageCount, perCage,
+      startDate: o.start, untilDate: until,
+      countComplete: true, appearanceOk: failAt == null, appearanceNote: '',
+      healthCert: true, healthCertNote: 'HC-2569/0142 ออกโดย NLAC',
+      preventive: false, preventiveNote: '',
+      remark: 'สัตว์ถึงหน่วยเวลา 08:50 น. สภาพกล่องปกติ',
+    },
+    daily: Array.from({ length: logDays }, (_, i) => ({
+      date: isoPlus(o.start, i), time: ['08:40', '08:35', '09:05', '08:50', '08:45', '08:30', '09:10'][i % 7],
+      by: 'ACT — จนท.ดูแลสัตว์ทดลอง',
+      items: {
+        animals: (failAt != null && i === 1) ? 'abnormal' : 'normal',
+        feed: 'normal', water: 'normal', cage: 'normal',
+      },
+      jobs: i % 2 === 0 ? ['Feed: Add', 'Water: Change'] : ['Feed: Add', 'Water: Add', 'Cage: Change Bottom/Pan'],
+      note: (failAt != null && i === 1)
+        ? `${o.tagPrefix}-${String(failAt + 1).padStart(2, '0')} ขนหยอง ซึม แยกกรงและแจ้งสัตวแพทย์แล้ว` : '',
+    })),
+    release: o.released
+      ? { date: until, vet: 'สพ.ญ. กมล ศรีวิไล', healthy: true, note: '',
+          remark: `ครบกำหนดกัก ${QUARANTINE_DAYS} วัน สัตว์ทุกตัวสุขภาพปกติ พร้อมเข้าโครงการ` }
+      : null,
+  };
+}
+
 let _assetSeq = 0;
 function makeAsset(o) {
   _assetSeq++;
@@ -897,23 +962,21 @@ const DB = {
   notifications: [],
 };
 
-// seed a few historical log entries that match the demo state
-(function seedAudit() {
-  const DAY = 86400000;
-  const now = Date.now();
-  DB.auditLog.push(
-    { ts: now - 5 * DAY, user: 'ดร. นภา ศรีสุข', role: 'PI', action: 'สร้างโครงการ', detail: 'NAFLD Diet Study · 4 ชั้น × 6 กรง กรงละ 2 ตัว', project: 'NAFLD Diet Study' },
-    { ts: now - 5 * DAY + 7200000, user: 'สพ.ญ. อรุณ ทองดี', role: 'AV', action: 'อนุมัติโครงการ', detail: 'NAFLD Diet Study · เอกสารครบถ้วน', project: 'NAFLD Diet Study' },
-    { ts: now - 6 * DAY, user: 'สพ. อนันต์', role: 'VET', action: 'บันทึกการรักษา', detail: 'C-02-1 · บาดแผลถลอกที่หาง', project: 'NAFLD Diet Study' },
-    { ts: now - 5 * DAY, user: 'นายสมชาย (AHS)', role: 'ACT', action: 'บันทึกการตาย', detail: 'C-04-2 · พบตายในกรง · ทำลายซาก', project: 'NAFLD Diet Study' },
-    { ts: now - 2 * DAY, user: 'สพ. อนันต์', role: 'VET', action: 'ปิดเคส', detail: 'C-02-1 · แผลหายดี ขนขึ้นปกติ', project: 'NAFLD Diet Study' },
-    { ts: now - 2 * DAY + 3600000, user: 'สพ.ญ. กมล', role: 'VET', action: 'บันทึกการตาย', detail: 'D-01-2 · Humane endpoint · ส่งชันสูตร', project: 'NAFLD Diet Study' },
-    { ts: now - 1 * DAY, user: 'สพ.ญ. กมล', role: 'VET', action: 'สั่ง Humane endpoint', detail: 'B-01-1 · น้ำหนักลด >20% ไม่ตอบสนองการรักษา', project: 'NAFLD Diet Study' },
-    { ts: now - 1 * DAY + 900000, user: 'สพ.ญ. กมล', role: 'VET', action: 'บันทึกการรักษา', detail: 'B-03-1 · สงสัยติดเชื้อทางเดินอาหาร', project: 'NAFLD Diet Study' },
-    { ts: now - 1 * DAY + 1800000, user: 'ปิยะ ใจดี (ACT)', role: 'ACT', action: 'ชั่งน้ำหนัก', detail: 'บันทึกกรง A-01', project: 'NAFLD Diet Study' },
-    { ts: now - 6 * 3600000, user: 'ดร. นภา ศรีสุข', role: 'PI', action: 'Stop (ไม่คิดเฉลี่ย)', detail: 'C-02-2 · หยุดนำไปคิดค่าเฉลี่ยกลุ่ม', project: 'NAFLD Diet Study' },
-    { ts: now - 3 * 3600000, user: 'ก้อง วัฒนา (AHS)', role: 'AHS', action: 'แจ้งผิดปกติ', detail: 'A-04-1 · ขนยุ่ง นั่งซึมมุมกรง', project: 'NAFLD Diet Study' },
-  );
+// โครงการที่เดินแล้วก็ผ่านการกักโรคมาก่อนเหมือนกัน — ถ้าไม่มีเอกสารย้อนหลัง
+// หน้ากักกันโรคของโครงการหลักจะว่างเปล่าทั้งที่แผนการใช้สัตว์เขียนไว้ว่ากักมาแล้ว
+(function seedPastQuarantine() {
+  const past = [
+    { id: 'P1', count: 48, tagPrefix: 'NF', strain: 'C57BL/6', sex: 'M / F',
+      protocolNo: 'MU-AEC-2569-007', ageWeeks: 6, weightMin: 20, weightMax: 25 },
+    { id: 'P3', count: 12, tagPrefix: 'BP', strain: 'BALB/c', sex: 'M / F',
+      protocolNo: 'MU-AEC-2568-112', ageWeeks: 8, weightMin: 22, weightMax: 28 },
+  ];
+  past.forEach(o => {
+    const p = DB.projects.find(x => x.id === o.id);
+    if (!p || p.quarantine) return;
+    // เริ่มกักคือวันที่ระบุไว้ในแผน ("รับสัตว์เข้าห้องกักกันโรค")
+    p.quarantine = quarantineDemo({ ...o, start: p.facility.quarantineDate, released: true, failAt: null });
+  });
 })();
 
 // project documents (attached PDFs). In this prototype files live only in
@@ -1060,80 +1123,46 @@ const DB = {
 
   // สองสถานะก่อนโครงการเดินจริง — แม่พิมพ์เดียวกัน ต่างกันแค่ระยะที่ไปถึง
   DB.projects.push(
-    // สร้างกรงแล้ว แต่สัตว์ยังไม่มาส่ง — ยังไม่มีเอกสารกักโรคสักใบ
+    // สร้างกรงแล้ว แต่สัตว์ยังไม่มาส่ง — วันมาถึงอยู่ในอนาคต ยังไม่มีเอกสารกักโรคสักใบ
     builtProject({ id: 'P9', name: 'Bone Healing Study', protocolNo: 'MU-AEC-2569-024',
       objective: 'ศึกษาการสมานของกระดูกหลังได้รับสารกระตุ้นในหนูทดลอง',
-      phase: 'awaiting_intake',
+      endDetail: 'สิ้นสุดการทดลอง · เก็บตัวอย่างกระดูกและการุณยฆาต',
+      strain: 'ICR', arrive: isoDaysAgo(-4), phase: 'awaiting_intake',
       quarantine: { intake: null, program: null, daily: [], release: null } }),
     // สัตว์มาถึงและกักอยู่ (วันที่ 6 จาก 7) — เอกสารครบทั้งสองใบ พิมพ์ได้ทันที
     builtProject({ id: 'P8', name: 'Renal Function Study', protocolNo: 'MU-AEC-2569-021',
       objective: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
-      phase: 'quarantine',
-      quarantine: quarantineDemo({ startAgo: 5, released: false, protocolNo: 'MU-AEC-2569-021' }) }),
-    // กักครบ 7 วันและสัตวแพทย์ปล่อยแล้ว — เหลือขั้นเดียวคือ Sci ชั่งน้ำหนักแรกเข้า
+      endDetail: 'สิ้นสุดการทดลอง · เก็บตัวอย่างไตและการุณยฆาต',
+      strain: 'ICR', arrive: isoDaysAgo(5), phase: 'quarantine',
+      quarantine: quarantineDemo({ start: isoDaysAgo(5), count: 10, failAt: 6, released: false,
+        protocolNo: 'MU-AEC-2569-021', tagPrefix: 'RT', strain: 'ICR', sex: 'M / F',
+        ageWeeks: 7, weightMin: 22, weightMax: 28 }) }),
+    // กักครบ 7 วันและสัตวแพทย์ปล่อยเมื่อวาน — วันนี้ถึงคิว Sci ชั่งน้ำหนักแรกเข้า
     builtProject({ id: 'P10', name: 'Gut Microbiome Pilot', protocolNo: 'MU-AEC-2569-026',
       objective: 'ศึกษาผลของโพรไบโอติกต่อจุลชีพในลำไส้ของหนูทดลอง',
-      phase: 'running',
-      quarantine: quarantineDemo({ startAgo: 8, released: true, protocolNo: 'MU-AEC-2569-026' }) }),
+      endDetail: 'สิ้นสุดการทดลอง · เก็บตัวอย่างลำไส้และการุณยฆาต',
+      strain: 'C57BL/6', arrive: isoDaysAgo(7), phase: 'running',
+      quarantine: quarantineDemo({ start: isoDaysAgo(7), count: 10, failAt: null, released: true,
+        protocolNo: 'MU-AEC-2569-026', tagPrefix: 'GM', strain: 'C57BL/6', sex: 'M / F',
+        ageWeeks: 7, weightMin: 20, weightMax: 26 }) }),
   );
 
   // an AV-built project that is already live but still empty: shelves may hold
   // UNEQUAL numbers of cages, every cage has no mice, no diet and no treatment group.
   // ชุดเอกสารกักกันโรคตัวอย่าง — ตรวจรับครบ 10 ตัว (ไม่ผ่าน 1) และดูแลมาแล้ว 5 วัน
   // มีไว้ให้เปิดหน้ากักกันโรคแล้วพิมพ์เอกสารได้ทั้งสองใบทันทีโดยไม่ต้องกรอกอะไรก่อน
-  // o.startAgo = เริ่มกักเมื่อกี่วันก่อน · o.released = ปล่อยออกแล้วหรือยัง
-  // วันสิ้นสุดคิดจากระยะมาตรฐาน 7 วันเสมอ ตัวอย่างจึงสอดคล้องกับที่ระบบเติมให้เอง
-  function quarantineDemo(o) {
-    const start = o.startAgo;
-    const until = start - (QUARANTINE_DAYS - 1);      // นับปลายทั้งสองข้าง = 7 วัน
-    const logDays = Math.min(QUARANTINE_DAYS, start + 1);
-    return {
-      intake: {
-        date: isoDaysAgo(start), time: '09:20', code: o.protocolNo,
-        ageWeeks: 7, weightMin: 22, weightMax: 28, by: 'Sci — นักวิทยาศาสตร์',
-        rows: (() => {
-          const cages = ['Q-01', 'Q-02', 'Q-03', 'Q-04', 'Q-05'];
-          return Array.from({ length: 10 }, (_, i) => ({
-            cage: cages[Math.floor(i / 2)], tag: `RT-${String(i + 1).padStart(2, '0')}`,
-            weight: rand(22, 28),
-            // ตัวอย่างมีตัวที่ไม่ผ่านหนึ่งตัว เพื่อให้เห็นว่าใบรายงานแสดงยังไง
-            appearance: i === 6 ? 'abnormal' : 'normal',
-            result: i === 6 ? 'fail' : 'pass',
-            note: i === 6 ? 'ขนหยอง ซึม ตาแฉะ — แยกออกจากกลุ่ม' : '',
-          }));
-        })(),
-      },
-      program: {
-        vendor: 'Nomura Siam NLAC [Mahidol University]', transport: 'BKK to CNX by Airplane',
-        strain: 'ICR', sex: 'M / F', vet: 'สพ.ญ. กมล ศรีวิไล',
-        cages: 5, perCage: 2,
-        startDate: isoDaysAgo(start), untilDate: isoDaysAgo(until),
-        countComplete: true, appearanceOk: true, appearanceNote: '',
-        healthCert: true, healthCertNote: 'HC-2569/0142 ออกโดย NLAC',
-        preventive: false, preventiveNote: '',
-        remark: 'สัตว์ถึงหน่วยเวลา 08:50 น. สภาพกล่องปกติ',
-      },
-      daily: Array.from({ length: logDays }, (_, i) => ({
-        date: isoDaysAgo(start - i), time: ['08:40', '08:35', '09:05', '08:50', '08:45', '08:30', '09:10'][i % 7],
-        by: 'ACT — จนท.ดูแลสัตว์ทดลอง',
-        items: {
-          animals: i === 1 ? 'abnormal' : 'normal',
-          feed: 'normal', water: 'normal', cage: 'normal',
-        },
-        jobs: i % 2 === 0 ? ['Feed: Add', 'Water: Change'] : ['Feed: Add', 'Water: Add', 'Cage: Change Bottom/Pan'],
-        note: i === 1 ? 'RT-07 ขนหยอง ซึม แยกกรงและแจ้งสัตวแพทย์แล้ว' : '',
-      })),
-      release: o.released
-        ? { date: isoDaysAgo(until), vet: 'สพ.ญ. กมล ศรีวิไล', healthy: true, note: '',
-            remark: 'ครบกำหนดกัก 7 วัน สัตว์ทุกตัวสุขภาพปกติ พร้อมเข้าโครงการ' }
-        : null,
-    };
-  }
-
   // โครงการที่ AV สร้างกรงเสร็จแล้ว — ใช้สร้างตัวอย่างของ "ทั้งสองสถานะก่อนเดินจริง"
   // จากแม่พิมพ์เดียวกัน ต่างกันแค่ระยะที่ไปถึง: ยังไม่มาส่ง กับ มาถึงแล้วกำลังกัก
   function builtProject(o) {
     const id = o.id;
+    // ทุกวันในโครงการนี้อ้างจากวันเดียว = วันที่สัตว์มาถึงหน่วย (เริ่มกักโรค)
+    //   มาถึง → กัก 7 วัน → ปล่อย → ชั่งน้ำหนักแรกเข้า → สิ้นสุดการทดลอง
+    // ถ้าปล่อยให้แต่ละที่นับ isoDaysAgo ของตัวเอง วันบนใบฟอร์ม แผนการใช้สัตว์
+    // และสถานะจะหลุดจากกันทันทีที่แก้อันใดอันหนึ่ง
+    const arrive = o.arrive;
+    const release = isoPlus(arrive, QUARANTINE_DAYS - 1);
+    const moveIn = isoPlus(release, 1);
+    const endDate = isoPlus(moveIn, 84);
     const diets = [
       { id: `${id}-D1`, name: 'อาหารทั่วไป', isDefault: true,  color: '#94a3b8', desc: 'อาหารมาตรฐาน', capacity: 10 },
       { id: `${id}-D2`, name: 'ไขมันสูง',    isDefault: false, color: '#d97706', desc: 'อาหารไขมันสูง', capacity: 6 },
@@ -1170,17 +1199,19 @@ const DB = {
     return {
       id, name: o.name,
       description: o.objective,
-      startDate: todayISO(), status: 'active', createdBy: 'u_pi', approval: 'approved',
+      // startDate ในระบบนี้หมายถึง "วันที่หนูเข้ากรง/ชั่งครั้งแรก" (ตรงกับช่อง Start
+      // บนใบติดหน้ากรง) ไม่ใช่วันที่สัตว์มาถึงหน่วย — ต้องใช้ moveIn ให้ตรงกับ P1
+      startDate: moveIn, status: 'active', createdBy: 'u_pi', approval: 'approved',
       // โครงการตัวอย่างที่ค้างอยู่ในช่วงกักโรค — เปิดหน้ากักกันโรคแล้วพิมพ์เอกสาร
       // ได้ทั้งสองใบทันทีโดยไม่ต้องกรอกอะไรก่อน
       phase: o.phase,
       quarantine: o.quarantine,
-      requestDate: isoDaysAgo(6),
+      requestDate: isoPlus(arrive, -16),
       request: {
         // หัวโปรโตคอลครบชุดเหมือนที่ฟอร์มคำขอสร้างให้ — ใบติดหน้ากรงอ่านจากตรงนี้
         lotNo: '1', protocolNo: o.protocolNo, pi: 'ดร. นภา ศรีสุข',
-        approvedDate: isoDaysAgo(8), untilDate: isoDaysAgo(-357),
-        species: 'Mus musculus', strain: 'ICR',
+        approvedDate: isoPlus(arrive, -14), untilDate: isoPlus(arrive, 351),
+        species: 'Mus musculus', strain: o.strain,
         sexes: ['M', 'F'], ageMin: 7, ageMax: 9, weightMin: 22, weightMax: 28,
         maleCount: 6, femaleCount: 4,
         // เกณฑ์ Humane endpoint — ตั้งค่าตอน PI ยื่นคำขอ แต่ละโครงการต่างกันได้
@@ -1205,18 +1236,18 @@ const DB = {
         groups: [ { name: 'Control', isControl: true, plannedMice: 4 }, { name: 'Treatment', isControl: false, plannedMice: 6 } ],
         // รายการสุดท้ายของแผน = ช่อง "End" บนใบติดหน้ากรง
         plan: [
-          { date: isoDaysAgo(5), detail: 'รับสัตว์เข้าห้องกักกันโรค · ปรับสภาพ' },
-          { date: isoDaysAgo(-1), detail: 'ชั่งน้ำหนักแรกเข้า นำหนูเข้ากรง และแบ่งกลุ่ม' },
-          { date: isoDaysAgo(-84), detail: 'สิ้นสุดการทดลอง · เก็บตัวอย่างไตและการุณยฆาต' },
+          { date: arrive, detail: `รับสัตว์เข้าห้องกักกันโรค · กัก ${QUARANTINE_DAYS} วัน` },
+          { date: moveIn, detail: 'ชั่งน้ำหนักแรกเข้า นำหนูเข้ากรง และแบ่งกลุ่ม' },
+          { date: endDate, detail: o.endDetail },
         ],
         protocolEndpoint: 'สิ้นสุดเมื่อครบ 12 สัปดาห์ หรือเมื่อเก็บตัวอย่างไตครบทุกตัว',
         humaneEndpoint: 'น้ำหนักลดเกิน 20% ของน้ำหนักเริ่มต้น · ไม่กินอาหาร/น้ำเกิน 24 ชม. · ปัสสาวะผิดปกติร่วมกับซึมไม่ตอบสนอง — ให้ทำการุณยฆาตทันที',
         diagram: null, aup: null, approvalDoc: null,
         appointments: [ { role: 'COPI', userId: 'u_copi', name: 'CoPI — นักวิจัยร่วม' } ],
       },
-      aecReview: { by: 'AEC — สำนักเลขาฯ จริยธรรม', at: isoDaysAgo(4) },
-      builtBy: { by: 'AV — สัตวแพทย์ประจำหน่วย', at: isoDaysAgo(1) },
-      facility: { roomNo: 'AR01', rackNo: RACK, racks: [RACK], quarantineDate: isoDaysAgo(5), moveInDate: isoDaysAgo(1) },
+      aecReview: { by: 'AEC — สำนักเลขาฯ จริยธรรม', at: isoPlus(arrive, -13) },
+      builtBy: { by: 'AV — สัตวแพทย์ประจำหน่วย', at: isoPlus(arrive, -7) },
+      facility: { roomNo: 'AR01', rackNo: RACK, racks: [RACK], quarantineDate: arrive, moveInDate: moveIn },
       shelves: layout.length, cagesPerShelf: 3, shelfNames, shelfRacks,
       diets, groups, cages, documents: [],
       members: [
@@ -1228,6 +1259,44 @@ const DB = {
       ],
     };
   }
+})();
+
+// seed a few historical log entries that match the demo state
+(function seedAudit() {
+  const HOUR = 3600000;
+  const p1 = DB.projects.find(x => x.id === 'P1');
+  // ผูกเวลากับวันจริงของโครงการ ไม่ใช่นับถอยหลังจากวันนี้เป็นตัวเลขลอย ๆ —
+  // ไม่งั้น log จะบอกว่า "สร้างโครงการ 5 วันก่อน" ทั้งที่หนูอยู่ในกรงมาสองสัปดาห์แล้ว
+  // 'YYYY-MM-DD' เปล่า ๆ ถูกอ่านเป็น UTC เที่ยงคืน เวลาที่แสดงจะเพี้ยนไป +7 ชม.
+  // ต่อท้าย T00:00:00 เพื่อให้อ่านเป็นเวลาท้องถิ่น ชั่วโมงที่ตั้งไว้จึงตรงตามที่เขียน
+  const at = (iso, h = 9) => new Date(iso + 'T00:00:00').getTime() + h * HOUR;
+  const arrive = p1.facility.quarantineDate;          // สัตว์มาถึง = เริ่มกักโรค
+  const release = p1.quarantine.release.date;
+  const moveIn = p1.facility.moveInDate;
+  const P = 'NAFLD Diet Study';
+  DB.auditLog.push(
+    { ts: at(isoPlus(arrive, -19), 10), user: 'ดร. นภา ศรีสุข', role: 'PI', action: 'ยื่นคำขอสร้างโครงการ', detail: `${P} · สัตว์ทดลอง 48 ตัว · 4 กลุ่ม`, project: P },
+    { ts: at(isoPlus(arrive, -16), 14), user: 'AEC — สำนักเลขาฯ จริยธรรม', role: 'AEC', action: 'ผ่านการตรวจจริยธรรม', detail: `${P} · เอกสารครบถ้วน`, project: P },
+    { ts: at(isoPlus(arrive, -7), 11), user: 'สพ.ญ. อรุณ ทองดี', role: 'AV', action: 'สร้างโครงการ (สัตวแพทย์)', detail: `${P} · 4 ชั้น × 6 กรง กรงละ 2 ตัว`, project: P },
+    { ts: at(arrive, 9), user: 'Sci — นักวิทยาศาสตร์', role: 'SCI', action: 'ตรวจรับสัตว์เข้าส่วนกักโรค', detail: '48 ตัว · ผ่าน 48 · ไม่ผ่าน 0', project: P },
+    { ts: at(release, 10), user: 'สพ.ญ. กมล ศรีวิไล', role: 'VET', action: 'ปล่อยสัตว์ออกจากกักกันโรค', detail: `ครบกำหนดกัก ${QUARANTINE_DAYS} วัน · สุขภาพปกติทุกตัว`, project: P },
+    { ts: at(moveIn, 9), user: 'Sci — นักวิทยาศาสตร์', role: 'SCI', action: 'รับหนูเข้าโครงการ (น้ำหนักแรกเข้า)', detail: '24 กรง · 48 ตัว', project: P },
+    // เหตุการณ์ทางคลินิก — ตรงกับวันที่บันทึกไว้ในตัวหนูจริง
+    { ts: at(isoDaysAgo(7), 8), user: 'นายสมชาย (AHS)', role: 'ACT', action: 'บันทึกการตาย', detail: 'C-04-2 · พบตายในกรง · ทำลายซาก', project: P },
+    { ts: at(isoDaysAgo(6), 10), user: 'สพ. อนันต์', role: 'VET', action: 'บันทึกการรักษา', detail: 'C-02-1 · บาดแผลถลอกที่หาง', project: P },
+    { ts: at(isoDaysAgo(4), 11), user: 'สพ.ญ. กมล', role: 'VET', action: 'บันทึกการตาย', detail: 'D-01-2 · Humane endpoint · ส่งชันสูตร', project: P },
+    { ts: at(isoDaysAgo(2), 9), user: 'สพ. อนันต์', role: 'VET', action: 'ปิดเคส', detail: 'C-02-1 · แผลหายดี ขนขึ้นปกติ', project: P },
+    { ts: at(isoDaysAgo(2), 13), user: 'ดร. นภา ศรีสุข', role: 'PI', action: 'Stop (ไม่คิดเฉลี่ย)', detail: 'C-02-2 · หยุดนำไปคิดค่าเฉลี่ยกลุ่ม', project: P },
+    { ts: at(isoDaysAgo(1), 9), user: 'สพ.ญ. กมล', role: 'VET', action: 'สั่ง Humane endpoint', detail: 'B-01-1 · น้ำหนักลด >20% ไม่ตอบสนองการรักษา', project: P },
+    { ts: at(isoDaysAgo(1), 10), user: 'สพ.ญ. กมล', role: 'VET', action: 'บันทึกการรักษา', detail: 'B-03-1 · สงสัยติดเชื้อทางเดินอาหาร', project: P },
+    { ts: at(isoDaysAgo(1), 15), user: 'ปิยะ ใจดี (ACT)', role: 'ACT', action: 'ชั่งน้ำหนัก', detail: 'บันทึกกรง A-01', project: P },
+    { ts: at(isoDaysAgo(0), 8), user: 'ก้อง วัฒนา (AHS)', role: 'AHS', action: 'แจ้งผิดปกติ', detail: 'A-04-1 · ขนยุ่ง นั่งซึมมุมกรง', project: P },
+    // โครงการที่กำลังกักโรคอยู่
+    { ts: at(DB.projects.find(x => x.id === 'P8').facility.quarantineDate, 9), user: 'Sci — นักวิทยาศาสตร์', role: 'SCI',
+      action: 'ตรวจรับสัตว์เข้าส่วนกักโรค', detail: '10 ตัว · ผ่าน 9 · ไม่ผ่าน 1', project: 'Renal Function Study' },
+  );
+  // เขียนไว้เป็นกลุ่มตามโครงการเพื่อให้อ่านง่ายตอนแก้ แต่ log ต้องเรียงตามเวลาจริง
+  DB.auditLog.sort((a, b) => a.ts - b.ts);
 })();
 
 // demo: give every project the same team so the members list is consistent when
