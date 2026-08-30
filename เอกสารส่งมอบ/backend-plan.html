@@ -215,78 +215,122 @@
     <header>
       <span class="eyebrow">Mouse Lab Management · แผนพัฒนาระยะถัดไป</span>
       <h1>จาก Prototype สู่ระบบใช้งานจริง</h1>
-      <p class="lead">Prototype ปัจจุบันทดสอบ workflow กับผู้ใช้จริงได้ครบแล้ว ขั้นต่อไปคือหลังบ้าน — เอกสารนี้สรุปการเลือกฐานข้อมูล สถาปัตยกรรม การแนบเอกสาร PDF และ roadmap แบบแบ่งเฟส เพื่อใช้คุยกับทีมและลูกค้า</p>
+      <p class="lead">Prototype ปัจจุบันทดสอบ workflow กับผู้ใช้จริงได้ครบแล้ว ขั้นต่อไปคือหลังบ้าน — เอกสารนี้สรุปสถาปัตยกรรมที่เลือก (<b>Firebase</b>) โครงข้อมูล การยืนยันตัวตนและ 2FA การแนบเอกสาร PDF และ roadmap แบบแบ่งเฟส เพื่อใช้คุยกับทีมและลูกค้า</p>
     </header>
 
     <hr class="rule">
 
     <section>
-      <h2><span class="num">01</span> สองเส้นทาง deploy</h2>
-      <p class="sec-sub">ตัวแปรตัดสินคือ<b> นโยบายข้อมูลของมหาวิทยาลัย</b> — จะฝากบน cloud ได้ หรือต้องเก็บในองค์กร ทั้งสองเส้นทางใช้ <b>PostgreSQL เหมือนกัน</b> ฉะนั้น data model ออกแบบครั้งเดียว ย้ายภายหลังได้โดยไม่รื้อ</p>
+      <h2><span class="num">01</span> สถาปัตยกรรมที่เลือก</h2>
+      <p class="sec-sub"><b>ตัดสินใจแล้ว: Firebase</b> — Hosting เสิร์ฟหน้าเว็บ, Firestore เป็นฐานข้อมูล, Firebase Auth ทำระบบล็อกอิน ตัวแอปเป็น static ล้วนไม่มี build step อยู่แล้ว จึง deploy ได้ตรง ๆ · ทางเลือก on-prem เก็บไว้เป็นแผนสำรองกรณีนโยบายข้อมูลไม่อนุญาตให้ใช้คลาวด์</p>
 
       <div class="paths">
         <div class="card reco">
           <div class="card-top">
-            <h3>Cloud Managed</h3>
-            <span class="tag good">แนะนำเริ่มเร็ว</span>
+            <h3>Firebase</h3>
+            <span class="tag good">เลือกใช้</span>
           </div>
-          <p class="who">Supabase — เหมาะกับทีมเล็ก อยากเห็นของใช้จริงเร็ว ไม่ติดข้อบังคับ on-prem</p>
+          <p class="who">Google Cloud — งานหลังบ้านน้อยที่สุด ได้ Auth และรีเซ็ตรหัสผ่านมาในตัว</p>
           <ul class="spec">
-            <li><span class="k">ฐานข้อมูล</span><span class="v"><b>PostgreSQL</b> (จัดการให้)</span></li>
-            <li><span class="k">Auth</span><span class="v">Supabase Auth (พร้อมใช้)</span></li>
-            <li><span class="k">ไฟล์</span><span class="v">Supabase Storage</span></li>
-            <li><span class="k">สิทธิ์</span><span class="v">Row-Level Security map จาก <b>ROLES</b> ตรงๆ</span></li>
-            <li><span class="k">งานหลังบ้าน</span><span class="v">น้อยมาก — auto REST / Realtime</span></li>
+            <li><span class="k">เว็บ</span><span class="v"><b>Firebase Hosting</b> — CDN + HTTPS + โดเมนของคณะ</span></li>
+            <li><span class="k">ฐานข้อมูล</span><span class="v"><b>Cloud Firestore</b> (document store)</span></li>
+            <li><span class="k">Auth</span><span class="v">Firebase Auth — อีเมล/รหัสผ่าน · รีเซ็ตเมื่อลืม · <b>MFA</b></span></li>
+            <li><span class="k">ไฟล์</span><span class="v">Cloud Storage for Firebase</span></li>
+            <li><span class="k">สิทธิ์</span><span class="v"><b>Security Rules</b> + custom claims</span></li>
+            <li><span class="k">งานหลังบ้าน</span><span class="v">น้อยมาก — ไม่ต้องเขียน API server</span></li>
           </ul>
         </div>
 
         <div class="card">
           <div class="card-top">
             <h3>On-prem</h3>
-            <span class="tag neutral">ถ้าต้องเก็บในองค์กร</span>
+            <span class="tag neutral">แผนสำรอง</span>
           </div>
-          <p class="who">เซิร์ฟเวอร์มหาวิทยาลัย — เหมาะเมื่อ IT บังคับให้ข้อมูลอยู่ในองค์กร</p>
+          <p class="who">เซิร์ฟเวอร์มหาวิทยาลัย — ใช้เมื่อ IT ไม่อนุญาตให้ข้อมูลออกนอกองค์กร</p>
           <ul class="spec">
-            <li><span class="k">ฐานข้อมูล</span><span class="v"><b>PostgreSQL</b> (self-host)</span></li>
+            <li><span class="k">เว็บ</span><span class="v">Nginx</span></li>
+            <li><span class="k">ฐานข้อมูล</span><span class="v">PostgreSQL (self-host)</span></li>
             <li><span class="k">Auth</span><span class="v">JWT — NestJS / FastAPI</span></li>
             <li><span class="k">ไฟล์</span><span class="v">MinIO (S3-compatible)</span></li>
             <li><span class="k">สิทธิ์</span><span class="v">guard ในชั้น API</span></li>
-            <li><span class="k">งานหลังบ้าน</span><span class="v">มากกว่า — ต้องเขียน API เอง</span></li>
+            <li><span class="k">งานหลังบ้าน</span><span class="v">มากกว่ามาก — ต้องเขียน API เอง</span></li>
           </ul>
         </div>
       </div>
 
-      <div class="callout">
-        <span class="mark">&#10145;</span>
-        <p>ระบบสิทธิ์ที่ออกแบบไว้แล้ว (<b>admin/user</b> + roles รายโครงการ + capability union) map เข้ากับ <b>Supabase Row-Level Security</b> ได้พอดี — ประหยัดงานหลังบ้านมาก จึงเชียร์ Supabase เป็นค่าเริ่มต้น ยกเว้นมหาวิทยาลัยบังคับ on-prem</p>
+      <div class="callout" style="background:var(--warn-soft);border-color:color-mix(in srgb, var(--warn) 30%, var(--border))">
+        <span class="mark" style="color:var(--warn)">&#9888;</span>
+        <p><b>ต้องเคลียร์ก่อนสร้างโปรเจกต์ Firebase — ที่ตั้งข้อมูล</b><br>
+        Firestore เลือก region ได้<b>ครั้งเดียวตอนสร้างโปรเจกต์ และเปลี่ยนทีหลังไม่ได้</b> ถ้าเลือกผิดคือต้องสร้างใหม่แล้วย้ายข้อมูลทั้งก้อน
+        ข้อมูลชุดนี้ผูกกับใบอนุมัติจริยธรรมการใช้สัตว์ทดลอง จึงควรยืนยันกับฝ่าย IT / นโยบายข้อมูลของมหาวิทยาลัยก่อนว่าฝากบนคลาวด์นอกประเทศได้หรือไม่
+        ภูมิภาคที่ใกล้ไทยที่สุดคือสิงคโปร์ (<code>asia-southeast1</code>) — ยังไม่มี region ในประเทศไทย</p>
       </div>
     </section>
 
     <hr class="rule">
 
     <section>
-      <h2><span class="num">02</span> ทำไม PostgreSQL</h2>
-      <p class="sec-sub">ข้อมูลของระบบนี้เป็น <b>relational ชัดเจน</b> (โครงการ → กลุ่ม → กรง → หนู → น้ำหนัก/การรักษา/ชันสูตร) และต้องคำนวณค่าเฉลี่ยกลุ่ม เทียบ control ตลอด — งานแบบ join + aggregate นี้ NoSQL/Firestore ทำได้ลำบาก Postgres จึงเป็นแกนที่เหมาะที่สุด</p>
+      <h2><span class="num">02</span> โครงข้อมูลบน Firestore</h2>
+      <p class="sec-sub">Firestore เป็น document store ไม่มี join และไม่มี aggregate ข้ามคอลเลกชัน — แต่<b>ขนาดงานจริงของหน่วยนี้เล็ก</b> (โครงการละไม่กี่สิบตัว) การดึงหนูทั้งโครงการมาคำนวณค่าเฉลี่ยกลุ่มฝั่ง client จึงทำได้สบาย ซึ่งเป็นสิ่งที่ <code>js/app.js</code> ทำอยู่แล้ววันนี้ ข้อควรระวังจริง ๆ อยู่ที่<b>รูปทรงของข้อมูล</b> ไม่ใช่ความสามารถในการคำนวณ</p>
 
-      <div class="stack">
+      <div class="twocol">
+        <div class="mini real">
+          <h4>&#9679; กติกาที่ต้องยึด</h4>
+          <ul>
+            <li><b>ห้ามยัดทุกอย่างไว้ในเอกสารเดียว</b> — เอกสาร Firestore จำกัด <b>1 MiB</b> โครงการที่มีหนู 48 ตัว × น้ำหนักรายวัน × ประวัติสุขภาพ จะชนเพดานแน่นอน</li>
+            <li>แตกเป็น <b>subcollection</b> ตามชั้นข้อมูลจริง</li>
+            <li>Firestore <b>คิดเงินรายเอกสารที่อ่าน</b> — หน้าที่เปิดบ่อยควรอ่านเฉพาะที่ใช้ และเก็บยอดสรุปไว้ในเอกสารแม่</li>
+            <li>เปิด <b>offline persistence</b> — ห้องเลี้ยงสัตว์สัญญาณไม่ดี ข้อนี้ได้เปรียบ Postgres ชัดเจน</li>
+          </ul>
+        </div>
+        <div class="mini now">
+          <h4>&#9679; สิ่งที่ได้มาฟรี</h4>
+          <ul>
+            <li><b>Realtime</b> — คนหนึ่งบันทึกน้ำหนัก อีกจอเห็นทันที ไม่ต้องเขียน websocket เอง</li>
+            <li><b>Auth ครบชุด</b> — ล็อกอิน · รีเซ็ตรหัสผ่านทางอีเมล · MFA</li>
+            <li>ไม่ต้องดูแลเซิร์ฟเวอร์ ไม่ต้อง backup เอง</li>
+            <li>ค่าใช้จ่ายที่ขนาดงานนี้น่าจะอยู่ในโควตาฟรีหรือใกล้เคียง</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="schema"><span class="cm">// โครงคอลเลกชันที่เสนอ — แตกตามชั้นที่ข้อมูลโตจริง</span>
+projects/{projectId}                 <span class="cm">// หัวโครงการ · request · phase · billing · quarantine</span>
+  cages/{cageId}                     <span class="cm">// รหัสกรง · ชั้น/แร็ค · diet · group</span>
+    mice/{mouseId}                   <span class="cm">// รหัสหนู · เพศ · สถานะ · ผลสรุปล่าสุด</span>
+      weights/{weightId}             <span class="cm">// โตทุกวัน — ต้องแยกออกมา</span>
+      health/{entryId}               <span class="cm">// ไทม์ไลน์สุขภาพ · การรักษา</span>
+    careLog/{roundId}                <span class="cm">// รอบตรวจกรงของ ACT</span>
+  quarantineDaily/{dayId}            <span class="cm">// บันทึกดูแลระหว่างกักโรค</span>
+
+assets/{assetId}                     <span class="cm">// พัสดุ — วัสดุ + ครุภัณฑ์</span>
+  moves/{moveId}                     <span class="cm">// รับเข้า/เบิกออก</span>
+  repairs/{repairId}
+
+finance/rates                        <span class="cm">// อัตรากลาง + รายการหัตถการ</span>
+finance/expenses/{expenseId}         <span class="cm">// ค่าน้ำ ไฟ ค่าจ้าง</span>
+users/{uid}                          <span class="cm">// ตำแหน่ง · ข้อมูลติดต่อ (Auth เก็บรหัสผ่านเอง)</span>
+auditLog/{entryId}</div>
+
+      <div class="stack" style="margin-top:22px">
         <div class="layer client">
           <p class="lt">Client — SPA เดิม</p>
           <p class="ld">โค้ด <code>js/app.js</code> เรนเดอร์เหมือนเดิม เปลี่ยนแค่แหล่งข้อมูล</p>
         </div>
         <div class="connector"></div>
         <div class="layer api">
-          <p class="lt">API + Auth</p>
-          <p class="ld">Supabase (auto-REST + RLS) &nbsp;·หรือ·&nbsp; NestJS / FastAPI + JWT</p>
+          <p class="lt">Firebase SDK + Security Rules</p>
+          <p class="ld">ไม่มี API server ให้ดูแล — สิทธิ์บังคับที่ rules ฝั่ง Google</p>
         </div>
         <div class="fanout"></div>
         <div class="split">
           <div class="layer db">
-            <p class="lt">PostgreSQL</p>
-            <p class="ld">แกนข้อมูลเชิงสัมพันธ์ — projects · cages · mice · weights · treatments · necropsy</p>
+            <p class="lt">Cloud Firestore</p>
+            <p class="ld">แกนข้อมูล — projects · cages · mice · weights · assets · finance</p>
           </div>
           <div class="layer store">
-            <p class="lt">Object Storage</p>
-            <p class="ld">ไฟล์ PDF เอกสารโครงการ (Supabase Storage / MinIO)</p>
+            <p class="lt">Cloud Storage</p>
+            <p class="ld">ไฟล์ PDF เอกสารโครงการและใบฟอร์มที่สแกน</p>
           </div>
         </div>
       </div>
@@ -295,7 +339,45 @@
     <hr class="rule">
 
     <section>
-      <h2><span class="num">03</span> การแนบเอกสาร PDF</h2>
+      <h2><span class="num">03</span> ล็อกอิน สิทธิ์ และ 2FA</h2>
+      <p class="sec-sub">วันนี้หน้าล็อกอิน<b>ยังไม่ตรวจรหัสผ่านเลย</b> — พิมพ์อะไรก็เข้าได้ ขอแค่อีเมลตรงกับบัญชีที่มี เพราะเป็นโปรโตไทป์คลิกผ่าน รหัสผ่านที่เก็บอยู่จึงเป็นแค่<b>ข้อมูล</b> ยังไม่ใช่<b>ด่าน</b> · Firebase Auth ทำให้เป็นด่านจริงและแถมสองอย่างที่ค้างอยู่มาพร้อมกัน</p>
+
+      <div class="twocol">
+        <div class="mini now">
+          <h4>&#9679; ได้มาทันทีจาก Firebase Auth</h4>
+          <ul>
+            <li><b>ลืมรหัสผ่าน</b> — ส่งลิงก์รีเซ็ตทางอีเมล ผู้ใช้ตั้งใหม่เอง ไม่ต้องรบกวนผู้ดูแลระบบ</li>
+            <li>รหัสผ่านถูก<b>แฮช</b>และเก็บฝั่ง Google — ระบบเราไม่เห็นและไม่ต้องเก็บเอง</li>
+            <li>ปิดกั้นการเดารหัสซ้ำ ๆ ให้ในตัว</li>
+            <li>รหัสผ่านเริ่มต้นที่ผู้วิจัยตั้งมาในคำขอ ใช้เป็นรหัสแรกเข้าแล้วบังคับเปลี่ยนได้</li>
+          </ul>
+        </div>
+        <div class="mini real">
+          <h4>&#9679; 2FA — เลือก TOTP</h4>
+          <ul>
+            <li><b>TOTP</b> (Google / Microsoft Authenticator) — <b>ไม่มีค่าใช้จ่ายต่อครั้ง</b> สแกน QR ครั้งเดียวจบ</li>
+            <li>ไม่เลือก <b>SMS</b> เพราะมีค่าต่อข้อความและต้องผูกกับผู้ให้บริการภายนอก</li>
+            <li>ต้องทำ: เก็บ secret ต่อผู้ใช้ · หน้าเปิดใช้งาน (QR) · ขั้นกรอก 6 หลัก · <b>รหัสสำรอง</b>เผื่อทำมือถือหาย</li>
+            <li>ทำ<b>พร้อมกับตอนต่อ Auth</b> ไม่ใช่แปะทีหลัง</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="callout" style="background:var(--warn-soft);border-color:color-mix(in srgb, var(--warn) 30%, var(--border))">
+        <span class="mark" style="color:var(--warn)">&#9888;</span>
+        <p><b>ตรวจราคาก่อนสัญญากับลูกค้า</b> — MFA บน Firebase Auth ต้องใช้แพลนแบบเสียเงิน (Blaze) และ TOTP ต้องอัปเป็น Firebase Authentication with Identity Platform ซึ่งคิดตามจำนวนผู้ใช้ต่อเดือน จำนวนผู้ใช้ของหน่วยนี้น้อยมากจึงน่าจะอยู่ในโควตาฟรี แต่<b>ราคาปัจจุบันต้องเช็กจากหน้าเว็บ Google เอง</b> ตัวเลขในเอกสารนี้ไม่ได้ระบุไว้เพราะเปลี่ยนได้</p>
+      </div>
+
+      <div class="callout">
+        <span class="mark">&#10145;</span>
+        <p><b>สิทธิ์ต้องย้ายไปฝั่งเซิร์ฟเวอร์</b> — ตอนนี้ตารางสิทธิ์ (26 ความสามารถ · ตำแหน่งระดับระบบ ∪ บทบาทในโครงการ) เช็กอยู่ใน <code>js/app.js</code> ล้วน ซึ่งเปิด DevTools ก็ข้ามได้ ในระบบจริงต้องเขียนซ้ำเป็น <b>Security Rules</b> โดยเก็บตำแหน่งไว้ใน <b>custom claims</b> ของ Auth และเก็บบทบาทรายโครงการไว้ใน <code>projects/{id}/members</code> ให้ rules อ่าน — โค้ดหน้าบ้านยังเช็กต่อไปได้เพื่อซ่อนปุ่ม แต่ตัวบังคับจริงต้องอยู่ที่ rules</p>
+      </div>
+    </section>
+
+    <hr class="rule">
+
+    <section>
+      <h2><span class="num">04</span> การแนบเอกสาร PDF</h2>
       <p class="sec-sub">แต่ละโครงการแนบเอกสารสำคัญได้ (โปรโตคอล · ใบอนุมัติ EC · SOP · ผลแล็บ) — เดโมหน้าตาพร้อมแล้วในตัว prototype ส่วนของจริงใช้แนวทางมาตรฐานคือแยกไฟล์ออกจากฐานข้อมูล</p>
 
       <div class="twocol">
@@ -319,38 +401,36 @@
         </div>
       </div>
 
-      <div class="schema"><span class="cm">-- ตารางเก็บ metadata ของไฟล์ (ตัวไฟล์อยู่บน object storage)</span>
-<span class="kw">create table</span> documents (
-  id            uuid <span class="kw">primary key</span>,
-  project_id    uuid <span class="kw">references</span> projects,
-  mouse_id      uuid <span class="kw">references</span> mice,      <span class="cm">-- null = เอกสารระดับโครงการ</span>
-  filename      text, mime text, size bigint,
-  storage_key   text,                          <span class="cm">-- path บน storage</span>
-  category      text,                          <span class="cm">-- protocol · ec · sop · lab</span>
-  uploaded_by   uuid, uploaded_at timestamptz
-);</div>
+      <div class="schema"><span class="cm">// metadata ของไฟล์ (ตัวไฟล์อยู่บน Cloud Storage)</span>
+projects/{projectId}/documents/{docId} {
+  <span class="kw">filename</span>: string, <span class="kw">mime</span>: string, <span class="kw">size</span>: number,
+  <span class="kw">storagePath</span>: string,        <span class="cm">// path บน Cloud Storage</span>
+  <span class="kw">category</span>: string,           <span class="cm">// protocol · ec · sop · lab · quarantine</span>
+  <span class="kw">mouseId</span>: string | null,     <span class="cm">// null = เอกสารระดับโครงการ</span>
+  <span class="kw">uploadedBy</span>: string, <span class="kw">uploadedAt</span>: timestamp
+}</div>
     </section>
 
     <hr class="rule">
 
     <section>
-      <h2><span class="num">04</span> Roadmap แบ่งเฟส</h2>
+      <h2><span class="num">05</span> Roadmap แบ่งเฟส</h2>
       <p class="sec-sub">ต่อยอดจาก prototype โดยไม่รื้อ UI — <b>App เขียนแยกส่วน render กับ data ไว้แล้ว</b> ฉะนั้น Phase 1 แค่เปลี่ยน <code>Data.*</code> เป็น API call หน้าบ้านนี้จึงกลายเป็นระบบจริงได้เลย ไม่ต้องเขียนใหม่</p>
 
       <div class="road">
         <div class="phase p1">
           <div class="rail"><div class="dot">1</div><div class="line"></div></div>
           <div class="pbody">
-            <h4>ต่อฐานข้อมูลจริง + Auth</h4>
-            <p>สร้าง schema Postgres · ย้าย <code>DB</code>/<code>Data</code> ให้ดึงผ่าน API แทน in-memory · ทำ login จริง — โครง <code>App</code> เรนเดอร์เหมือนเดิม</p>
-            <div class="deliver"><span class="chip">schema</span><span class="chip">API</span><span class="chip">login จริง</span></div>
+            <h4>ต่อ Firestore + Firebase Auth + 2FA</h4>
+            <p>สร้างโปรเจกต์ Firebase (<b>เลือก region ให้ถูกตั้งแต่แรก</b>) · แปลง <code>js/data.js</code> เป็น seed script ไม่ใช่ลบทิ้ง · ย้าย <code>DB</code>/<code>Data</code> ไปอ่าน Firestore · ทำ login จริง + รีเซ็ตรหัสผ่าน + TOTP · เขียน Security Rules ให้ตรงตารางสิทธิ์ — โครง <code>App</code> เรนเดอร์เหมือนเดิม</p>
+            <div class="deliver"><span class="chip">Firestore</span><span class="chip">Auth</span><span class="chip">2FA (TOTP)</span><span class="chip">Security Rules</span><span class="chip">seed script</span></div>
           </div>
         </div>
         <div class="phase">
           <div class="rail"><div class="dot">2</div><div class="line"></div></div>
           <div class="pbody">
             <h4>แนบเอกสาร (Storage)</h4>
-            <p>object storage + ตาราง documents + signed URL — ยกเดโมแนบไฟล์ให้เป็นของจริง</p>
+            <p>Cloud Storage + คอลเลกชัน documents + signed URL — ยกเดโมแนบไฟล์ให้เป็นของจริง</p>
             <div class="deliver"><span class="chip">storage</span><span class="chip">signed URL</span><span class="chip">สิทธิ์รายโครงการ</span></div>
           </div>
         </div>
@@ -374,8 +454,8 @@
           <div class="rail"><div class="dot">5</div><div class="line"></div></div>
           <div class="pbody">
             <h4>ความมั่นคง &amp; ส่งมอบ</h4>
-            <p>backup / restore · log · ทบทวนสิทธิ์ · deploy ด้วย Docker</p>
-            <div class="deliver"><span class="chip">backup</span><span class="chip">Docker</span><span class="chip">hardening</span></div>
+            <p>ตั้ง backup อัตโนมัติของ Firestore · ทดสอบ restore จริงหนึ่งรอบ · ทบทวน Security Rules · ตั้ง budget alert กัน bill บานปลาย · deploy ผ่าน <code>firebase deploy</code> + CI</p>
+            <div class="deliver"><span class="chip">backup + restore</span><span class="chip">rules review</span><span class="chip">budget alert</span><span class="chip">CI deploy</span></div>
           </div>
         </div>
       </div>
@@ -383,7 +463,7 @@
 
     <footer>
       <span class="kicker"><b>Mouse Lab Management</b> — เอกสารประกอบการพูดคุย</span>
-      <span>ปรับปรุง 10 ก.ค. 2569</span>
+      <span>ปรับปรุง 30 ส.ค. 2569</span>
     </footer>
 
   </div>
