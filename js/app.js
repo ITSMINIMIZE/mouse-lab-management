@@ -605,9 +605,17 @@ const App = {
     // นาฬิกาบนปุ่มวันที่ — เดินเองทุกครึ่งนาที ไม่ต้อง re-render ทั้งหน้า
     setInterval(() => { const c = this.el('recClock'); if (c) c.textContent = nowHM(); }, 30000);
     this.renderLogin();
-    this.el('root').addEventListener('click', (e) => {
+    // Delegated on `document`, not on #root: modals are appended to <body>, so a
+    // nav button inside one (the quarantine link in the project popup) sits OUTSIDE
+    // #root and a listener bound there never sees the click — the button looked
+    // fine and did nothing. Navigating also has to close whatever modal it was
+    // clicked from, or the new page opens underneath the old overlay.
+    document.addEventListener('click', (e) => {
       const t = e.target.closest('[data-nav]');
-      if (t) { e.preventDefault(); this.handleNav(t.dataset.nav, t.dataset); }
+      if (!t) return;
+      e.preventDefault();
+      this.closeModal();
+      this.handleNav(t.dataset.nav, t.dataset);
     });
     // ONE global key handler for every modal (installed once — no per-render leaks).
     // It works by clicking the dialog's own controls, so each dialog keeps its
