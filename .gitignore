@@ -13,5 +13,7 @@ CLAUDE.md
 # institutional source forms (CMU originals) — reference only, kept local
 แบบฟอร์ม/
 
-# local dev server launcher — personal convenience, not for the repo
-Server.command
+# local dev server launchers (start/stop) — personal convenience, not for the repo
+# pattern rather than filenames: these are double-click scripts each person makes
+# for their own machine, and the next one should not need a gitignore edit too
+*.command
