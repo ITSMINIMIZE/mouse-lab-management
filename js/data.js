@@ -552,6 +552,9 @@ const FUND_SOURCES = ['เงินรายได้คณะ', 'เงิน�
 // เอกสารสองใบของศูนย์ฯ ที่หน้านี้ต้องออกให้ได้:
 //   LA Guide-AF 9.1-03  บันทึกการตรวจรับสัตว์ทดลองรายตัว (ตอนรับเข้าส่วนกักโรค)
 //   LA Guide-AF 9.1-01  แบบฟอร์มการกักโรคสัตว์ทดลอง (Quarantine Record)
+// ระยะกักโรคมาตรฐานของศูนย์ฯ — ระบบเติมวันสิ้นสุดให้เองจากวันเริ่ม แก้ได้
+const QUARANTINE_DAYS = 7;
+
 const QUARANTINE_VENDORS = [
   'Nomura Siam NLAC [Mahidol University]',
   'ศูนย์สัตว์ทดลองแห่งชาติ มหาวิทยาลัยมหิดล',
@@ -1062,20 +1065,31 @@ const DB = {
       objective: 'ศึกษาการสมานของกระดูกหลังได้รับสารกระตุ้นในหนูทดลอง',
       phase: 'awaiting_intake',
       quarantine: { intake: null, program: null, daily: [], release: null } }),
-    // สัตว์มาถึงและกักอยู่ — เอกสารครบทั้งสองใบ พิมพ์ได้ทันที
+    // สัตว์มาถึงและกักอยู่ (วันที่ 6 จาก 7) — เอกสารครบทั้งสองใบ พิมพ์ได้ทันที
     builtProject({ id: 'P8', name: 'Renal Function Study', protocolNo: 'MU-AEC-2569-021',
       objective: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
-      phase: 'quarantine', quarantine: quarantineDemo() }),
+      phase: 'quarantine',
+      quarantine: quarantineDemo({ startAgo: 5, released: false, protocolNo: 'MU-AEC-2569-021' }) }),
+    // กักครบ 7 วันและสัตวแพทย์ปล่อยแล้ว — เหลือขั้นเดียวคือ Sci ชั่งน้ำหนักแรกเข้า
+    builtProject({ id: 'P10', name: 'Gut Microbiome Pilot', protocolNo: 'MU-AEC-2569-026',
+      objective: 'ศึกษาผลของโพรไบโอติกต่อจุลชีพในลำไส้ของหนูทดลอง',
+      phase: 'running',
+      quarantine: quarantineDemo({ startAgo: 8, released: true, protocolNo: 'MU-AEC-2569-026' }) }),
   );
 
   // an AV-built project that is already live but still empty: shelves may hold
   // UNEQUAL numbers of cages, every cage has no mice, no diet and no treatment group.
   // ชุดเอกสารกักกันโรคตัวอย่าง — ตรวจรับครบ 10 ตัว (ไม่ผ่าน 1) และดูแลมาแล้ว 5 วัน
   // มีไว้ให้เปิดหน้ากักกันโรคแล้วพิมพ์เอกสารได้ทั้งสองใบทันทีโดยไม่ต้องกรอกอะไรก่อน
-  function quarantineDemo() {
+  // o.startAgo = เริ่มกักเมื่อกี่วันก่อน · o.released = ปล่อยออกแล้วหรือยัง
+  // วันสิ้นสุดคิดจากระยะมาตรฐาน 7 วันเสมอ ตัวอย่างจึงสอดคล้องกับที่ระบบเติมให้เอง
+  function quarantineDemo(o) {
+    const start = o.startAgo;
+    const until = start - (QUARANTINE_DAYS - 1);      // นับปลายทั้งสองข้าง = 7 วัน
+    const logDays = Math.min(QUARANTINE_DAYS, start + 1);
     return {
       intake: {
-        date: isoDaysAgo(5), time: '09:20', code: 'MU-AEC-2569-021',
+        date: isoDaysAgo(start), time: '09:20', code: o.protocolNo,
         ageWeeks: 7, weightMin: 22, weightMax: 28, by: 'Sci — นักวิทยาศาสตร์',
         rows: (() => {
           const cages = ['Q-01', 'Q-02', 'Q-03', 'Q-04', 'Q-05'];
@@ -1093,14 +1107,14 @@ const DB = {
         vendor: 'Nomura Siam NLAC [Mahidol University]', transport: 'BKK to CNX by Airplane',
         strain: 'ICR', sex: 'M / F', vet: 'สพ.ญ. กมล ศรีวิไล',
         cages: 5, perCage: 2,
-        startDate: isoDaysAgo(5), untilDate: isoDaysAgo(-2),
+        startDate: isoDaysAgo(start), untilDate: isoDaysAgo(until),
         countComplete: true, appearanceOk: true, appearanceNote: '',
         healthCert: true, healthCertNote: 'HC-2569/0142 ออกโดย NLAC',
         preventive: false, preventiveNote: '',
         remark: 'สัตว์ถึงหน่วยเวลา 08:50 น. สภาพกล่องปกติ',
       },
-      daily: [0, 1, 2, 3, 4].map(i => ({
-        date: isoDaysAgo(5 - i), time: ['08:40', '08:35', '09:05', '08:50', '08:45'][i],
+      daily: Array.from({ length: logDays }, (_, i) => ({
+        date: isoDaysAgo(start - i), time: ['08:40', '08:35', '09:05', '08:50', '08:45', '08:30', '09:10'][i % 7],
         by: 'ACT — จนท.ดูแลสัตว์ทดลอง',
         items: {
           animals: i === 1 ? 'abnormal' : 'normal',
@@ -1109,7 +1123,10 @@ const DB = {
         jobs: i % 2 === 0 ? ['Feed: Add', 'Water: Change'] : ['Feed: Add', 'Water: Add', 'Cage: Change Bottom/Pan'],
         note: i === 1 ? 'RT-07 ขนหยอง ซึม แยกกรงและแจ้งสัตวแพทย์แล้ว' : '',
       })),
-      release: null,
+      release: o.released
+        ? { date: isoDaysAgo(until), vet: 'สพ.ญ. กมล ศรีวิไล', healthy: true, note: '',
+            remark: 'ครบกำหนดกัก 7 วัน สัตว์ทุกตัวสุขภาพปกติ พร้อมเข้าโครงการ' }
+        : null,
     };
   }
 

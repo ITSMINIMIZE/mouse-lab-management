@@ -827,6 +827,13 @@ const App = {
   },
   // บันทึกดูแลของ "วันนี้" ลงแล้วหรือยัง — กันลงซ้ำวันเดียวกันโดยไม่ตั้งใจ
   qzToday(p) { return this.quarantineOf(p).daily.find(d => d.date === this.recDate()) || null; },
+  // วันสิ้นสุดกักตามระยะมาตรฐาน — นับปลายทั้งสองข้าง เริ่ม 1 ส.ค. ครบ 7 วัน = 7 ส.ค.
+  qzUntilFor(startISO) {
+    if (!startISO) return '';
+    const d = new Date(startISO);
+    d.setDate(d.getDate() + QUARANTINE_DAYS - 1);
+    return this.isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  },
 
   // ---- top-level tabs (โครงการ / พัสดุ / การเงิน) -------------------------
   // Visibility is per capability: GM sees พัสดุ + การเงิน only, everyone else
@@ -2697,6 +2704,7 @@ const App = {
       remark: '', startDate: (q.intake && q.intake.date) || this.recDate(), untilDate: '',
       vet: '',
     };
+    if (!g.untilDate) g.untilDate = this.qzUntilFor(g.startDate);
     const opt = (list, cur) => list.map(x => `<option ${x === cur ? 'selected' : ''}>${this.esc(x)}</option>`).join('');
     this.openModal(`
       <div class="modal-head"><div><h3>🦠 ข้อมูลการกักโรคสัตว์ทดลอง</h3>
@@ -2721,7 +2729,8 @@ const App = {
         </div>
         <div class="form-row2">
           <div class="field"><label>เริ่มกักโรค (Start Quarantine)</label>${this.dateChip('qpStart', g.startDate, 'เลือกวันที่')}</div>
-          <div class="field"><label>กักถึงวันที่ (Quarantine until)</label>${this.dateChip('qpUntil', g.untilDate, 'เลือกวันที่')}</div>
+          <div class="field"><label>กักถึงวันที่ (Quarantine until)</label>${this.dateChip('qpUntil', g.untilDate, 'เลือกวันที่')}
+            <span class="field-hint">ระบบเติมให้ ${QUARANTINE_DAYS} วันตามระยะกักมาตรฐาน — แก้ไขได้</span></div>
         </div>
         <div class="fc-sub">Physical Examination @Quarantine Date</div>
         <div class="qz-form-checks">
@@ -2744,7 +2753,14 @@ const App = {
     this.el('qpCancel').onclick = () => this.closeModal();
     let start = g.startDate, until = g.untilDate;
     const sc = this.el('qpStart'), uc = this.el('qpUntil');
-    sc.onclick = (e) => this.openThaiCalendar(e.currentTarget, start, iso => { start = iso; this.setDateChip(sc, start, 'เลือกวันที่'); });
+    // เปลี่ยนวันเริ่ม แล้ววันสิ้นสุดเลื่อนตามระยะมาตรฐาน — แต่เฉพาะตอนที่ค่านั้นยังเป็น
+    // ค่าที่ระบบเติมให้ ถ้าคนกรอกตั้งวันเองแล้วก็ปล่อยไว้ (แบบเดียวกับ Approved/Until)
+    sc.onclick = (e) => this.openThaiCalendar(e.currentTarget, start, iso => {
+      const wasAuto = !until || until === this.qzUntilFor(start);
+      start = iso;
+      this.setDateChip(sc, start, 'เลือกวันที่');
+      if (wasAuto) { until = this.qzUntilFor(start); this.setDateChip(uc, until, 'เลือกวันที่'); }
+    });
     uc.onclick = (e) => this.openThaiCalendar(e.currentTarget, until, iso => { until = iso; this.setDateChip(uc, until, 'เลือกวันที่'); });
     this.el('qpSave').onclick = () => {
       if (start && until && until < start) return this.toast('วันสิ้นสุดการกักต้องไม่ก่อนวันเริ่มกัก');
