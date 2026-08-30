@@ -723,12 +723,19 @@ const App = {
       // "ผ่านจริยธรรม" is implied by the stage — the popup names the reviewer and date
       case 'aec_ok':    return { text: '📋 รอสัตวแพทย์จัดสรรพื้นที่', cls: 'aec' };
       case 'rejected':  return { text: '✗ ตีกลับให้แก้ไข', cls: 'rej' };
-      default:
+      default: {
         if (project.status === 'closed') return { text: 'ปิดแล้ว', cls: 'ok' };
-        // live but no mice yet — Sci still has to weigh them in
+        // ก่อนถึง running ให้บอกไปตรง ๆ ว่ารออะไรอยู่ — รอของมาส่ง หรือกำลังกักโรค
+        const ph = this.phaseOf(project);
+        if (ph && ph !== 'running') {
+          const info = this.PHASES[ph];
+          return { text: `${info.icon} ${info.label}`, cls: info.cls };
+        }
+        // running แล้วแต่ยังไม่มีหนูในกรง — Sci ยังไม่ได้ชั่งน้ำหนักแรกเข้า
         return this.isEmptyProject(project)
-          ? { text: '🦠 กักกันโรค/รอนำหนูเข้าโครงการ (น้ำหนักแรกเข้า)', cls: 'empty' }
-          : { text: 'กำลังดำเนิน', cls: 'ok' };
+          ? { text: '⚖️ รอนำหนูเข้ากรง (น้ำหนักแรกเข้า)', cls: 'empty' }
+          : { text: 'กำลังดำเนินการ', cls: 'ok' };
+      }
     }
   },
 
@@ -769,6 +776,58 @@ const App = {
   // but has no enterProject, so a card click takes them to the safety form instead.
   canEnter(project) { return this.hasAccess(project) && this.can('enterProject', project); },
 
+  // =========================================================
+  // กักกันโรค — ช่วงชีวิตของโครงการก่อน "กำลังดำเนินการ"
+  // =========================================================
+  // AV สร้างกรงเสร็จไม่ได้แปลว่าโครงการเดินได้ทันที สัตว์ที่สั่งมายังไม่มาถึง
+  // และต่อให้มาถึงก็ยังเข้าโครงการไม่ได้จนกว่าจะพ้นการกักโรค เดิมทั้งช่วงนี้
+  // ถูกยุบเป็น "ยังไม่มีหนู" ก้อนเดียว ทำให้แยกไม่ออกว่ารออะไรอยู่ — รอของมาส่ง
+  // หรือของมาถึงแล้วกำลังนับวันกักอยู่ ซึ่งเป็นคนละงานและคนละคนรับผิดชอบ
+  //
+  //   awaiting_intake  สร้างกรงแล้ว รอสัตว์มาถึง          → ตรวจรับรายตัว (AF 9.1-03)
+  //   quarantine       รับเข้ากักโรคแล้ว กำลังกักอยู่       → บันทึกดูแลรายวัน (AF 9.1-01)
+  //   running          สัตวแพทย์ปล่อยออกจากกักโรคแล้ว     → นำเข้ากรงโครงการได้
+  //
+  // โครงการเก่าที่ไม่มีฟิลด์นี้ถือว่า running — ข้อมูลเดิมจึงไม่สะดุ้ง
+  PHASES: {
+    awaiting_intake: { label: 'รอรับหนูเข้ากักกันโรค', icon: '📦', cls: 'wait',
+                       hint: 'สร้างกรงเรียบร้อยแล้ว รอสัตว์ทดลองมาถึงเพื่อตรวจรับเข้าส่วนกักโรค' },
+    quarantine:      { label: 'รอกักกันโรค',           icon: '🦠', cls: 'quar',
+                       hint: 'รับสัตว์เข้าส่วนกักโรคแล้ว ระหว่างกักต้องบันทึกการดูแลทุกวันจนกว่าสัตวแพทย์จะปล่อยออก' },
+    running:         { label: 'กำลังดำเนินการ',        icon: '',   cls: 'ok', hint: '' },
+  },
+  PHASE_ORDER: ['awaiting_intake', 'quarantine', 'running'],
+  phaseOf(p) {
+    if (!p || !this.isReal(p)) return null;
+    return this.PHASES[p.phase] ? p.phase : 'running';
+  },
+  inQuarantine(p) { return this.phaseOf(p) === 'quarantine'; },
+  // นำหนูเข้ากรงโครงการได้ก็ต่อเมื่อพ้นกักโรคแล้ว
+  canPopulate(p) { return this.phaseOf(p) === 'running'; },
+
+  // ---- โครงสร้างข้อมูลกักกันโรค (สร้างเมื่อถูกเรียกครั้งแรก) ----
+  quarantineOf(p) {
+    if (!p.quarantine) p.quarantine = { intake: null, program: null, daily: [], release: null };
+    if (!p.quarantine.daily) p.quarantine.daily = [];
+    return p.quarantine;
+  },
+  qzRows(p) { const q = this.quarantineOf(p); return (q.intake && q.intake.rows) || []; },
+  qzPassed(p) { return this.qzRows(p).filter(r => r.result === 'pass').length; },
+  qzFailed(p) { return this.qzRows(p).filter(r => r.result === 'fail').length; },
+  // วันกักที่ผ่านไปแล้ว / ทั้งหมด — ตัวเลขที่คนดูหน้านี้อยากรู้ที่สุด
+  qzDayCount(p) {
+    const q = this.quarantineOf(p);
+    if (!q.program || !q.program.startDate) return { done: 0, total: 0 };
+    const end = q.program.untilDate || '';
+    const today = this.minISO(todayISO(), end || todayISO());
+    return {
+      done: Math.max(0, this.daysInclusive(q.program.startDate, today)),
+      total: end ? this.daysInclusive(q.program.startDate, end) : 0,
+    };
+  },
+  // บันทึกดูแลของ "วันนี้" ลงแล้วหรือยัง — กันลงซ้ำวันเดียวกันโดยไม่ตั้งใจ
+  qzToday(p) { return this.quarantineOf(p).daily.find(d => d.date === this.recDate()) || null; },
+
   // ---- top-level tabs (โครงการ / พัสดุ / การเงิน) -------------------------
   // Visibility is per capability: GM sees พัสดุ + การเงิน only, everyone else
   // sees โครงการ and — if entitled — the other two alongside it.
@@ -792,7 +851,7 @@ const App = {
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
     if (name === 'assets' || name === 'finance' || name === 'rates') return name;
-    if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport'].includes(name)) return 'projects';
+    if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport', 'quarantine'].includes(name)) return 'projects';
     return '';
   },
   // where to land after login / when a route is not permitted
@@ -828,6 +887,7 @@ const App = {
       case 'finance':  this.go('finance'); break;
       case 'rates':    this.go('rates'); break;
       case 'build':
+      case 'quarantine':
       case 'ochreport': this.go(name, ds.projectId || this.route.projectId); break;
       case 'logout':   this.go('login'); break;
     }
@@ -852,6 +912,7 @@ const App = {
     if (name === 'build') return this.renderBuildProject();
     if (name === 'dashboard') return this.renderDashboard();
     if (name === 'reports') return this.renderReports();
+    if (name === 'quarantine') return this.renderQuarantine();
     if (name === 'audit') return this.renderAudit();
     if (name === 'roles') return this.renderRoles();
     if (name === 'users') return this.renderUsers();
@@ -2294,6 +2355,545 @@ const App = {
     };
   },
 
+  // แถบสถานะบนแดชบอร์ด — ก่อนหน้านี้บอกได้อย่างเดียวว่า "ยังไม่มีหนู" ซึ่งจริง
+  // แต่ไม่ช่วยอะไร เพราะไม่ได้บอกว่ารออะไรและใครต้องทำอะไรต่อ
+  phaseBanner(p, empty) {
+    const ph = this.phaseOf(p);
+    const link = `<button class="btn btn-sm" data-nav="quarantine" data-project-id="${p.id}">ไปหน้ากักกันโรค →</button>`;
+    if (ph === 'awaiting_intake') return `<div class="reject-banner built">
+      <b>📦 รอรับหนูเข้ากักกันโรค</b> — สร้างกรงเรียบร้อยแล้ว รอสัตว์ทดลองมาถึงเพื่อตรวจรับเข้าส่วนกักโรค
+      ยังนำหนูเข้ากรงไม่ได้จนกว่าจะพ้นการกักโรค ${link}</div>`;
+    if (ph === 'quarantine') {
+      const d = this.qzDayCount(p);
+      return `<div class="reject-banner built">
+        <b>🦠 รอกักกันโรค</b> — รับสัตว์เข้าส่วนกักโรคแล้ว${d.total ? ` กักมาแล้ว ${d.done}/${d.total} วัน` : ''}
+        · ต้องบันทึกการดูแลรายวัน และให้สัตวแพทย์ปล่อยออกก่อนจึงนำเข้ากรงได้ ${link}</div>`;
+    }
+    return empty ? `<div class="reject-banner built">
+      <b>⚖️ พ้นกักกันโรคแล้ว — รอนำหนูเข้ากรง</b> — รอนักวิทยาศาสตร์ (Sci) ชั่งน้ำหนักแรกเข้าเพื่อนำหนูเข้าโครงการ</div>` : '';
+  },
+
+  // ---- หน้ากักกันโรคของโครงการ ----
+  // สามการ์ดเรียงตามลำดับงานจริง: ตรวจรับ → กักและดูแลรายวัน → สัตวแพทย์ปล่อยออก
+  // การ์ดที่ยังไม่ถึงคิวถูกหรี่ไว้ ไม่ซ่อน เพราะคนใช้ต้องเห็นว่าข้างหน้ามีอะไรรออยู่
+  renderQuarantine() {
+    const p = Data.getProject(this.route.projectId);
+    if (!p) return this.go(this.homeRoute());
+    if (!this.hasAccess(p) || !this.isReal(p)) { this.toast('ยังไม่มีข้อมูลกักกันโรคของโครงการนี้'); return this.go('projects'); }
+    const canEdit = this.can('quarantine', p) && p.status !== 'closed';
+    const canRelease = this.can('treat', p) && p.status !== 'closed';
+    const q = this.quarantineOf(p);
+    const ph = this.phaseOf(p);
+    const rows = this.qzRows(p);
+    const days = this.qzDayCount(p);
+
+    const step = (n, label, state) =>
+      `<span class="qz-step ${state}">${state === 'done' ? '✓' : n} · ${label}</span>`;
+    const strip = `<div class="qz-flow">
+      ${step(1, 'ตรวจรับสัตว์', q.intake ? 'done' : (ph === 'awaiting_intake' ? 'on' : ''))}<span class="qz-arrow">→</span>
+      ${step(2, 'กักโรค + ดูแลรายวัน', q.release ? 'done' : (ph === 'quarantine' ? 'on' : ''))}<span class="qz-arrow">→</span>
+      ${step(3, 'ปล่อยเข้าโครงการ', ph === 'running' ? 'done' : '')}
+    </div>`;
+
+    // ---- การ์ด 1 · ตรวจรับรายตัว ----
+    const intakeBody = q.intake ? `
+      <div class="qz-grid">
+        <div><span class="qz-k">วันที่ตรวจรับ</span> ${this.thaiDate(q.intake.date)}${q.intake.time ? ' · ' + q.intake.time : ''}</div>
+        <div><span class="qz-k">รหัสดำเนินการ</span> ${this.esc(q.intake.code) || '—'}</div>
+        <div><span class="qz-k">จำนวนสัตว์ทดลอง</span> ${rows.length} ตัว</div>
+        <div><span class="qz-k">อายุ</span> ${q.intake.ageWeeks || '—'} สัปดาห์</div>
+        <div><span class="qz-k">ช่วงน้ำหนัก</span> ${q.intake.weightMin || '—'} – ${q.intake.weightMax || '—'} กรัม</div>
+        <div><span class="qz-k">ผู้ตรวจรับ</span> ${this.esc(q.intake.by) || '—'}</div>
+      </div>
+      <div class="qz-tally">
+        <span class="qz-pill ok">ผ่าน ${this.qzPassed(p)} ตัว</span>
+        ${this.qzFailed(p) ? `<span class="qz-pill bad">ไม่ผ่าน ${this.qzFailed(p)} ตัว</span>` : ''}
+      </div>
+      <div class="report-canvas" style="padding:0;overflow:auto;margin-top:10px">
+        <table class="data qz-table">
+          <thead><tr><th>ลำดับ</th><th>กรงที่</th><th>หมายเลข</th><th class="num">น้ำหนัก (ก.)</th>
+            <th>ลักษณะทั่วไป</th><th>ผลการตรวจ</th><th>หมายเหตุ</th></tr></thead>
+          <tbody>${rows.map((r, i) => `<tr class="${r.result === 'fail' ? 'qz-fail' : ''}">
+            <td>${i + 1}</td><td>${this.esc(r.cage) || '—'}</td><td>${this.esc(r.tag) || '—'}</td>
+            <td class="num">${r.weight === '' || r.weight == null ? '—' : r.weight}</td>
+            <td>${r.appearance === 'abnormal' ? '<b class="bad-t">ไม่ปกติ</b>' : 'ปกติ'}</td>
+            <td>${r.result === 'fail' ? '<b class="bad-t">ไม่ผ่าน</b>' : 'ผ่าน'}</td>
+            <td>${this.esc(r.note) || ''}</td></tr>`).join('')}</tbody>
+        </table>
+      </div>`
+      : `<p class="empty-note">ยังไม่ได้บันทึกการตรวจรับ — สัตว์ทดลองยังไม่เข้าส่วนกักโรค</p>`;
+
+    // ---- การ์ด 2 · ข้อมูลการกักโรค ----
+    const pg = q.program;
+    const programBody = pg ? `
+      <div class="qz-grid">
+        <div><span class="qz-k">ผู้จำหน่าย</span> ${this.esc(pg.vendor) || '—'}</div>
+        <div><span class="qz-k">การขนส่ง</span> ${this.esc(pg.transport) || '—'}</div>
+        <div><span class="qz-k">สายพันธุ์ / เพศ</span> ${this.esc(pg.strain) || '—'} · ${this.esc(pg.sex) || '—'}</div>
+        <div><span class="qz-k">กรง / ตัวต่อกรง</span> ${pg.cages || '—'} · ${pg.perCage || '—'}</div>
+        <div><span class="qz-k">เริ่มกัก – ถึง</span> ${this.thaiDate(pg.startDate) || '—'} – ${this.thaiDate(pg.untilDate) || '—'}</div>
+        <div><span class="qz-k">สัตวแพทย์ผู้รับผิดชอบ</span> ${this.esc(pg.vet) || '—'}</div>
+      </div>
+      <div class="qz-checks">
+        <div>${this.tick('จำนวนสัตว์ทดลองครบถ้วน', pg.countComplete)}${this.tick('ไม่ครบ', !pg.countComplete)}</div>
+        <div>${this.tick('ลักษณะเมื่อเปิดกล่องปกติ (Normal appearance)', pg.appearanceOk)}
+          ${pg.appearanceNote ? `<span class="qz-spec">ระบุ: ${this.esc(pg.appearanceNote)}</span>` : ''}</div>
+        <div>${this.tick('มี Health Certificate จากผู้จำหน่าย', pg.healthCert)}
+          ${pg.healthCertNote ? `<span class="qz-spec">ระบุ: ${this.esc(pg.healthCertNote)}</span>` : ''}</div>
+        <div>${this.tick('ให้ยาป้องกันโรค (Preventive medicine)', pg.preventive)}
+          ${pg.preventiveNote ? `<span class="qz-spec">ระบุ: ${this.esc(pg.preventiveNote)}</span>` : ''}</div>
+      </div>
+      ${pg.remark ? `<p class="qz-remark"><b>หมายเหตุ:</b> ${this.esc(pg.remark)}</p>` : ''}
+      ${days.total ? `<div class="qz-progress"><div class="qz-bar"><i style="width:${
+        Math.min(100, Math.round(days.done / days.total * 100))}%"></i></div>
+        <span>กักมาแล้ว <b>${days.done}</b> จาก ${days.total} วัน</span></div>` : ''}`
+      : `<p class="empty-note">ยังไม่ได้บันทึกข้อมูลการกักโรค (ผู้จำหน่าย · การขนส่ง · ช่วงวันกัก)</p>`;
+
+    // ---- การ์ด 3 · บันทึกดูแลรายวัน ----
+    const dailyRows = q.daily.length
+      ? [...q.daily].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map(d => {
+        const bad = this.CARE_ITEMS.filter(it => d.items[it.key] === 'abnormal');
+        return `<tr>
+          <td>${this.thaiDate(d.date)}<i class="qz-sub">${d.time || ''}</i></td>
+          <td>${this.CARE_ITEMS.map(it => `<span class="qz-chk ${d.items[it.key] === 'abnormal' ? 'bad' : 'ok'}">
+            ${it.icon} ${it.en} ${d.items[it.key] === 'abnormal' ? 'Abnormal' : 'Normal'}</span>`).join('')}</td>
+          <td>${(d.jobs || []).map(j => `<span class="qz-job">${this.esc(j)}</span>`).join('') || '<span class="muted">—</span>'}</td>
+          <td>${this.esc(d.by)}<i class="qz-sub">${this.esc(d.note) || ''}</i></td>
+        </tr>${bad.length && d.note ? '' : ''}`;
+      }).join('')
+      : `<tr><td colspan="4" class="empty-note" style="text-align:center;padding:20px">ยังไม่มีบันทึกการดูแลระหว่างกักโรค</td></tr>`;
+
+    // ---- การ์ด 4 · ปล่อยออก ----
+    const rel = q.release;
+    const releaseBody = rel ? `
+      <div class="qz-grid">
+        <div><span class="qz-k">วันที่ปล่อยออก</span> ${this.thaiDate(rel.date)}</div>
+        <div><span class="qz-k">สัตวแพทย์</span> ${this.esc(rel.vet)}</div>
+        <div><span class="qz-k">ผลประเมิน</span> ${rel.healthy
+          ? 'Normal appearance / Healthy' : `<b class="bad-t">${this.esc(rel.note) || 'ผิดปกติ'}</b>`}</div>
+      </div>
+      ${rel.remark ? `<p class="qz-remark"><b>หมายเหตุ:</b> ${this.esc(rel.remark)}</p>` : ''}`
+      : ph === 'quarantine'
+        ? `<p class="empty-note">เมื่อครบกำหนดกักโรค สัตวแพทย์ประเมินสุขภาพและปล่อยเข้าโครงการ — สถานะจะเปลี่ยนเป็น <b>กำลังดำเนินการ</b> และนำหนูเข้ากรงได้</p>`
+        : `<p class="empty-note">ยังไม่ถึงขั้นนี้ — ต้องรับสัตว์เข้าส่วนกักโรคก่อน</p>`;
+
+    const printItems = [];
+    if (q.intake) printItems.push({ key: 'qzIntake', icon: '📋', label: 'บันทึกการตรวจรับสัตว์ทดลองรายตัว', hint: 'LA Guide-AF 9.1-03' });
+    if (q.program || q.daily.length) printItems.push({ key: 'qzRecord', icon: '🦠', label: 'แบบฟอร์มการกักโรคสัตว์ทดลอง', hint: 'LA Guide-AF 9.1-01' });
+
+    this.shell(
+      `<a data-nav="project" data-project-id="${p.id}">${p.name}</a><span class="sep">/</span>
+       <a data-nav="quarantine" data-project-id="${p.id}">กักกันโรค</a>`,
+      `<div class="page wide">
+        <div class="page-head">
+          <div><h2>🦠 กักกันโรค</h2>
+            <div class="desc">${this.esc(p.name)} · ${ph && this.PHASES[ph] ? this.PHASES[ph].hint : 'พ้นการกักโรคแล้ว'}</div></div>
+          <span class="spacer" style="flex:1"></span>
+          ${this.printMenu('qzPrint', 'พิมพ์เอกสาร', printItems)}
+        </div>
+        ${strip}
+
+        <section class="qz-card ${q.intake ? 'done' : (ph === 'awaiting_intake' ? 'on' : '')}">
+          <div class="qz-head"><h3>📋 1 · การตรวจรับสัตว์ทดลองรายตัว</h3>
+            <span class="qz-form">LA Guide-AF 9.1-03</span>
+            <span class="spacer" style="flex:1"></span>
+            ${canEdit && ph !== 'running' ? `<button class="btn btn-sm ${q.intake ? '' : 'btn-primary'}" id="qzIntakeBtn">${
+              q.intake ? 'แก้ไขการตรวจรับ' : '+ บันทึกการตรวจรับ'}</button>` : ''}</div>
+          <p class="qz-note">รอบนี้ยัง<b>ไม่กำหนดรหัสหนู</b> — รหัสประจำตัวออกตอนชั่งน้ำหนักแรกเข้ากรงโครงการ แถวจึงอ้างด้วยลำดับและกรงกักโรค</p>
+          ${intakeBody}
+        </section>
+
+        <section class="qz-card ${q.release ? 'done' : (ph === 'quarantine' ? 'on' : '')}">
+          <div class="qz-head"><h3>🦠 2 · การกักโรคและการดูแลรายวัน</h3>
+            <span class="qz-form">LA Guide-AF 9.1-01</span>
+            <span class="spacer" style="flex:1"></span>
+            ${canEdit && q.intake && ph !== 'running' ? `<button class="btn btn-sm" id="qzProgBtn">${
+              pg ? 'แก้ไขข้อมูลการกักโรค' : '+ บันทึกข้อมูลการกักโรค'}</button>` : ''}
+            ${canEdit && this.inQuarantine(p) ? `<button class="btn btn-sm btn-primary" id="qzRoundBtn">${
+              this.qzToday(p) ? 'แก้บันทึกรอบนี้' : '+ บันทึกดูแล' + (this.recOn() ? ' ' + this.recRoundLabel() : 'วันนี้')}</button>` : ''}</div>
+          ${programBody}
+          <div class="report-canvas" style="padding:0;overflow:auto;margin-top:12px">
+            <table class="data qz-table">
+              <thead><tr><th>วันที่</th><th>Animal Care</th><th>Job</th><th>ผู้บันทึก</th></tr></thead>
+              <tbody>${dailyRows}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="qz-card ${rel ? 'done' : ''}">
+          <div class="qz-head"><h3>✅ 3 · ปล่อยออกจากกักโรค</h3>
+            <span class="qz-form">Health Evaluation @Release</span>
+            <span class="spacer" style="flex:1"></span>
+            ${canRelease && this.inQuarantine(p) ? `<button class="btn btn-sm btn-primary" id="qzRelBtn">ประเมินและปล่อยเข้าโครงการ</button>` : ''}</div>
+          ${releaseBody}
+        </section>
+      </div>`
+    );
+
+    if (canEdit && this.el('qzIntakeBtn')) this.el('qzIntakeBtn').onclick = () => this.openQzIntake(p);
+    if (canEdit && this.el('qzProgBtn')) this.el('qzProgBtn').onclick = () => this.openQzProgram(p);
+    if (canEdit && this.el('qzRoundBtn')) this.el('qzRoundBtn').onclick = () => this.openQzRound(p);
+    if (canRelease && this.el('qzRelBtn')) this.el('qzRelBtn').onclick = () => this.openQzRelease(p);
+    this.bindPrintMenu('qzPrint', key => {
+      if (key === 'qzIntake') this.printQzIntake(p);
+      if (key === 'qzRecord') this.printQzRecord(p);
+    });
+  },
+
+  // ---- 1) ตรวจรับสัตว์ทดลองรายตัว (AF 9.1-03) ----
+  // จำนวนสัตว์เป็นตัวคุมจำนวนแถว เปลี่ยนตัวเลขแล้วแถวเพิ่ม/ลดตาม โดยแถวที่กรอกไว้
+  // แล้วต้องไม่หาย — ตัดจากท้ายเสมอ และเตือนก่อนถ้าจะตัดแถวที่มีข้อมูล
+  qzBlankRow() { return { cage: '', tag: '', weight: '', appearance: 'normal', result: 'pass', note: '' }; },
+  qzRowFilled(r) { return !!(r.cage || r.tag || r.weight !== '' || r.note || r.appearance === 'abnormal' || r.result === 'fail'); },
+
+  openQzIntake(p) {
+    const q = this.quarantineOf(p);
+    const req = p.request || {};
+    // ตั้งต้นจากใบคำขอ — จำนวน อายุ ช่วงน้ำหนัก ศูนย์ฯ กรอกซ้ำเองไม่มีประโยชน์
+    const d = q.intake
+      ? JSON.parse(JSON.stringify(q.intake))
+      : { date: this.recDate(), time: this.recTime(), code: req.protocolNo || '',
+          ageWeeks: req.ageMin || '', weightMin: req.weightMin ?? '', weightMax: req.weightMax ?? '',
+          by: this.user.name, rows: Array.from({ length: req.totalMice || 1 }, () => this.qzBlankRow()) };
+    this.qzDraft = d;
+    this.renderQzIntakeModal(p);
+  },
+
+  renderQzIntakeModal(p) {
+    const d = this.qzDraft;
+    const rowHtml = (r, i) => `<tr data-i="${i}">
+      <td class="qz-no">${i + 1}</td>
+      <td><input class="qr-cage" data-i="${i}" value="${this.esc(r.cage)}" placeholder="เช่น Q-01"></td>
+      <td><input class="qr-tag" data-i="${i}" value="${this.esc(r.tag)}" placeholder="—"></td>
+      <td><input class="qr-w" data-i="${i}" type="number" min="0" step="0.1" value="${this.esc(r.weight)}"></td>
+      <td><select class="qr-ap" data-i="${i}">
+        <option value="normal" ${r.appearance === 'normal' ? 'selected' : ''}>ปกติ</option>
+        <option value="abnormal" ${r.appearance === 'abnormal' ? 'selected' : ''}>ไม่ปกติ</option></select></td>
+      <td><select class="qr-res" data-i="${i}">
+        <option value="pass" ${r.result === 'pass' ? 'selected' : ''}>ผ่าน</option>
+        <option value="fail" ${r.result === 'fail' ? 'selected' : ''}>ไม่ผ่าน</option></select></td>
+      <td><input class="qr-note" data-i="${i}" value="${this.esc(r.note)}" placeholder="—"></td>
+    </tr>`;
+
+    this.setModal(`
+      <div class="modal-head"><div><h3>📋 บันทึกการตรวจรับสัตว์ทดลองรายตัว</h3>
+        <div class="desc">${this.esc(p.name)} · เพื่อรับสัตว์เข้าสู่ส่วนกักโรค — ยังไม่กำหนดรหัสหนูในรอบนี้</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="form-row3">
+          <div class="field"><label>วันที่ตรวจรับ</label>${this.dateChip('qiDate', d.date, 'เลือกวันที่')}</div>
+          <div class="field"><label>เวลา</label><input id="qiTime" value="${this.esc(d.time)}" placeholder="09:30"></div>
+          <div class="field"><label>รหัสดำเนินการ</label><input id="qiCode" value="${this.esc(d.code)}"></div>
+        </div>
+        <div class="form-row3">
+          <div class="field"><label>จำนวนสัตว์ทดลอง (ตัว) <span style="color:var(--red)">*</span></label>
+            <input id="qiCount" type="number" min="1" max="60" value="${d.rows.length}"></div>
+          <div class="field"><label>อายุ (สัปดาห์)</label><input id="qiAge" type="number" min="0" value="${this.esc(d.ageWeeks)}"></div>
+          <div class="field"><label>ผู้ตรวจรับ</label><input id="qiBy" value="${this.esc(d.by)}"></div>
+        </div>
+        <div class="form-row2">
+          <div class="field"><label>ช่วงน้ำหนักต่ำสุด (กรัม)</label><input id="qiWMin" type="number" min="0" step="0.1" value="${this.esc(d.weightMin)}"></div>
+          <div class="field"><label>ช่วงน้ำหนักสูงสุด (กรัม)</label><input id="qiWMax" type="number" min="0" step="0.1" value="${this.esc(d.weightMax)}"></div>
+        </div>
+        <div class="qz-bulk">
+          <span>ตั้งค่าทั้งคอลัมน์:</span>
+          <button type="button" class="btn btn-sm" id="qiAllNormal">ลักษณะ = ปกติ ทุกตัว</button>
+          <button type="button" class="btn btn-sm" id="qiAllPass">ผลตรวจ = ผ่าน ทุกตัว</button>
+          <span class="muted-lbl">สูงสุด 60 ตัวต่อหนึ่งใบ ตามแบบฟอร์ม</span>
+        </div>
+        <div class="qz-rows">
+          <table class="data qz-table edit">
+            <thead><tr><th>ลำดับ</th><th>กรงที่</th><th>หมายเลข</th><th>น้ำหนัก (ก.)</th>
+              <th>ลักษณะทั่วไป</th><th>ผลการตรวจ</th><th>หมายเหตุ</th></tr></thead>
+            <tbody id="qiRows">${d.rows.map(rowHtml).join('')}</tbody>
+          </table>
+        </div>
+        <p class="af-hint">💡 "หมายเลข" คือเลขที่ติดมากับกล่อง/กรงกักโรคเท่านั้น ไม่ใช่รหัสประจำตัวหนู — รหัสจริงออกตอนนำเข้ากรงโครงการ</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="qiCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="qiSave">บันทึกการตรวจรับ</button>
+      </div>`);
+
+    const cap = () => {
+      d.time = this.el('qiTime').value.trim();
+      d.code = this.el('qiCode').value.trim();
+      d.ageWeeks = this.el('qiAge').value;
+      d.weightMin = this.el('qiWMin').value;
+      d.weightMax = this.el('qiWMax').value;
+      d.by = this.el('qiBy').value.trim();
+      this.el('qiRows').querySelectorAll('tr').forEach((tr, i) => {
+        const r = d.rows[i]; if (!r) return;
+        r.cage = tr.querySelector('.qr-cage').value.trim();
+        r.tag = tr.querySelector('.qr-tag').value.trim();
+        r.weight = tr.querySelector('.qr-w').value;
+        r.appearance = tr.querySelector('.qr-ap').value;
+        r.result = tr.querySelector('.qr-res').value;
+        r.note = tr.querySelector('.qr-note').value.trim();
+      });
+    };
+
+    this.el('closeModal').onclick = () => { this.qzDraft = null; this.closeModal(); };
+    this.el('qiCancel').onclick = () => { this.qzDraft = null; this.closeModal(); };
+    const chip = this.el('qiDate');
+    chip.onclick = (e) => this.openThaiCalendar(e.currentTarget, d.date, iso => {
+      d.date = iso || d.date; this.setDateChip(chip, d.date, 'เลือกวันที่');
+    });
+    this.el('qiCount').onchange = () => {
+      cap();
+      const n = Math.max(1, Math.min(60, Math.round(+this.el('qiCount').value) || 1));
+      if (n < d.rows.length) {
+        const losing = d.rows.slice(n).filter(r => this.qzRowFilled(r)).length;
+        if (losing) return this.confirmDialog({
+          title: 'ลดจำนวนสัตว์ทดลอง',
+          body: `แถวท้าย <b>${losing}</b> แถวที่กรอกข้อมูลไว้แล้วจะถูกตัดทิ้ง`,
+          okLabel: 'ตัดแถวท้ายออก',
+          onOk: () => { d.rows.length = n; this.renderQzIntakeModal(p); },
+        });
+        d.rows.length = n;
+      }
+      while (d.rows.length < n) d.rows.push(this.qzBlankRow());
+      this.renderQzIntakeModal(p);
+    };
+    this.el('qiAllNormal').onclick = () => { cap(); d.rows.forEach(r => r.appearance = 'normal'); this.renderQzIntakeModal(p); };
+    this.el('qiAllPass').onclick = () => { cap(); d.rows.forEach(r => r.result = 'pass'); this.renderQzIntakeModal(p); };
+    this.el('qiSave').onclick = () => {
+      cap();
+      if (!d.date) return this.toast('เลือกวันที่ตรวจรับก่อน');
+      if (!d.by) return this.toast('กรอกชื่อผู้ตรวจรับก่อน');
+      const q = this.quarantineOf(p);
+      const first = !q.intake;
+      q.intake = JSON.parse(JSON.stringify(d));
+      // รับเข้ากักโรคครั้งแรก = โครงการเข้าสถานะ "รอกักกันโรค"
+      if (first && this.phaseOf(p) === 'awaiting_intake') {
+        p.phase = 'quarantine';
+        this.notify({ kind: 'build', title: 'รับสัตว์เข้าส่วนกักโรคแล้ว',
+          detail: `${p.name} · ${d.rows.length} ตัว · ผ่าน ${d.rows.filter(r => r.result === 'pass').length} ตัว`,
+          project: p, to: this.nTo.team(p), link: { type: 'quarantine' } });
+      }
+      this.log(first ? 'ตรวจรับสัตว์เข้าส่วนกักโรค' : 'แก้บันทึกการตรวจรับสัตว์',
+        `${d.rows.length} ตัว · ผ่าน ${d.rows.filter(r => r.result === 'pass').length} · ไม่ผ่าน ${d.rows.filter(r => r.result === 'fail').length}`, p.name);
+      this.qzDraft = null;
+      this.closeModal();
+      this.toast(first ? 'บันทึกการตรวจรับแล้ว — เข้าสู่ช่วงกักกันโรค' : 'แก้ไขแล้ว');
+      this.renderQuarantine();
+    };
+  },
+
+  // ---- 2) ข้อมูลการกักโรค (AF 9.1-01 ส่วนหัว) ----
+  openQzProgram(p) {
+    const q = this.quarantineOf(p);
+    const req = p.request || {};
+    const g = q.program || {
+      vendor: QUARANTINE_VENDORS[0], transport: QUARANTINE_TRANSPORT[0],
+      strain: req.strain || '', sex: (req.sexes || []).join(' / '),
+      cages: '', perCage: '',
+      countComplete: true, appearanceOk: true, appearanceNote: '',
+      healthCert: true, healthCertNote: '', preventive: false, preventiveNote: '',
+      remark: '', startDate: (q.intake && q.intake.date) || this.recDate(), untilDate: '',
+      vet: '',
+    };
+    const opt = (list, cur) => list.map(x => `<option ${x === cur ? 'selected' : ''}>${this.esc(x)}</option>`).join('');
+    this.openModal(`
+      <div class="modal-head"><div><h3>🦠 ข้อมูลการกักโรคสัตว์ทดลอง</h3>
+        <div class="desc">${this.esc(p.name)} · ส่วนหัวของแบบฟอร์ม LA Guide-AF 9.1-01</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="form-row2">
+          <div class="field"><label>ผู้จำหน่าย (Vender)</label>
+            <select id="qpVendor">${opt(QUARANTINE_VENDORS, g.vendor)}<option ${
+              QUARANTINE_VENDORS.includes(g.vendor) ? '' : 'selected'}>${this.esc(QUARANTINE_VENDORS.includes(g.vendor) ? 'อื่น ๆ' : g.vendor)}</option></select></div>
+          <div class="field"><label>การขนส่ง (Transportation)</label>
+            <select id="qpTrans">${opt(QUARANTINE_TRANSPORT, g.transport)}</select></div>
+        </div>
+        <div class="form-row3">
+          <div class="field"><label>สายพันธุ์ (Animal Strain)</label><input id="qpStrain" value="${this.esc(g.strain)}"></div>
+          <div class="field"><label>เพศ (Sex)</label><input id="qpSex" value="${this.esc(g.sex)}"></div>
+          <div class="field"><label>สัตวแพทย์ผู้รับผิดชอบ</label><input id="qpVet" value="${this.esc(g.vet)}" placeholder="Responsible Vet."></div>
+        </div>
+        <div class="form-row2">
+          <div class="field"><label>จำนวนกรงกักโรค (No. of Cage)</label><input id="qpCages" type="number" min="0" value="${this.esc(g.cages)}"></div>
+          <div class="field"><label>สัตว์ต่อกรง (Animals/cage)</label><input id="qpPer" type="number" min="0" value="${this.esc(g.perCage)}"></div>
+        </div>
+        <div class="form-row2">
+          <div class="field"><label>เริ่มกักโรค (Start Quarantine)</label>${this.dateChip('qpStart', g.startDate, 'เลือกวันที่')}</div>
+          <div class="field"><label>กักถึงวันที่ (Quarantine until)</label>${this.dateChip('qpUntil', g.untilDate, 'เลือกวันที่')}</div>
+        </div>
+        <div class="fc-sub">Physical Examination @Quarantine Date</div>
+        <div class="qz-form-checks">
+          <label class="qz-cb"><input type="checkbox" id="qpCount" ${g.countComplete ? 'checked' : ''}> จำนวนสัตว์ทดลองครบถ้วน</label>
+          <label class="qz-cb"><input type="checkbox" id="qpApp" ${g.appearanceOk ? 'checked' : ''}> ลักษณะเมื่อเปิดกล่องปกติ (Normal appearance)</label>
+          <input id="qpAppNote" class="qz-spec-in" value="${this.esc(g.appearanceNote)}" placeholder="ถ้าไม่ปกติ ระบุลักษณะที่พบ">
+          <label class="qz-cb"><input type="checkbox" id="qpCert" ${g.healthCert ? 'checked' : ''}> มี Health Certificate จากผู้จำหน่าย</label>
+          <input id="qpCertNote" class="qz-spec-in" value="${this.esc(g.healthCertNote)}" placeholder="เลขที่ / รายละเอียดใบรับรอง">
+          <label class="qz-cb"><input type="checkbox" id="qpPrev" ${g.preventive ? 'checked' : ''}> ให้ยาป้องกันโรค (Preventive medicine)</label>
+          <input id="qpPrevNote" class="qz-spec-in" value="${this.esc(g.preventiveNote)}" placeholder="ระบุชนิดยา/ขนาด">
+        </div>
+        <div class="field"><label>หมายเหตุ (Remark)</label><input id="qpRemark" value="${this.esc(g.remark)}"></div>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="qpCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="qpSave">บันทึก</button>
+      </div>`);
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('qpCancel').onclick = () => this.closeModal();
+    let start = g.startDate, until = g.untilDate;
+    const sc = this.el('qpStart'), uc = this.el('qpUntil');
+    sc.onclick = (e) => this.openThaiCalendar(e.currentTarget, start, iso => { start = iso; this.setDateChip(sc, start, 'เลือกวันที่'); });
+    uc.onclick = (e) => this.openThaiCalendar(e.currentTarget, until, iso => { until = iso; this.setDateChip(uc, until, 'เลือกวันที่'); });
+    this.el('qpSave').onclick = () => {
+      if (start && until && until < start) return this.toast('วันสิ้นสุดการกักต้องไม่ก่อนวันเริ่มกัก');
+      this.quarantineOf(p).program = {
+        vendor: this.el('qpVendor').value, transport: this.el('qpTrans').value,
+        strain: this.el('qpStrain').value.trim(), sex: this.el('qpSex').value.trim(),
+        vet: this.el('qpVet').value.trim(),
+        cages: this.el('qpCages').value, perCage: this.el('qpPer').value,
+        startDate: start, untilDate: until,
+        countComplete: this.el('qpCount').checked,
+        appearanceOk: this.el('qpApp').checked, appearanceNote: this.el('qpAppNote').value.trim(),
+        healthCert: this.el('qpCert').checked, healthCertNote: this.el('qpCertNote').value.trim(),
+        preventive: this.el('qpPrev').checked, preventiveNote: this.el('qpPrevNote').value.trim(),
+        remark: this.el('qpRemark').value.trim(),
+      };
+      this.log('บันทึกข้อมูลการกักโรค', `${this.thaiDate(start)} – ${this.thaiDate(until)}`, p.name);
+      this.closeModal();
+      this.toast('บันทึกข้อมูลการกักโรคแล้ว');
+      this.renderQuarantine();
+    };
+  },
+
+  // ---- 3) บันทึกดูแลรายวันระหว่างกักโรค ----
+  // ใช้สี่จุดตรวจชุดเดียวกับการตรวจกรงปกติ (CARE_ITEMS) เพราะใบกักโรคถามสี่ข้อ
+  // เดียวกันเป๊ะ — Animals / Feed / Water / Cage
+  QZ_JOBS: ['Feed: Change', 'Feed: Add', 'Water: Change', 'Water: Add', 'Cage: Full Change', 'Cage: Change Bottom/Pan'],
+  openQzRound(p) {
+    const q = this.quarantineOf(p);
+    const date = this.recDate();
+    const cur = q.daily.find(d => d.date === date);
+    const d = cur ? JSON.parse(JSON.stringify(cur))
+                  : { date, time: this.recTime(), by: this.user.name,
+                      items: { animals: 'normal', feed: 'normal', water: 'normal', cage: 'normal' }, jobs: [], note: '' };
+    this.openModal(`
+      <div class="modal-head"><div><h3>🦠 บันทึกการดูแลระหว่างกักโรค</h3>
+        <div class="desc">${this.esc(p.name)} · ${this.thaiDate(date)}${this.recOn() ? ' (บันทึกย้อนหลัง)' : ''}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="qz-care">
+          ${this.CARE_ITEMS.map(it => `
+            <div class="qz-care-row" data-k="${it.key}">
+              <div class="qz-care-lbl">${it.icon} <b>${it.en}</b> <span>${it.th}</span></div>
+              <div class="qz-care-pick">
+                <button type="button" class="qc-b ${d.items[it.key] === 'normal' ? 'on ok' : ''}" data-k="${it.key}" data-v="normal">Normal</button>
+                <button type="button" class="qc-b ${d.items[it.key] === 'abnormal' ? 'on bad' : ''}" data-k="${it.key}" data-v="abnormal">Abnormal</button>
+              </div>
+            </div>`).join('')}
+        </div>
+        <div class="fc-sub">Job — งานที่ทำในรอบนี้</div>
+        <div class="qz-jobs">${this.QZ_JOBS.map(j =>
+          `<label class="qz-cb"><input type="checkbox" class="qj" value="${this.esc(j)}" ${d.jobs.includes(j) ? 'checked' : ''}> ${this.esc(j)}</label>`).join('')}</div>
+        <div class="form-row2" style="margin-top:10px">
+          <div class="field"><label>เวลา</label><input id="qdTime" value="${this.esc(d.time)}" placeholder="09:30"></div>
+          <div class="field"><label>ผู้บันทึก</label><input id="qdBy" value="${this.esc(d.by)}"></div>
+        </div>
+        <div class="field"><label>หมายเหตุ / สิ่งที่พบ</label><input id="qdNote" value="${this.esc(d.note)}" placeholder="ถ้ามีข้อผิดปกติ ระบุที่นี่"></div>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="qdCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="qdSave">${cur ? 'บันทึกการแก้ไข' : 'บันทึกรอบนี้'}</button>
+      </div>`);
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('qdCancel').onclick = () => this.closeModal();
+    document.querySelectorAll('.qc-b').forEach(b => b.onclick = () => {
+      d.items[b.dataset.k] = b.dataset.v;
+      document.querySelectorAll(`.qc-b[data-k="${b.dataset.k}"]`).forEach(x => {
+        const on = x.dataset.v === b.dataset.v;
+        x.className = 'qc-b' + (on ? ' on ' + (x.dataset.v === 'normal' ? 'ok' : 'bad') : '');
+      });
+    });
+    this.el('qdSave').onclick = () => {
+      d.time = this.el('qdTime').value.trim();
+      d.by = this.el('qdBy').value.trim() || this.user.name;
+      d.note = this.el('qdNote').value.trim();
+      d.jobs = [...document.querySelectorAll('.qj')].filter(x => x.checked).map(x => x.value);
+      const bad = this.CARE_ITEMS.filter(it => d.items[it.key] === 'abnormal');
+      if (bad.length && !d.note) return this.toast(`พบ Abnormal ที่ ${bad.map(x => x.en).join(', ')} — ต้องระบุสิ่งที่พบในหมายเหตุ`);
+      const list = this.quarantineOf(p).daily;
+      const i = list.findIndex(x => x.date === d.date);
+      if (i >= 0) list[i] = d; else this.pushDated(list, d);
+      this.log(i >= 0 ? 'แก้บันทึกดูแลระหว่างกักโรค' : 'บันทึกดูแลระหว่างกักโรค',
+        `${this.thaiDate(d.date)}${bad.length ? ' · พบผิดปกติ: ' + bad.map(x => x.en).join(', ') : ' · ปกติทุกจุด'}`, p.name);
+      // เจอผิดปกติระหว่างกัก สัตวแพทย์ต้องรู้ ไม่ใช่รอให้ครบกำหนดแล้วค่อยเห็น
+      if (bad.length) this.notify({ kind: 'flag', title: 'พบความผิดปกติระหว่างกักกันโรค',
+        detail: `${p.name} · ${bad.map(x => x.en).join(', ')} · ${d.note}`, project: p,
+        to: [...this.nTo.position('AV'), ...this.nTo.position('VET')], link: { type: 'quarantine' } });
+      this.closeModal();
+      this.toast('บันทึกแล้ว');
+      this.renderQuarantine();
+    };
+  },
+
+  // ---- 4) ประเมินและปล่อยออกจากกักโรค (สัตวแพทย์) ----
+  openQzRelease(p) {
+    const q = this.quarantineOf(p);
+    const days = this.qzDayCount(p);
+    const short = days.total && days.done < days.total;
+    this.openModal(`
+      <div class="modal-head"><div><h3>✅ ประเมินสุขภาพและปล่อยเข้าโครงการ</h3>
+        <div class="desc">${this.esc(p.name)} · Health Evaluation @Release Date</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        ${short ? `<p class="af-hint" style="background:var(--amber-soft);color:#92400e">⚠️ ยังไม่ครบกำหนดกัก — กักมาแล้ว <b>${days.done}</b> จาก ${days.total} วัน ปล่อยก่อนกำหนดต้องระบุเหตุผลในหมายเหตุ</p>` : ''}
+        <div class="form-row2">
+          <div class="field"><label>วันที่ปล่อยออก (Release date)</label>${this.dateChip('qrDate', this.recDate(), 'เลือกวันที่')}</div>
+          <div class="field"><label>สัตวแพทย์ผู้รับผิดชอบ <span style="color:var(--red)">*</span></label>
+            <input id="qrVet" value="${this.esc((q.program && q.program.vet) || this.user.name)}"></div>
+        </div>
+        <div class="qz-form-checks">
+          <label class="qz-cb"><input type="checkbox" id="qrOk" checked> Normal appearance / Healthy — พร้อมเข้าโครงการ</label>
+          <input id="qrNote" class="qz-spec-in" placeholder="ถ้าไม่ปกติ ระบุลักษณะที่พบ">
+        </div>
+        <div class="field"><label>หมายเหตุ (Remark)</label><input id="qrRemark" placeholder="${short ? 'เหตุผลที่ปล่อยก่อนกำหนด' : ''}"></div>
+        <p class="af-hint">💡 ปล่อยแล้วสถานะโครงการจะเปลี่ยนเป็น <b>กำลังดำเนินการ</b> และนักวิทยาศาสตร์จะเริ่มชั่งน้ำหนักแรกเข้านำหนูเข้ากรงได้</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="qrCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="qrSave">ปล่อยเข้าโครงการ</button>
+      </div>`);
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('qrCancel').onclick = () => this.closeModal();
+    let date = this.recDate();
+    const chip = this.el('qrDate');
+    chip.onclick = (e) => this.openThaiCalendar(e.currentTarget, date, iso => { date = iso || date; this.setDateChip(chip, date, 'เลือกวันที่'); });
+    this.el('qrSave').onclick = () => {
+      const vet = this.el('qrVet').value.trim();
+      const healthy = this.el('qrOk').checked;
+      const note = this.el('qrNote').value.trim();
+      const remark = this.el('qrRemark').value.trim();
+      if (!vet) return this.toast('กรอกชื่อสัตวแพทย์ผู้รับผิดชอบก่อน');
+      if (!healthy && !note) return this.toast('ประเมินว่าไม่ปกติ ต้องระบุลักษณะที่พบ');
+      if (short && !remark) return this.toast('ปล่อยก่อนครบกำหนดกัก ต้องระบุเหตุผลในหมายเหตุ');
+      this.confirmDialog({
+        title: 'ปล่อยออกจากกักกันโรค',
+        body: `โครงการ <b>${this.esc(p.name)}</b> จะเปลี่ยนสถานะเป็น <b>กำลังดำเนินการ</b><br>เปลี่ยนแล้วย้อนกลับเองไม่ได้`,
+        okLabel: 'ยืนยันปล่อยเข้าโครงการ', danger: false,
+        onOk: () => {
+          q.release = { date, vet, healthy, note, remark };
+          p.phase = 'running';
+          this.log('ปล่อยสัตว์ออกจากกักกันโรค', `${this.thaiDate(date)} · ${vet}${healthy ? ' · Healthy' : ' · ' + note}`, p.name);
+          this.notify({ kind: 'build', title: 'พ้นการกักกันโรคแล้ว — เริ่มนำหนูเข้ากรงได้',
+            detail: `${p.name} · ${this.qzPassed(p)} ตัวพร้อมเข้าโครงการ`, project: p,
+            to: this.nTo.team(p), link: { type: 'dashboard' } });
+          this.toast('ปล่อยเข้าโครงการแล้ว — สถานะเปลี่ยนเป็นกำลังดำเนินการ');
+          this.renderQuarantine();
+        },
+      });
+    };
+  },
+
   // ---- user account helpers ----
   adminCount() { return DB.users.filter(u => u.position === 'ADMIN').length; },
   isLastAdmin(u) { return u.position === 'ADMIN' && this.adminCount() <= 1; },
@@ -2394,6 +2994,7 @@ const App = {
     const l = n.link || {};
     if (p && !this.hasAccess(p)) { this.toast('คุณไม่มีสิทธิ์เข้าถึงโครงการนี้แล้ว'); return this.go(this.homeRoute()); }
     switch (l.type) {
+      case 'quarantine':  return p ? this.go('quarantine', p.id) : this.go('projects');
       case 'projectInfo': return p ? this.openProjectInfo(p) : this.go('projects');
       case 'build':       return p && this.canBuild ? this.buildProject(p) : this.openProjectInfo(p);
       case 'editRequest': return p && this.isCreator(p) ? this.editProject(p) : this.openProjectInfo(p);
@@ -2977,7 +3578,7 @@ const App = {
     }).join('') || '<span class="muted">—</span>') : '';
 
     const body = real
-      ? `${empty ? '<div class="reject-banner built"><b>🦠 อยู่ระหว่างกักกันโรค — ยังไม่มีหนูในโครงการ</b> — รอนักวิทยาศาสตร์ (Sci) ชั่งน้ำหนักแรกเข้าเพื่อนำหนูเข้าโครงการ</div>' : ''}
+      ? `${this.phaseBanner(p, empty)}
         <div class="pi-grid">
           <div><span class="pi-k">วันที่เริ่ม</span> ${p.startDate || '—'}</div>
           <div><span class="pi-k">ห้อง / แร็ค</span> ${p.facility?.roomNo || '—'}${p.facility?.rackNo ? ' · ' + p.facility.rackNo : ''}</div>
@@ -4551,7 +5152,9 @@ const App = {
 
     // AV is the LAST step of creation — the project goes live right here.
     Object.assign(p, {
-      approval: 'approved', startDate: d.facility.moveInDate || todayISO(),
+      // สร้างกรงเสร็จยังไม่ใช่ "เดินแล้ว" — สัตว์ยังไม่มาถึงด้วยซ้ำ
+      approval: 'approved', phase: 'awaiting_intake',
+      startDate: d.facility.moveInDate || todayISO(),
       facility: { roomNo: this.el('bpRoom').value.trim(), rackNo: rackList.join(' · '), racks: rackList,
                   quarantineDate: d.facility.quarantineDate, moveInDate: d.facility.moveInDate },
       builtBy: { by: this.user.name, at: todayISO() },
@@ -4562,15 +5165,15 @@ const App = {
     });
     this.log('สร้างโครงการ (สัตวแพทย์)', `${p.name} · ${cages.length} กรง · ${diets.length} ชนิดอาหาร · ${groups.length} กลุ่มทดสอบ`, p.name);
     // A5 — the project is live: everyone on it can start
-    this.notify({ kind: 'build', title: 'โครงการเริ่มแล้ว — จัดสรรพื้นที่เรียบร้อย',
-      detail: `${cages.length} กรง · รอชั่งน้ำหนักแรกเข้า`, project: p,
-      to: this.nTo.team(p), link: { type: 'dashboard' } });
+    this.notify({ kind: 'build', title: 'จัดสรรพื้นที่เรียบร้อย — รอรับหนูเข้ากักกันโรค',
+      detail: `${cages.length} กรง · ตรวจรับสัตว์เข้าส่วนกักโรคก่อนจึงนำเข้ากรงได้`, project: p,
+      to: this.nTo.team(p), link: { type: 'quarantine' } });
     // A6 — the staff AV appointed hear it as an appointment, not just a start
     this.notify({ kind: 'member', title: 'คุณได้รับแต่งตั้งเข้าโครงการ',
       detail: p.name, project: p,
       to: d.appointments.map(a => a.userId), link: { type: 'dashboard' } });
     this.draft = null;
-    this.toast(`สร้างโครงการ "${p.name}" เรียบร้อย — รอนักวิทยาศาสตร์ชั่งหนูเข้ากรง`);
+    this.toast(`สร้างโครงการ "${p.name}" เรียบร้อย — รอรับสัตว์เข้าส่วนกักโรค`);
     this.go('projects');
   },
 
@@ -5260,7 +5863,9 @@ const App = {
     if (this.recOn() && !canRecord) this.recReset();
     // การชั่งครั้งแรก: Sci ชั่งหนูแล้วนำเข้ากรงที่ยังว่าง — ทำได้ตราบใดที่ยังมีกรงว่าง
     const emptyCages = p.cages.filter(c => !c.mice.length);
-    const canIntake = canWeigh && emptyCages.length > 0;
+    // ยังกักโรคอยู่ = ยังไม่มีสัตว์ที่ "เข้าโครงการได้" — ปิดที่ปุ่มและที่โหมด
+    // ไม่ใช่แค่ซ่อน เพราะนี่คือกฎของงาน ไม่ใช่การจัดหน้าจอ
+    const canIntake = canWeigh && emptyCages.length > 0 && this.canPopulate(p);
     if (this.editing && !canEdit) this.editing = false;
     if (this.caring && !canCare) this.caring = false;
     if (this.dosing && !canDose) this.dosing = false;
@@ -5402,13 +6007,15 @@ const App = {
            </div>
            ${this.editModePanel(p)}
          </div>`
-      : `<div class="mode-bar">
+      : `${this.phaseBanner(p, this.isEmptyProject(p))}
+         <div class="mode-bar">
            <span style="flex:1"></span>
            <button class="btn" id="healthBoard">🩺 สุขภาพสัตว์</button>
            <button class="btn" id="supplyReport">💧 น้ำ-อาหาร</button>
            <button class="btn" id="sickReport">🩺 ติดตามอาการป่วย</button>
            <button class="btn" id="deathReport">✝ รายงานการตาย</button>
            ${this.printMenu('docPrint', 'พิมพ์เอกสาร', printItems)}
+           ${this.can('quarantine', p) ? `<button class="btn" data-nav="quarantine" data-project-id="${p.id}">🦠 กักกันโรค</button>` : ''}
            ${this.can('viewReports', p) ? `<button class="btn" data-nav="reports">📈 กราฟ</button>` : ''}
            ${canCare ? `<button class="btn btn-primary" id="startCare">🧹 ตรวจดูแลกรง</button>` : ''}
            ${canDose ? `<button class="btn btn-primary" id="startDose">💉 ให้สารทดสอบ</button>` : ''}
@@ -6937,6 +7544,17 @@ const App = {
     .fu-e { padding: 7px 10px; border-bottom: 1px dashed #bbb; }
     .fu-e:last-child { border-bottom: none; }
     .tag { font-size: 10.5px; color: #444; }
+    .pagebreak { page-break-before: always; }
+    .qz-meta { margin: 6px 0; font-size: 11.5px; }
+    .qz-meta u { color: #333; }
+    table.qz-p th { background: #f1eef7; text-align: center; font-size: 11px; padding: 4px 5px; }
+    table.qz-p td { padding: 3px 5px; font-size: 11px; height: 18px; }
+    table.qz-p .chk { margin-right: 8px; }
+    .qz-sign { margin-top: 10px; font-size: 11.5px; }
+    .qz-sign u { color: #333; }
+    table.qz-daily th { background: #f1eef7; text-align: center; font-size: 11px; }
+    .qz-care-cell div, .qz-job-cell div { font-size: 10.5px; line-height: 1.5; }
+    .qz-care-cell .chk, .qz-job-cell .chk { margin-right: 6px; }
     @media print { body { padding: 0; } .doc { max-width: none; } @page { size: A4; margin: 12mm; } }
   `,
 
@@ -7023,6 +7641,164 @@ const App = {
   // colgroups so table-layout:fixed wraps long checkbox rows within the page width
   COLS4: '<colgroup><col style="width:23%"><col style="width:30%"><col style="width:17%"><col style="width:30%"></colgroup>',
   COLS2: '<colgroup><col style="width:24%"><col style="width:76%"></colgroup>',
+
+  // ---- 5) บันทึกการตรวจรับสัตว์ทดลองรายตัว (LA Guide-AF 9.1-03) ----------
+  // ใบจริงหน้าแรกมี 28 แถว หน้าถัดไป 32 แถว (หน้าแรกเสียที่ให้หัวข้อมูล)
+  // แบ่งหน้าตามนั้นเป๊ะ เพื่อให้พิมพ์ออกมาซ้อนกับกระดาษต้นฉบับได้
+  QZ_ROWS_P1: 28,
+  QZ_ROWS_PN: 32,
+  buildQzIntakeDoc(p) {
+    const q = this.quarantineOf(p);
+    const it = q.intake || { rows: [] };
+    const rows = it.rows || [];
+    const [y, m, dd] = String(it.date || '').split('-').map(Number);
+    const pages = [];
+    let i = 0;
+    while (i < rows.length || !pages.length) {
+      const take = pages.length === 0 ? this.QZ_ROWS_P1 : this.QZ_ROWS_PN;
+      pages.push(rows.slice(i, i + take));
+      i += take;
+    }
+    const line = (v, w) => `<u style="display:inline-block;min-width:${w}">&nbsp;${this.esc(v ?? '')}&nbsp;</u>`;
+    const rowTable = (chunk, from) => `<table class="form qz-p">
+      <colgroup><col style="width:8%"><col style="width:11%"><col style="width:13%"><col style="width:14%">
+        <col style="width:18%"><col style="width:16%"><col style="width:20%"></colgroup>
+      <tr><th>ลำดับ</th><th>กรงที่</th><th>หมายเลข</th><th>น้ำหนัก (กรัม)</th>
+        <th>ลักษณะทั่วไป</th><th>ผลการตรวจ</th><th>หมายเหตุ</th></tr>
+      ${chunk.map((r, k) => `<tr>
+        <td style="text-align:center">${from + k + 1}</td>
+        <td>${this.esc(r.cage)}</td><td>${this.esc(r.tag)}</td>
+        <td style="text-align:center">${this.esc(r.weight)}</td>
+        <td>${this.tick('ปกติ', r.appearance !== 'abnormal')}${this.tick('ไม่ปกติ', r.appearance === 'abnormal')}</td>
+        <td>${this.tick('ผ่าน', r.result !== 'fail')}${this.tick('ไม่ผ่าน', r.result === 'fail')}</td>
+        <td>${this.esc(r.note)}</td></tr>`).join('')}
+    </table>`;
+
+    return pages.map((chunk, pi) => `
+      <div class="${pi ? 'pagebreak' : ''}">
+        ${this.cmuHeader('LA Guide-AF 9.1-03', `${pages.length} หน้า`)}
+        <div class="doc-title">บันทึกการตรวจรับสัตว์ทดลองรายตัว เพื่อรับสัตว์เข้าสู่ส่วนกักโรคสัตว์ทดลอง</div>
+        ${pi === 0 ? `
+          <div class="qz-meta">
+            วันที่ ${line(dd || '', '38px')} เดือน ${line(m ? this.TH_MONTHS[m - 1] : '', '90px')}
+            พ.ศ. ${line(y ? y + 543 : '', '54px')}
+            &nbsp;&nbsp;รหัสดำเนินการ ${line(it.code, '170px')}
+          </div>
+          <div class="qz-meta">
+            จำนวนสัตว์ทดลอง ${line(rows.length, '54px')} ตัว
+            &nbsp;&nbsp;อายุสัตว์ทดลอง ${line(it.ageWeeks, '54px')} สัปดาห์
+            &nbsp;&nbsp;ช่วงน้ำหนัก ${line(`${it.weightMin ?? ''} – ${it.weightMax ?? ''}`, '110px')} กรัม
+          </div>` : ''}
+        ${rowTable(chunk, pi === 0 ? 0 : this.QZ_ROWS_P1 + (pi - 1) * this.QZ_ROWS_PN)}
+        ${pi === pages.length - 1 ? `<div class="qz-sign">
+          ลงชื่อ (ผู้ตรวจรับฯ) ${line(it.by, '210px')}
+          วัน-เดือน-ปี ${line(this.thaiDate(it.date), '150px')}
+          เวลา ${line(it.time, '70px')}</div>` : ''}
+      </div>`).join('');
+  },
+  printQzIntake(p) {
+    this.printDocument(`ตรวจรับสัตว์ทดลอง-${p.name}`, this.buildQzIntakeDoc(p));
+  },
+
+  // ---- 6) แบบฟอร์มการกักโรคสัตว์ทดลอง (LA Guide-AF 9.1-01) ---------------
+  buildQzRecordDoc(p) {
+    const q = this.quarantineOf(p);
+    const g = q.program || {};
+    const rel = q.release || {};
+    const req = p.request || {};
+    const it = q.intake || { rows: [] };
+    const spec = (v) => v ? ` <u>&nbsp;${this.esc(v)}&nbsp;</u>` : ' <u>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u>';
+    const daily = [...q.daily].sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    // ใบจริงมี 7 แถว (กัก 7 วัน) — เติมแถวว่างให้ครบเสมอ เผื่อกรอกมือส่วนที่เหลือ
+    const slots = Math.max(7, daily.length);
+
+    return `
+      ${this.cmuHeader('LA Guide-AF 9.1-01', '2 หน้า')}
+      <div class="doc-title">แบบฟอร์มการกักโรคสัตว์ทดลอง (Quarantine Record)</div>
+
+      <table class="form">
+        <tr><td class="band" colspan="4">PROTOCOL INFORMATION</td></tr>
+        <tr><td colspan="2"><span class="lbl">Protocol No.</span> ${this.esc(req.protocolNo || '—')}</td>
+          <td><span class="lbl">Approved:</span> ${this.thaiDate(req.approvedDate) || '—'}</td>
+          <td><span class="lbl">Approved until:</span> ${this.thaiDate(req.untilDate) || '—'}</td></tr>
+        <tr><td><span class="lbl">No. of Animals:</span> ${it.rows.length || req.totalMice || '—'}</td>
+          <td><span class="lbl">Species:</span> ${this.esc(req.species || '—')}</td>
+          <td><span class="lbl">Sex:</span> ${this.esc(g.sex || (req.sexes || []).join('/') || '—')}</td>
+          <td><span class="lbl">Age:</span> ${this.esc(it.ageWeeks || req.ageMin || '—')} wks.</td></tr>
+        <tr><td colspan="4"><span class="lbl">Protocol description:</span> ${this.esc(req.objective || '—')}</td></tr>
+      </table>
+
+      <table class="form" style="margin-top:8px">
+        <tr><td class="band" colspan="2">ANIMAL QUARANTINE PROGRAM</td></tr>
+        <tr><td colspan="2"><span class="lbl">Vender:</span> ${this.esc(g.vendor || '—')}</td></tr>
+        <tr><td colspan="2"><span class="lbl">Transportation:</span> ${this.esc(g.transport || '—')}</td></tr>
+        <tr>
+          <td><span class="lbl">Physical Examination @Quarantine Date</span><br>
+            - จำนวนสัตว์ทดลอง ${this.tick('ครบถ้วน', g.countComplete)}${this.tick('ไม่ครบ', g.countComplete === false)}<br>
+            - ลักษณะสัตว์ทดลองเมื่อเปิดกล่อง/ตรวจนับ<br>
+            &nbsp;&nbsp;${this.tick('Normal appearance', g.appearanceOk)}<br>
+            &nbsp;&nbsp;${this.tick('Specify;', !!g.appearanceNote)}${spec(g.appearanceNote)}</td>
+          <td><span class="lbl">Health History / Certification</span><br>
+            ${this.tick('Health Certificate from Vendor', g.healthCert)}<br>
+            ${this.tick('Specify;', !!g.healthCertNote)}${spec(g.healthCertNote)}<br>
+            <span class="lbl">Preventive medicine</span><br>
+            ${this.tick('No', !g.preventive)}${this.tick('Yes, specify;', !!g.preventive)}${spec(g.preventiveNote)}</td></tr>
+        <tr><td colspan="2"><span class="lbl">Remark:</span> ${this.esc(g.remark || '')}</td></tr>
+        <tr><td><span class="lbl">Quarantine date:</span> ${this.thaiDate(g.startDate) || '—'}</td>
+          <td><span class="lbl">Responsible Vet.:</span> ${this.esc(g.vet || '—')}</td></tr>
+      </table>
+
+      <table class="form" style="margin-top:8px">
+        <tr><td class="band" colspan="2">Health Evaluation @Release Date</td></tr>
+        <tr><td colspan="2">${this.tick('Normal appearance / Healthy', !!rel.healthy)}
+          ${this.tick('Specify;', !!rel.note)}${spec(rel.note)}</td></tr>
+        <tr><td colspan="2"><span class="lbl">Remark:</span> ${this.esc(rel.remark || '')}</td></tr>
+        <tr><td><span class="lbl">Release date:</span> ${rel.date ? this.thaiDate(rel.date) : '—'}</td>
+          <td><span class="lbl">Responsible Vet.:</span> ${this.esc(rel.vet || '—')}</td></tr>
+      </table>
+
+      <div class="pagebreak">
+        ${this.cmuHeader('LA Guide-AF 9.1-01', '2 หน้า')}
+        <table class="form">
+          <tr><td><span class="lbl">Protocol No.</span> ${this.esc(req.protocolNo || '—')}</td>
+            <td><span class="lbl">Start Quarantine:</span> ${this.thaiDate(g.startDate) || '—'}<br>
+              <span class="lbl">Quarantine until:</span> ${this.thaiDate(g.untilDate) || '—'}</td></tr>
+          <tr><td><span class="lbl">Animal Strain:</span> ${this.esc(g.strain || req.strain || '—')}
+              &nbsp; <span class="lbl">Sex:</span> ${this.esc(g.sex || '—')}</td>
+            <td><span class="lbl">No. of Cage:</span> ${this.esc(g.cages || '—')}
+              &nbsp; <span class="lbl">Animals/cage:</span> ${this.esc(g.perCage || '—')}</td></tr>
+        </table>
+        <table class="form qz-daily" style="margin-top:8px">
+          <colgroup><col style="width:15%"><col style="width:40%"><col style="width:27%"><col style="width:18%"></colgroup>
+          <tr><th>Date</th><th>Animal Care</th><th>Job</th><th>Sign / Time</th></tr>
+          ${Array.from({ length: slots }, (_, i) => {
+            const d = daily[i];
+            const st = k => d ? d.items[k] : null;
+            const has = j => d && (d.jobs || []).includes(j);
+            return `<tr>
+              <td>${d ? this.thaiDate(d.date) : ''}</td>
+              <td class="qz-care-cell">
+                ${this.CARE_ITEMS.map(x => `<div>${x.en} ${this.tick('Normal', st(x.key) === 'normal')}${this.tick('Abnormal', st(x.key) === 'abnormal')}</div>`).join('')}
+              </td>
+              <td class="qz-job-cell">
+                <div>Feed ${this.tick('Change', has('Feed: Change'))}${this.tick('Add', has('Feed: Add'))}</div>
+                <div>Water ${this.tick('Change', has('Water: Change'))}${this.tick('Add', has('Water: Add'))}</div>
+                <div>Cage ${this.tick('Full Change', has('Cage: Full Change'))}${this.tick('Change Bottom/Pan', has('Cage: Change Bottom/Pan'))}</div>
+              </td>
+              <td class="sign-cell">${d ? `${this.esc(d.by)}<br>${this.esc(d.time)}` : ''}
+                ${d && d.note ? `<div class="tag">${this.esc(d.note)}</div>` : ''}</td></tr>`;
+          }).join('')}
+          <tr><td colspan="3"><span class="lbl">Vet. Comment:</span>
+              ${this.tick('Normal appearance / Healthy', !!rel.healthy)}${this.tick('Specify;', !!rel.note)}${spec(rel.note)}</td>
+            <td class="sign-cell">${this.esc(rel.vet || '')}<br>${rel.date ? this.thaiDate(rel.date) : ''}</td></tr>
+        </table>
+        <p class="muted" style="margin-top:6px">Remark: Job = Observation, Change Cage / Water Bottle / Feed &nbsp;·&nbsp;
+          Animals = Animal's Well-being (normal or not?)</p>
+      </div>`;
+  },
+  printQzRecord(p) {
+    this.printDocument(`กักโรคสัตว์ทดลอง-${p.name}`, this.buildQzRecordDoc(p));
+  },
 
   // ---- 1) Sick Case Report (LA Guide-AF 11.1-02) --------------------------
   buildSickCaseDoc(p, cage, mouse) {

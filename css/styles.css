@@ -2264,3 +2264,81 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 .rt-none { color: var(--text-muted); font-weight: 400; font-size: 13px; }
 .rt-act { text-align: right; white-space: nowrap; width: 1%; }
 .rt-act .btn-sm { margin-left: 5px; }
+
+/* ---------- กักกันโรค ----------
+   สามการ์ดเรียงตามลำดับงาน การ์ดที่ยังไม่ถึงคิวถูกหรี่ ไม่ซ่อน — คนใช้ต้องเห็น
+   ว่าข้างหน้ามีอะไรรออยู่ ไม่ใช่ให้ขั้นตอนโผล่มาเฉย ๆ ตอนถึงคิว */
+.qz-flow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+.qz-step { font-size: 13px; font-weight: 600; color: var(--text-muted);
+  background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 5px 14px; }
+.qz-step.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.qz-step.done { background: var(--green-soft); border-color: #86efac; color: var(--green); }
+.qz-arrow { color: var(--text-muted); }
+
+.qz-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 16px 18px; margin-bottom: 16px; box-shadow: var(--shadow); opacity: .62; }
+.qz-card.on, .qz-card.done { opacity: 1; }
+.qz-card.on { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary-soft), var(--shadow); }
+.qz-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.qz-head h3 { font-size: 16px; }
+.qz-form { font-size: 11px; font-weight: 700; color: var(--text-muted);
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 9px; }
+.qz-note { font-size: 12.5px; color: var(--text-muted); background: var(--surface-2);
+  border-radius: var(--radius-sm); padding: 8px 11px; margin-bottom: 10px; line-height: 1.6; }
+
+.qz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px 18px; font-size: 13.5px; }
+.qz-k { display: block; font-size: 11.5px; color: var(--text-muted); }
+.qz-tally { display: flex; gap: 8px; margin-top: 10px; }
+.qz-pill { font-size: 12.5px; font-weight: 700; border-radius: 999px; padding: 3px 12px; }
+.qz-pill.ok { background: var(--green-soft); color: var(--green); }
+.qz-pill.bad { background: var(--red-soft); color: var(--red); }
+.qz-checks { margin-top: 10px; font-size: 13px; line-height: 1.9; }
+.qz-spec { color: var(--text-muted); font-size: 12px; }
+.qz-remark { margin-top: 8px; font-size: 13px; color: var(--text-muted); }
+.qz-progress { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 12.5px; }
+.qz-bar { flex: 1; max-width: 320px; height: 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.qz-bar i { display: block; height: 100%; background: var(--primary); }
+
+.qz-table tbody tr { cursor: default; }
+.qz-table tbody tr:hover { background: var(--surface-2); }
+.qz-table .qz-sub { display: block; font-size: 11px; font-style: normal; color: var(--text-muted); }
+.qz-table tr.qz-fail { background: var(--red-soft); }
+.bad-t { color: var(--red); }
+.qz-chk { display: inline-block; font-size: 11.5px; border-radius: 999px; padding: 1px 8px; margin: 1px 4px 1px 0; }
+.qz-chk.ok { background: var(--surface-2); color: var(--text-muted); }
+.qz-chk.bad { background: var(--red-soft); color: var(--red); font-weight: 700; }
+.qz-job { display: inline-block; font-size: 11.5px; background: var(--primary-soft); color: var(--primary);
+  border-radius: 999px; padding: 1px 9px; margin: 1px 4px 1px 0; }
+
+/* ตัวแก้ไขแถวตรวจรับ — สูงสุด 60 แถว จึงต้องเลื่อนในกล่องของตัวเอง */
+.qz-rows { max-height: 46vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.qz-table.edit th { position: sticky; top: 0; z-index: 1; }
+.qz-table.edit td { padding: 4px 6px; }
+.qz-table.edit input, .qz-table.edit select {
+  width: 100%; padding: 5px 7px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; }
+.qz-table.edit .qr-w { text-align: right; font-variant-numeric: tabular-nums; }
+.qz-table .qz-no { text-align: center; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.qz-bulk { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 10px 0 8px; font-size: 12.5px; }
+
+.qz-form-checks { display: flex; flex-direction: column; gap: 7px; margin-bottom: 12px; }
+.qz-cb { display: flex; align-items: center; gap: 7px; font-size: 13.5px; }
+.qz-spec-in { padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 13px; margin-left: 24px; }
+.qz-jobs { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 6px 14px; }
+
+.qz-care-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 9px 0; border-bottom: 1px solid var(--border); }
+.qz-care-row:last-child { border-bottom: 0; }
+.qz-care-lbl { flex: 1; min-width: 190px; font-size: 13.5px; }
+.qz-care-lbl span { color: var(--text-muted); font-size: 12px; }
+.qz-care-pick { display: flex; gap: 6px; }
+.qc-b { padding: 6px 16px; border: 1px solid var(--border); background: var(--surface);
+  border-radius: var(--radius-btn); font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.qc-b.on.ok { background: var(--green-soft); border-color: #86efac; color: var(--green); }
+.qc-b.on.bad { background: var(--red-soft); border-color: #fca5a5; color: var(--red); }
+
+@media (max-width: 700px) {
+  .qz-spec-in { margin-left: 0; }
+  .qz-grid { grid-template-columns: 1fr; }
+}

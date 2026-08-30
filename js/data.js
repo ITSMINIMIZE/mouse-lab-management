@@ -36,11 +36,11 @@
 // scope: 'all'    = sees every project without being appointed to it
 //        'member' = only projects they are appointed to
 const POSITIONS = {
-  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewAssets', 'manageAssets', 'viewFinance', 'manageFinance', 'manageRates', 'cageCard'] },
-  AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
-  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'flag', 'reportDeath', 'cageCare', 'viewAssets'] },
+  ADMIN:    { key: 'ADMIN',    label: 'ผู้ดูแลระบบ',                  scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'editProject', 'manageMembers', 'weigh', 'dosing', 'cageCare', 'quarantine', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'stop', 'viewReports', 'approve', 'manageUsers', 'ochReport', 'viewAssets', 'manageAssets', 'viewFinance', 'manageFinance', 'manageRates', 'cageCard'] },
+  AV:       { key: 'AV',       label: 'หัวหน้าสัตวแพทย์',              scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'quarantine', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports', 'approve', 'manageUsers', 'manageMembers'] },
+  VET:      { key: 'VET',      label: 'สัตวแพทย์',                    scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'quarantine', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  SCI:      { key: 'SCI',      label: 'นักวิทยาศาสตร์',                scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'quarantine', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  ACT:      { key: 'ACT',      label: 'เจ้าหน้าที่ดูแลสัตว์ทดลอง',      scope: 'all',    caps: ['view', 'enterProject', 'viewCage', 'createProject', 'quarantine', 'flag', 'reportDeath', 'cageCare', 'viewAssets'] },
   // AEC = สำนักเลขานุการคณะกรรมการจริยธรรมการใช้สัตว์ทดลอง — like IACUC (read-only
   // across projects) but can approve/reject a PI's project REQUEST at stage 1.
   // AEC reviews the paperwork only: it reads a project's DETAILS (the info popup)
@@ -71,9 +71,9 @@ const ROLES = {
   PI:   { key: 'PI',   label: 'PI (นักวิจัย)',            caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports', 'cageCard'] },
   COPI: { key: 'COPI', label: 'CoPI (นักวิจัยร่วม)',       caps: ['view', 'enterProject', 'viewCage', 'editProject', 'flag', 'reportDeath', 'stop', 'viewReports', 'cageCard'] },
   AHS:  { key: 'AHS',  label: 'AHS (นักวิจัยปฏิบัติการ)',  caps: ['view', 'enterProject', 'viewCage', 'flag', 'reportDeath', 'dosing', 'viewReports', 'cageCard'] },
-  SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
-  ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'flag', 'reportDeath', 'cageCare'] },
+  SCI:  { key: 'SCI',  label: 'Sci ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'quarantine', 'flag', 'weigh', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  VET:  { key: 'VET',  label: 'VET ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'quarantine', 'flag', 'treat', 'reportDeath', 'handleCarcass', 'viewReports'] },
+  ACT:  { key: 'ACT',  label: 'ACT ประจำโครงการ',          caps: ['view', 'enterProject', 'viewCage', 'quarantine', 'flag', 'reportDeath', 'cageCare'] },
 };
 const ROLE_ORDER = ['PI', 'COPI', 'AHS', 'SCI', 'VET', 'ACT'];
 
@@ -88,6 +88,7 @@ const CAPABILITIES = [
   { key: 'weigh',         label: 'ชั่งน้ำหนัก + น้ำ/อาหาร + ตรวจสุขภาพเบื้องต้น' },
   { key: 'dosing',        label: 'ให้สารทดสอบ / หัตถการตามโปรโตคอล' },
   { key: 'cageCare',      label: 'ดูแลกรง (เปลี่ยน/เติมวัสดุรองนอน)' },
+  { key: 'quarantine',    label: 'ตรวจรับสัตว์ / บันทึกการกักกันโรค' },
   { key: 'flag',          label: 'แจ้งหนูผิดปกติ (รอสัตวแพทย์ตรวจ)' },
   { key: 'treat',         label: 'ตรวจรักษา / ปิดเคส / Humane endpoint' },
   { key: 'reportDeath',   label: 'แจ้งหนูตาย (นำไปแช่แข็ง)' },
@@ -541,6 +542,26 @@ const ASSET_STATUS = {
 };
 const FUND_SOURCES = ['เงินรายได้คณะ', 'เงินงบประมาณแผ่นดิน', 'เงินบริจาค', 'ทุนวิจัย'];
 
+// ============================================================
+// กักกันโรค (Quarantine)
+// ============================================================
+// สัตว์ที่มาถึงยังไม่ใช่ "หนูในโครงการ" — ต้องผ่านการตรวจรับรายตัวและกักโรคก่อน
+// รอบนี้ยัง **ไม่มีการกำหนดรหัสหนู** (รหัสออกตอนชั่งน้ำหนักแรกเข้าเข้ากรงโครงการ)
+// แถวตรวจรับจึงอ้างถึงกันด้วย "ลำดับ" กับ "กรงกักโรค" เท่านั้น ตรงตามใบจริง
+//
+// เอกสารสองใบของศูนย์ฯ ที่หน้านี้ต้องออกให้ได้:
+//   LA Guide-AF 9.1-03  บันทึกการตรวจรับสัตว์ทดลองรายตัว (ตอนรับเข้าส่วนกักโรค)
+//   LA Guide-AF 9.1-01  แบบฟอร์มการกักโรคสัตว์ทดลอง (Quarantine Record)
+const QUARANTINE_VENDORS = [
+  'Nomura Siam NLAC [Mahidol University]',
+  'ศูนย์สัตว์ทดลองแห่งชาติ มหาวิทยาลัยมหิดล',
+  'สถานสัตว์ทดลองเพื่อการวิจัย มหาวิทยาลัยนเรศวร',
+];
+const QUARANTINE_TRANSPORT = [
+  'Transportation truck',
+  'BKK to CNX by Airplane',
+];
+
 let _assetSeq = 0;
 function makeAsset(o) {
   _assetSeq++;
@@ -732,7 +753,7 @@ const DB = {
       // ตามไปด้วย ไม่งั้น "Start" บนใบติดหน้ากรง (= วันชั่งครั้งแรก) จะขัดกับ
       // วันที่โครงการประกาศไว้
       startDate: isoDaysAgo(14),
-      status: 'active',
+      status: 'active', phase: 'running',
       // หัวโปรโตคอลของใบอนุญาต — โครงการที่ live แล้วก็ผ่านขั้นตอนคำขอมาก่อน
       // จึงต้องมี request ติดตัวไว้เสมอ (ใบติดหน้ากรงดึงข้อมูลจากตรงนี้)
       request: {
@@ -813,7 +834,7 @@ const DB = {
       name: 'Behavioral Pilot',
       description: 'โครงการนำร่องพฤติกรรม — ดำเนินการครบตามแผนและปิดโครงการแล้ว',
       startDate: '2026-01-08',
-      status: 'closed',
+      status: 'closed', phase: 'running',
       request: {
         lotNo: '1', protocolNo: 'MU-AEC-2568-112', pi: 'ดร. นภา ศรีสุข',
         approvedDate: '2025-12-20', untilDate: '2026-12-19',
@@ -1079,6 +1100,47 @@ const DB = {
       id, name: 'Renal Function Study',
       description: 'ประเมินการทำงานของไตหลังได้รับสารทดสอบในหนูทดลอง',
       startDate: todayISO(), status: 'active', createdBy: 'u_pi', approval: 'approved',
+      // โครงการตัวอย่างที่ค้างอยู่ในช่วงกักโรค — เปิดหน้ากักกันโรคแล้วพิมพ์เอกสาร
+      // ได้ทั้งสองใบทันทีโดยไม่ต้องกรอกอะไรก่อน
+      phase: 'quarantine',
+      quarantine: {
+        intake: {
+          date: isoDaysAgo(5), time: '09:20', code: 'MU-AEC-2569-021',
+          ageWeeks: 7, weightMin: 22, weightMax: 28, by: 'Sci — นักวิทยาศาสตร์',
+          rows: (() => {
+            const cages = ['Q-01', 'Q-02', 'Q-03', 'Q-04', 'Q-05'];
+            return Array.from({ length: 10 }, (_, i) => ({
+              cage: cages[Math.floor(i / 2)], tag: `RT-${String(i + 1).padStart(2, '0')}`,
+              weight: rand(22, 28),
+              // ตัวอย่างมีตัวที่ไม่ผ่านหนึ่งตัว เพื่อให้เห็นว่าใบรายงานแสดงยังไง
+              appearance: i === 6 ? 'abnormal' : 'normal',
+              result: i === 6 ? 'fail' : 'pass',
+              note: i === 6 ? 'ขนหยอง ซึม ตาแฉะ — แยกออกจากกลุ่ม' : '',
+            }));
+          })(),
+        },
+        program: {
+          vendor: 'Nomura Siam NLAC [Mahidol University]', transport: 'BKK to CNX by Airplane',
+          strain: 'ICR', sex: 'M / F', vet: 'สพ.ญ. กมล ศรีวิไล',
+          cages: 5, perCage: 2,
+          startDate: isoDaysAgo(5), untilDate: isoDaysAgo(-2),
+          countComplete: true, appearanceOk: true, appearanceNote: '',
+          healthCert: true, healthCertNote: 'HC-2569/0142 ออกโดย NLAC',
+          preventive: false, preventiveNote: '',
+          remark: 'สัตว์ถึงหน่วยเวลา 08:50 น. สภาพกล่องปกติ',
+        },
+        daily: [0, 1, 2, 3, 4].map(i => ({
+          date: isoDaysAgo(5 - i), time: ['08:40', '08:35', '09:05', '08:50', '08:45'][i],
+          by: 'ACT — จนท.ดูแลสัตว์ทดลอง',
+          items: {
+            animals: i === 1 ? 'abnormal' : 'normal',
+            feed: 'normal', water: 'normal', cage: 'normal',
+          },
+          jobs: i % 2 === 0 ? ['Feed: Add', 'Water: Change'] : ['Feed: Add', 'Water: Add', 'Cage: Change Bottom/Pan'],
+          note: i === 1 ? 'RT-07 ขนหยอง ซึม แยกกรงและแจ้งสัตวแพทย์แล้ว' : '',
+        })),
+        release: null,
+      },
       requestDate: isoDaysAgo(6),
       request: {
         // หัวโปรโตคอลครบชุดเหมือนที่ฟอร์มคำขอสร้างให้ — ใบติดหน้ากรงอ่านจากตรงนี้
