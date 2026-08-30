@@ -792,7 +792,7 @@ const App = {
   PHASES: {
     awaiting_intake: { label: 'รอรับหนูเข้ากักกันโรค', icon: '📦', cls: 'wait',
                        hint: 'สร้างกรงเรียบร้อยแล้ว รอสัตว์ทดลองมาถึงเพื่อตรวจรับเข้าส่วนกักโรค' },
-    quarantine:      { label: 'รอกักกันโรค',           icon: '🦠', cls: 'quar',
+    quarantine:      { label: 'กำลังกักกันโรค',           icon: '🦠', cls: 'quar',
                        hint: 'รับสัตว์เข้าส่วนกักโรคแล้ว ระหว่างกักต้องบันทึกการดูแลทุกวันจนกว่าสัตวแพทย์จะปล่อยออก' },
     running:         { label: 'กำลังดำเนินการ',        icon: '',   cls: 'ok', hint: '' },
   },
@@ -2366,7 +2366,7 @@ const App = {
     if (ph === 'quarantine') {
       const d = this.qzDayCount(p);
       return `<div class="reject-banner built">
-        <b>🦠 รอกักกันโรค</b> — รับสัตว์เข้าส่วนกักโรคแล้ว${d.total ? ` กักมาแล้ว ${d.done}/${d.total} วัน` : ''}
+        <b>🦠 กำลังกักกันโรค</b> — รับสัตว์เข้าส่วนกักโรคแล้ว${d.total ? ` กักมาแล้ว ${d.done}/${d.total} วัน` : ''}
         · ต้องบันทึกการดูแลรายวัน และให้สัตวแพทย์ปล่อยออกก่อนจึงนำเข้ากรงได้ ${link}</div>`;
     }
     return empty ? `<div class="reject-banner built">
@@ -2390,8 +2390,8 @@ const App = {
     const step = (n, label, state) =>
       `<span class="qz-step ${state}">${state === 'done' ? '✓' : n} · ${label}</span>`;
     const strip = `<div class="qz-flow">
-      ${step(1, 'ตรวจรับสัตว์', q.intake ? 'done' : (ph === 'awaiting_intake' ? 'on' : ''))}<span class="qz-arrow">→</span>
-      ${step(2, 'กักโรค + ดูแลรายวัน', q.release ? 'done' : (ph === 'quarantine' ? 'on' : ''))}<span class="qz-arrow">→</span>
+      ${step(1, 'ตรวจสุขภาพ + นับรับสัตว์', q.intake ? 'done' : (ph === 'awaiting_intake' ? 'on' : ''))}<span class="qz-arrow">→</span>
+      ${step(2, 'กักโรค + ดูแลประจำวัน', q.release ? 'done' : (ph === 'quarantine' ? 'on' : ''))}<span class="qz-arrow">→</span>
       ${step(3, 'ปล่อยเข้าโครงการ', ph === 'running' ? 'done' : '')}
     </div>`;
 
@@ -2494,17 +2494,18 @@ const App = {
         ${strip}
 
         <section class="qz-card ${q.intake ? 'done' : (ph === 'awaiting_intake' ? 'on' : '')}">
-          <div class="qz-head"><h3>📋 1 · การตรวจรับสัตว์ทดลองรายตัว</h3>
+          <div class="qz-head"><h3>📋 1 · ตรวจสุขภาพรายตัวตอนนับรับสัตว์</h3>
             <span class="qz-form">LA Guide-AF 9.1-03</span>
             <span class="spacer" style="flex:1"></span>
             ${canEdit && ph !== 'running' ? `<button class="btn btn-sm ${q.intake ? '' : 'btn-primary'}" id="qzIntakeBtn">${
               q.intake ? 'แก้ไขการตรวจรับ' : '+ บันทึกการตรวจรับ'}</button>` : ''}</div>
-          <p class="qz-note">รอบนี้ยัง<b>ไม่กำหนดรหัสหนู</b> — รหัสประจำตัวออกตอนชั่งน้ำหนักแรกเข้ากรงโครงการ แถวจึงอ้างด้วยลำดับและกรงกักโรค</p>
+          <p class="qz-note">ตรวจ<b>ครั้งเดียว</b> ในวันที่นับรับสัตว์เข้าส่วนกักโรค ไม่ได้ตรวจซ้ำระหว่างกัก
+            · รอบนี้ยัง<b>ไม่กำหนดรหัสหนู</b> รหัสประจำตัวออกตอนชั่งน้ำหนักแรกเข้ากรงโครงการ แถวจึงอ้างด้วยลำดับและกรงกักโรค</p>
           ${intakeBody}
         </section>
 
         <section class="qz-card ${q.release ? 'done' : (ph === 'quarantine' ? 'on' : '')}">
-          <div class="qz-head"><h3>🦠 2 · การกักโรคและการดูแลรายวัน</h3>
+          <div class="qz-head"><h3>🦠 2 · การกักโรคและการดูแลประจำวัน</h3>
             <span class="qz-form">LA Guide-AF 9.1-01</span>
             <span class="spacer" style="flex:1"></span>
             ${canEdit && q.intake && ph !== 'running' ? `<button class="btn btn-sm" id="qzProgBtn">${
@@ -2512,6 +2513,8 @@ const App = {
             ${canEdit && this.inQuarantine(p) ? `<button class="btn btn-sm btn-primary" id="qzRoundBtn">${
               this.qzToday(p) ? 'แก้บันทึกรอบนี้' : '+ บันทึกดูแล' + (this.recOn() ? ' ' + this.recRoundLabel() : 'วันนี้')}</button>` : ''}</div>
           ${programBody}
+          <p class="qz-note">บันทึกรายวันคือการ<b>ดูแลและสังเกตอาการ</b> (Animal Care) ไม่ใช่การตรวจสุขภาพซ้ำ —
+            การตรวจสุขภาพทำครั้งเดียวตอนนับรับสัตว์ในขั้นที่ 1 และอีกครั้งตอนสัตวแพทย์ประเมินก่อนปล่อยออกในขั้นที่ 3</p>
           <div class="report-canvas" style="padding:0;overflow:auto;margin-top:12px">
             <table class="data qz-table">
               <thead><tr><th>วันที่</th><th>Animal Care</th><th>Job</th><th>ผู้บันทึก</th></tr></thead>
@@ -2576,8 +2579,8 @@ const App = {
     </tr>`;
 
     this.setModal(`
-      <div class="modal-head"><div><h3>📋 บันทึกการตรวจรับสัตว์ทดลองรายตัว</h3>
-        <div class="desc">${this.esc(p.name)} · เพื่อรับสัตว์เข้าสู่ส่วนกักโรค — ยังไม่กำหนดรหัสหนูในรอบนี้</div></div>
+      <div class="modal-head"><div><h3>📋 ตรวจสุขภาพรายตัวตอนนับรับสัตว์</h3>
+        <div class="desc">${this.esc(p.name)} · ทำครั้งเดียวเพื่อรับสัตว์เข้าสู่ส่วนกักโรค — ยังไม่กำหนดรหัสหนูในรอบนี้</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
       <div class="modal-body">
         <div class="form-row3">
@@ -2665,7 +2668,7 @@ const App = {
       const q = this.quarantineOf(p);
       const first = !q.intake;
       q.intake = JSON.parse(JSON.stringify(d));
-      // รับเข้ากักโรคครั้งแรก = โครงการเข้าสถานะ "รอกักกันโรค"
+      // รับเข้ากักโรคครั้งแรก = โครงการเข้าสถานะ "กำลังกักกันโรค"
       if (first && this.phaseOf(p) === 'awaiting_intake') {
         p.phase = 'quarantine';
         this.notify({ kind: 'build', title: 'รับสัตว์เข้าส่วนกักโรคแล้ว',
@@ -2776,7 +2779,7 @@ const App = {
                   : { date, time: this.recTime(), by: this.user.name,
                       items: { animals: 'normal', feed: 'normal', water: 'normal', cage: 'normal' }, jobs: [], note: '' };
     this.openModal(`
-      <div class="modal-head"><div><h3>🦠 บันทึกการดูแลระหว่างกักโรค</h3>
+      <div class="modal-head"><div><h3>🦠 บันทึกการดูแลประจำวันระหว่างกักโรค</h3>
         <div class="desc">${this.esc(p.name)} · ${this.thaiDate(date)}${this.recOn() ? ' (บันทึกย้อนหลัง)' : ''}</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
       <div class="modal-body">
