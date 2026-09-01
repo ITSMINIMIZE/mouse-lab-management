@@ -631,6 +631,22 @@ function quarantineDemo(o) {
 }
 
 let _assetSeq = 0;
+// งานที่ "เรียกใช้ครุภัณฑ์" ได้ — ครุภัณฑ์แต่ละชิ้นเลือกได้ว่าจะโผล่ในงานไหนบ้าง
+// (ตั้งที่ พัสดุ → ตั้งค่าการเรียกใช้ครุภัณฑ์) · วัสดุไม่อยู่ในระบบนี้ เพราะเบิกเป็นก้อน
+//
+// timed = งานที่มีจังหวะ "เริ่ม → เสร็จสิ้น" ชัดเจน จับเวลาได้จริง
+// ส่วนงานที่ไม่ timed เป็นการบันทึกครั้งเดียวจบ เก็บเป็นจำนวนครั้ง เวลาเป็น 0
+const ASSET_ACTIONS = [
+  { key: 'weigh',    label: 'ชั่งน้ำหนัก',            icon: '⚖️', timed: true },
+  { key: 'dose',     label: 'ให้สารทดสอบ',           icon: '💉', timed: true },
+  { key: 'care',     label: 'ตรวจดูแลกรง',           icon: '🧹', timed: true },
+  { key: 'intake',   label: 'รับหนูเข้าโครงการ',      icon: '🐭', timed: true },
+  { key: 'treat',    label: 'รักษา / ดูแลสัตว์ป่วย',  icon: '🩺', timed: false },
+  { key: 'necropsy', label: 'ผ่าซาก / ชันสูตร',      icon: '🔬', timed: false },
+  { key: 'qzIntake', label: 'ตรวจรับเข้ากักโรค',      icon: '📋', timed: false },
+  { key: 'qzDaily',  label: 'ดูแลประจำวัน (กักโรค)',  icon: '🦠', timed: false },
+];
+
 function makeAsset(o) {
   _assetSeq++;
   return {
@@ -655,6 +671,10 @@ function makeAsset(o) {
     moves: o.moves || [],               // { date, type:'in'|'out', qty, by, note, price? }
     // ---- ครุภัณฑ์ ----
     repairs: o.repairs || [],           // { date, by, symptom, status, fixedDate, cost, vendor, note }
+    // งานที่ชิ้นนี้จะขึ้นให้เลือก — ว่าง = ไม่ถูกเรียกใช้ในงานประจำวันเลย
+    usageActions: o.usageActions || [],
+    // ประวัติการถูกเรียกใช้ { id, action, projectId, projectName, by, date, start, end, minutes, note }
+    usage: o.usage || [],
   };
 }
 
@@ -669,11 +689,13 @@ const ASSETS = [
     category: 'housing', brand: 'Tecniplast', model: 'GM500', serial: 'TP-2565-119',
     acquiredDate: isoDaysAgo(1120), price: 1850000, lifeYears: 10, room: 'AR02', rack: 'R3',
     owner: 'ACT — จนท.ดูแลสัตว์ทดลอง', fundSource: 'เงินงบประมาณแผ่นดิน' }),
-  makeAsset({ kind: 'asset', code: 'มช.6640-002-0007', name: 'เครื่องชั่งดิจิทัลทศนิยม 2 ตำแหน่ง',
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0007',
+    usageActions: ['weigh', 'intake', 'qzIntake'], name: 'เครื่องชั่งดิจิทัลทศนิยม 2 ตำแหน่ง',
     category: 'lab', brand: 'Sartorius', model: 'Entris II', serial: 'SA-88421',
     acquiredDate: isoDaysAgo(700), price: 68000, lifeYears: 5, room: 'AR02', rack: '—',
     owner: 'Sci — นักวิทยาศาสตร์', fundSource: 'เงินรายได้คณะ' }),
-  makeAsset({ kind: 'asset', code: 'มช.6640-002-0011', name: 'ตู้ปลอดเชื้อ Biosafety Cabinet Class II',
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0011',
+    usageActions: ['dose', 'treat', 'necropsy'], name: 'ตู้ปลอดเชื้อ Biosafety Cabinet Class II',
     category: 'clean', brand: 'ESCO', model: 'AC2-4S', serial: 'ES-77120',
     acquiredDate: isoDaysAgo(430), price: 320000, lifeYears: 10, room: 'AR01', rack: '—',
     owner: 'AV — สัตวแพทย์ประจำหน่วย', fundSource: 'ทุนวิจัย', status: 'repair',
@@ -688,6 +710,16 @@ const ASSETS = [
         status: 'fixed', fixedDate: isoDaysAgo(385), cost: 8200, vendor: 'บ.ฮิรายาม่า เซอร์วิส', note: 'เปลี่ยนซีลยางประตู' },
       { date: isoDaysAgo(60), by: 'ACT — จนท.ดูแลสัตว์ทดลอง', symptom: 'อุณหภูมิไม่ถึง 121°C ในรอบที่ 2',
         status: 'fixed', fixedDate: isoDaysAgo(45), cost: 15400, vendor: 'บ.ฮิรายาม่า เซอร์วิส', note: 'เปลี่ยนฮีตเตอร์' }] }),
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0023', name: 'ตู้ปลอดเชื้อ Biosafety Cabinet Class II (สำรอง)',
+    category: 'clean', brand: 'ESCO', model: 'AC2-4S', serial: 'ES-77121',
+    acquiredDate: isoDaysAgo(300), price: 320000, lifeYears: 10, room: 'AR02', rack: '—',
+    owner: 'AV — สัตวแพทย์ประจำหน่วย', fundSource: 'ทุนวิจัย',
+    usageActions: ['dose', 'treat', 'necropsy'] }),
+  makeAsset({ kind: 'asset', code: 'มช.6640-002-0031', name: 'รถเข็นเปลี่ยนกรงพร้อมชุดกรอง HEPA',
+    category: 'clean', brand: 'Tecniplast', model: 'CS5', serial: 'TP-2566-042',
+    acquiredDate: isoDaysAgo(520), price: 185000, lifeYears: 8, room: 'AR01', rack: '—',
+    owner: 'ACT — จนท.ดูแลสัตว์ทดลอง', fundSource: 'เงินรายได้คณะ',
+    usageActions: ['care', 'qzDaily'] }),
   makeAsset({ kind: 'asset', code: 'มช.6640-002-0019', name: 'ตู้แช่แข็ง -20°C สำหรับเก็บซาก',
     category: 'lab', brand: 'Panasonic', model: 'MDF-U334', serial: 'PN-55901',
     acquiredDate: isoDaysAgo(1500), price: 185000, lifeYears: 8, room: 'AR03', rack: '—',
@@ -1267,6 +1299,45 @@ const DB = {
       ],
     };
   }
+})();
+
+// ประวัติการเรียกใช้ครุภัณฑ์ย้อนหลัง — ผูกกับรอบงานที่โครงการทำจริง
+// (ชั่งน้ำหนักรายสัปดาห์ของ NAFLD และรอบตรวจกรงประจำวัน) เพื่อให้คอลัมน์
+// "การใช้งาน" ในหน้าพัสดุมีตัวเลขให้เห็นตั้งแต่เปิดระบบครั้งแรก
+(function seedAssetUsage() {
+  const byCode = c => DB.assets.find(a => a.code === c);
+  const scale = byCode('มช.6640-002-0007');       // เครื่องชั่ง
+  const cart  = byCode('มช.6640-002-0031');       // รถเข็นเปลี่ยนกรง
+  const bsc2  = byCode('มช.6640-002-0023');       // ตู้ปลอดเชื้อสำรอง
+  const p1 = DB.projects.find(x => x.id === 'P1');
+  const p8 = DB.projects.find(x => x.id === 'P8');
+  let n = 0;
+  const put = (a, action, proj, daysAgo, start, minutes, by) => {
+    if (!a) return;
+    const [h, m] = start.split(':').map(Number);
+    const end = new Date(2000, 0, 1, h, m + minutes);
+    a.usage.push({
+      id: 'AUSEED' + (++n), action,
+      projectId: proj ? proj.id : null, projectName: proj ? proj.name : '—',
+      by, date: isoDaysAgo(daysAgo), start,
+      end: `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`,
+      minutes, note: '',
+    });
+  };
+  const SCI = 'Sci — นักวิทยาศาสตร์', ACT = 'ปิยะ ใจดี (ACT)';
+  // ชั่งน้ำหนักรายสัปดาห์ 3 รอบ + รอบรับหนูเข้าโครงการตอนเริ่มโครงการ
+  put(scale, 'intake', p1, 14, '09:10', 95, SCI);
+  put(scale, 'weigh',  p1, 14, '11:05', 48, SCI);
+  put(scale, 'weigh',  p1, 7,  '09:00', 41, SCI);
+  put(scale, 'weigh',  p1, 1,  '08:55', 44, SCI);
+  put(scale, 'qzIntake', p8, 5, '09:20', 0, SCI);
+  // รถเข็นเปลี่ยนกรง — ใช้ทุกวันที่มีรอบตรวจกรง
+  [6, 5, 4, 3, 2, 1].forEach((d, i) => put(cart, 'care', p1, d, ['08:40','08:35','09:05','08:50','08:45','08:30'][i], 25 + i * 4, ACT));
+  put(cart, 'qzDaily', p8, 2, '08:30', 0, ACT);
+  // ตู้ปลอดเชื้อสำรอง — รอบให้สารทดสอบ
+  put(bsc2, 'dose', p1, 6, '13:20', 62, 'ก้อง วัฒนา (AHS)');
+  put(bsc2, 'dose', p1, 2, '13:10', 55, 'ก้อง วัฒนา (AHS)');
+  put(bsc2, 'treat', p1, 1, '15:40', 0, 'สพ.ญ. กมล');
 })();
 
 // seed a few historical log entries that match the demo state

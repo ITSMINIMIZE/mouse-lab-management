@@ -865,7 +865,8 @@ const App = {
   visibleTabs() { return this.TABS.filter(t => this.can(t.cap)); },
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
-    if (name === 'assets' || name === 'finance' || name === 'rates') return name;
+    if (name === 'assets' || name === 'assetuse') return 'assets';
+    if (name === 'finance' || name === 'rates') return name;
     if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport', 'quarantine'].includes(name)) return 'projects';
     return '';
   },
@@ -899,6 +900,7 @@ const App = {
       case 'roles':    this.go('roles', this.route.projectId); break;
       case 'users':    this.go('users'); break;
       case 'assets':   this.go('assets'); break;
+      case 'assetuse': this.go('assetuse'); break;
       case 'finance':  this.go('finance'); break;
       case 'rates':    this.go('rates'); break;
       case 'build':
@@ -912,6 +914,9 @@ const App = {
     // บันทึกย้อนหลังผูกกับโครงการที่กำลังทำอยู่ — พาผู้ใช้ออกจากโครงการเมื่อไหร่
     // ต้องกลับมาเป็น "วันนี้" เสมอ ไม่งั้นโหมดเงียบ ๆ นี้จะติดไปโผล่ที่งานถัดไป
     if (this.recOn() && !(name === 'dashboard' && projectId === this.rec.pid)) this.recReset();
+    // งานที่กำลังทำค้างอยู่ถือว่าจบตรงนี้ — ผู้ใช้เดินออกไปโดยไม่กดเสร็จสิ้น
+    // เวลาที่ใช้ครุภัณฑ์ก็ยังต้องถูกบันทึก ไม่ใช่หายไปเฉย ๆ
+    this.endAssetSession('ปิดอัตโนมัติเมื่อออกจากหน้า');
     this.route = { name, projectId };
     this.weighing = false;
     this.editing = false;
@@ -932,6 +937,7 @@ const App = {
     if (name === 'roles') return this.renderRoles();
     if (name === 'users') return this.renderUsers();
     if (name === 'assets') return this.renderAssets();
+    if (name === 'assetuse') return this.renderAssetUse();
     if (name === 'finance') return this.renderFinance();
     if (name === 'rates') return this.renderRates();
     if (this.PROJECT_MODULES[name]) return this.renderProjectModule(name);
@@ -1119,10 +1125,17 @@ const App = {
         <td class="num as-val">${this.repairCostThisYear(a)
           ? `<b>${this.baht(this.repairCostThisYear(a))}</b><i>ซ่อม 12 เดือน</i>`
           : '<span class="as-none">–</span>'}</td>
+        <td class="num as-use">${(() => {
+          const u = this.assetUseTotals(a);
+          if (!u.times) return (a.usageActions || []).length
+            ? '<span class="as-none">ยังไม่ถูกเรียกใช้</span>'
+            : '<span class="as-none">–</span>';
+          return `<b>${u.times} ครั้ง</b><i>${this.durLabel(u.minutes)}</i>`;
+        })()}</td>
         <td><span class="as-st ${st.tone}">${st.label}</span>${
           open ? `<span class="as-open">🔧 ${open}</span>` : ''}</td>
       </tr>`;
-    }).join('') : `<tr><td colspan="6" class="empty-note" style="text-align:center;padding:22px">ไม่พบครุภัณฑ์ที่ตรงกับที่ค้นหา</td></tr>`;
+    }).join('') : `<tr><td colspan="7" class="empty-note" style="text-align:center;padding:22px">ไม่พบครุภัณฑ์ที่ตรงกับที่ค้นหา</td></tr>`;
 
     this.shell('', `
       <div class="page wide">
@@ -1172,12 +1185,14 @@ const App = {
             <div><h3>🏷️ ครุภัณฑ์ <span class="as-n">${assetList.length}</span></h3>
               <div class="desc">ของคงทน · มีเลขครุภัณฑ์รายชิ้น · มูลค่าทยอยตัดเป็นค่าเสื่อมตามอายุการใช้งาน</div></div>
             <span class="spacer" style="flex:1"></span>
+            ${this.can('manageAssets') ? `<button class="btn btn-sm" data-nav="assetuse">🔧 ตั้งค่าการเรียกใช้</button>` : ''}
             <div class="as-sec-sum"><span>มูลค่าตามบัญชี</span><b>${this.baht(sum.bookAsset)}</b></div>
           </div>
           <div class="report-canvas" style="padding:0;overflow:auto">
             <table class="data as-table">
               <thead><tr><th>รายการ</th><th>ที่ตั้ง</th><th>ค่าเสื่อมราคา</th>
-                <th class="num">มูลค่าตามบัญชี</th><th class="num">ค่าซ่อม</th><th>สถานะ</th></tr></thead>
+                <th class="num">มูลค่าตามบัญชี</th><th class="num">ค่าซ่อม</th>
+                <th class="num">การใช้งาน</th><th>สถานะ</th></tr></thead>
               <tbody>${assetRows}</tbody>
             </table>
           </div>
@@ -1291,7 +1306,31 @@ const App = {
         </div>
         ${a.note ? `<p class="ad-freetext">${this.esc(a.note)}</p>` : ''}
 
-        <div class="section-title">${isAsset ? '🔧 ประวัติการซ่อมบำรุง' : '📦 ความเคลื่อนไหวสต๊อก'}</div>
+        ${isAsset ? (() => {
+          const u = [...(a.usage || [])].reverse();
+          const t = this.assetUseTotals(a);
+          const acts = (a.usageActions || []).map(k => this.actionInfo(k));
+          return `<div class="section-title">🔧 การเรียกใช้งาน</div>
+            <div class="ad-usesum">
+              <div><span class="pi-k">ถูกเรียกใช้</span> <b>${t.times}</b> ครั้ง</div>
+              <div><span class="pi-k">เวลารวม</span> <b>${this.durLabel(t.minutes)}</b></div>
+              <div class="span2"><span class="pi-k">ขึ้นให้เลือกในงาน</span> ${
+                acts.length ? acts.map(x => `${x.icon} ${this.esc(x.label)}`).join(' · ')
+                            : '<span class="muted">ยังไม่ได้ตั้งค่า — ชิ้นนี้จะไม่ถูกเรียกใช้</span>'}</div>
+            </div>
+            ${u.length ? `<table class="data ad-usetab">
+              <thead><tr><th>วันที่</th><th>งาน</th><th>โครงการ</th><th>ผู้ใช้</th><th class="num">เวลา</th></tr></thead>
+              <tbody>${u.slice(0, 12).map(x => `<tr>
+                <td>${this.thaiDate(x.date)}<i>${this.esc(x.start)}${x.end ? '–' + this.esc(x.end) : ''}</i></td>
+                <td>${this.actionInfo(x.action).icon} ${this.esc(this.actionInfo(x.action).label)}</td>
+                <td>${this.esc(x.projectName)}</td>
+                <td>${this.esc(x.by)}</td>
+                <td class="num">${x.minutes ? this.durLabel(x.minutes) : '—'}</td></tr>`).join('')}</tbody>
+            </table>${u.length > 12 ? `<p class="empty-note">แสดง 12 รายการล่าสุด จากทั้งหมด ${u.length}</p>` : ''}`
+            : '<p class="empty-note">ยังไม่เคยถูกเรียกใช้</p>'}`;
+        })() : ''}
+
+        <div class="section-title">${isAsset ? '🛠 ประวัติการซ่อมบำรุง' : '📦 ความเคลื่อนไหวสต๊อก'}</div>
         ${isAsset ? repairs : moves}
       </div>
       <div class="modal-foot">
@@ -2934,6 +2973,213 @@ const App = {
         },
       });
     };
+  },
+
+  // =========================================================
+  // การเรียกใช้ครุภัณฑ์ระหว่างทำงาน
+  // =========================================================
+  // กดปุ่มเริ่มงาน → ถามว่าจะใช้ครุภัณฑ์ชิ้นไหน → จับเวลาไปจนกดเสร็จสิ้น
+  // เลือกหรือไม่เลือกก็ได้ งานเร่งจะได้ไม่สะดุด · ชิ้นเดียวถูกใช้พร้อมกันหลายโครงการได้
+  // แต่ต้องเห็นว่ากำลังถูกใช้อยู่ที่ไหน
+  actionInfo(k) { return ASSET_ACTIONS.find(a => a.key === k) || { key: k, label: k, icon: '🔧', timed: false }; },
+
+  // ครุภัณฑ์ที่เสนอให้เลือกสำหรับงานหนึ่ง — ต้องตั้งค่าไว้ และต้องใช้งานได้จริง
+  // ของที่ส่งซ่อมหรือจำหน่ายแล้วไม่ควรโผล่มาให้กดผิด
+  assetsForAction(action) {
+    return DB.assets.filter(a => a.kind === 'asset'
+      && (a.usageActions || []).includes(action)
+      && a.status !== 'repair' && a.status !== 'disposed');
+  },
+
+  // เซสชันที่ยังไม่ปิด — เก็บใน DB เพื่อให้สลับผู้ใช้แล้วยังเห็นว่าของถูกยืมอยู่
+  openAssetUses(assetId) {
+    return (DB.assetSessions || []).filter(s => s.assetIds.includes(assetId));
+  },
+
+  // ---- ป๊อปอัปเลือกครุภัณฑ์ ----
+  // onGo(ids) ถูกเรียกเสมอ — ข้ามก็ส่ง [] ไป งานจึงเริ่มได้ทุกกรณี
+  openAssetPicker(action, p, onGo) {
+    const list = this.assetsForAction(action);
+    const info = this.actionInfo(action);
+    // ไม่ได้ตั้งครุภัณฑ์ไว้สำหรับงานนี้ → ไม่ต้องถาม เริ่มงานเลย
+    if (!list.length) return onGo([]);
+
+    const picked = new Set();
+    const rows = () => list.map(a => {
+      const busy = this.openAssetUses(a.id).filter(s => s.projectId !== (p && p.id));
+      const on = picked.has(a.id);
+      return `<label class="au-item ${on ? 'on' : ''} ${busy.length ? 'busy' : ''}" data-id="${a.id}">
+        <input type="checkbox" ${on ? 'checked' : ''} data-id="${a.id}">
+        <span class="au-main"><b>${this.esc(a.name)}</b>
+          <i>${this.esc(a.code)}${a.room ? ' · ' + this.esc(a.room) : ''}</i></span>
+        ${busy.length ? `<span class="au-busy" title="ใช้พร้อมกันได้ แต่ให้รู้ไว้">⚠️ กำลังใช้อยู่ที่ ${
+          this.esc(busy[0].projectName)}</span>` : ''}
+      </label>`;
+    }).join('');
+
+    this.openModal(`
+      <div class="modal-head"><div><h3>${info.icon} ใช้ครุภัณฑ์ชิ้นไหนบ้าง</h3>
+        <div class="desc">${info.label}${p ? ' · ' + this.esc(p.name) : ''}${
+          info.timed ? ' — ระบบจับเวลาตั้งแต่กดเริ่มจนกดเสร็จสิ้น' : ''}</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="au-list" id="auList">${rows()}</div>
+        <p class="af-hint">เลือกกี่ชิ้นก็ได้ · ไม่ได้ใช้ครุภัณฑ์ก็กดข้ามได้ — ประวัติจะบันทึกเฉพาะที่เลือก</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="auSkip">ข้าม — ไม่ใช้ครุภัณฑ์</button>
+        <button class="btn btn-primary" id="auGo">เริ่มงาน</button>
+      </div>`, { compact: true });
+
+    const redraw = () => {
+      this.el('auList').innerHTML = rows();
+      wire();
+      this.el('auGo').textContent = picked.size ? `เริ่มงาน (${picked.size} ชิ้น)` : 'เริ่มงาน';
+    };
+    const wire = () => this.el('auList').querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.onchange = () => { cb.checked ? picked.add(cb.dataset.id) : picked.delete(cb.dataset.id); redraw(); };
+    });
+    wire();
+    this.el('closeModal').onclick = () => this.closeModal();
+    this.el('auSkip').onclick = () => { this.closeModal(); onGo([]); };
+    this.el('auGo').onclick = () => { this.closeModal(); onGo([...picked]); };
+  },
+
+  // ---- เริ่ม / ปิดเซสชัน ----
+  startAssetSession(action, p, assetIds) {
+    if (!assetIds || !assetIds.length) return;
+    DB.assetSessions = DB.assetSessions || [];
+    DB.assetSessions.push({
+      id: 'AU' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      action, assetIds: [...assetIds],
+      projectId: p ? p.id : null, projectName: p ? p.name : '—',
+      by: this.user.name, startedAt: Date.now(),
+      // วันที่ของรายการใช้ผูกกับวันที่ที่ผู้ใช้กำลังบันทึกอยู่ (รองรับบันทึกย้อนหลัง)
+      date: this.recDate(),
+    });
+  },
+
+  // ปิดเซสชันที่ค้างของผู้ใช้คนนี้ แล้วเขียนลงประวัติของครุภัณฑ์แต่ละชิ้น
+  // เรียกทั้งตอนกดเสร็จสิ้น และตอนออกจากหน้า — เดินออกไปเฉย ๆ เวลาก็ยังถูกบันทึก
+  endAssetSession(note = '') {
+    const open = (DB.assetSessions || []).filter(s => s.by === this.user.name);
+    if (!open.length) return 0;
+    DB.assetSessions = DB.assetSessions.filter(s => s.by !== this.user.name);
+    open.forEach(s => {
+      const minutes = Math.max(1, Math.round((Date.now() - s.startedAt) / 60000));
+      s.assetIds.forEach(id => {
+        const a = DB.assets.find(x => x.id === id);
+        if (!a) return;
+        a.usage.push({
+          id: s.id + '-' + id, action: s.action,
+          projectId: s.projectId, projectName: s.projectName,
+          by: s.by, date: s.date,
+          start: this.hmOf(s.startedAt), end: this.hmOf(Date.now()),
+          minutes, note,
+        });
+      });
+      this.log('ใช้ครุภัณฑ์', `${this.actionInfo(s.action).label} · ${s.assetIds.length} ชิ้น · ${minutes} นาที`, s.projectName);
+    });
+    return open.length;
+  },
+  hmOf(ts) {
+    const d = new Date(ts);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  },
+
+  // งานที่บันทึกครั้งเดียวจบ (รักษา · ชันสูตร · กักโรค) — ไม่มีช่วงเวลาให้จับ
+  // บันทึกเป็น "ถูกเรียกใช้ 1 ครั้ง" เวลา 0 นาที เพื่อให้จำนวนครั้งยังนับได้ถูก
+  logAssetUse(action, p, assetIds, note = '') {
+    (assetIds || []).forEach(id => {
+      const a = DB.assets.find(x => x.id === id);
+      if (!a) return;
+      a.usage.push({
+        id: 'AU' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+        action, projectId: p ? p.id : null, projectName: p ? p.name : '—',
+        by: this.user.name, date: this.recDate(),
+        start: this.recTime() || this.hmOf(Date.now()), end: '', minutes: 0, note,
+      });
+    });
+  },
+
+  // ---- ยอดรวมสำหรับหน้าพัสดุ ----
+  assetUseTotals(a) {
+    const u = a.usage || [];
+    return { times: u.length, minutes: u.reduce((s, x) => s + (x.minutes || 0), 0) };
+  },
+  // 95 → "1 ชม. 35 น."  ·  0 → "—"
+  durLabel(min) {
+    if (!min) return '—';
+    const h = Math.floor(min / 60), m = min % 60;
+    return h ? `${h} ชม.${m ? ` ${m} น.` : ''}` : `${m} น.`;
+  },
+
+  // ---- ตั้งค่าว่าครุภัณฑ์ชิ้นไหนจะขึ้นให้เลือกในงานใดบ้าง ----
+  // ตารางกาช่อง ครุภัณฑ์ × งาน — อ่านทั้งภาพในหน้าเดียว เพราะคำถามที่คนถามจริงคือ
+  // "งานชั่งน้ำหนักมีอะไรให้เลือกบ้าง" ไม่ใช่ "ครุภัณฑ์ชิ้นนี้ใช้กับอะไรได้"
+  renderAssetUse() {
+    if (!this.can('manageAssets')) { this.toast('ไม่มีสิทธิ์ตั้งค่าการเรียกใช้ครุภัณฑ์'); return this.go(this.homeRoute()); }
+    const items = DB.assets.filter(a => a.kind === 'asset' && a.status !== 'disposed');
+
+    const rows = items.map(a => {
+      const off = a.status === 'repair';
+      const u = this.assetUseTotals(a);
+      return `<tr class="${off ? 'au-off' : ''}">
+        <td><b>${this.esc(a.name)}</b>
+          <div class="au-code"><span class="mono">${this.esc(a.code)}</span>${a.room ? ' · ' + this.esc(a.room) : ''}${
+            off ? ' · <span class="au-tag">ส่งซ่อม — ไม่ขึ้นให้เลือก</span>' : ''}</div></td>
+        ${ASSET_ACTIONS.map(act => `<td class="au-cell">
+          <input type="checkbox" data-asset="${a.id}" data-act="${act.key}"
+                 ${(a.usageActions || []).includes(act.key) ? 'checked' : ''}></td>`).join('')}
+        <td class="num">${u.times ? `<b>${u.times}</b><i>${this.durLabel(u.minutes)}</i>` : '<span class="as-none">–</span>'}</td>
+      </tr>`;
+    }).join('');
+
+    // นับว่างานแต่ละอย่างมีของให้เลือกกี่ชิ้น — งานที่ได้ 0 คือจุดที่ป๊อปอัปจะไม่เด้ง
+    const perAction = ASSET_ACTIONS.map(act => ({ act, n: this.assetsForAction(act.key).length }));
+    const empty = perAction.filter(x => !x.n);
+
+    this.shell('', `
+      <div class="page wide">
+        <div class="page-head">
+          <div><h2>🔧 ตั้งค่าการเรียกใช้ครุภัณฑ์</h2>
+            <div class="desc">กาช่องว่าครุภัณฑ์ชิ้นไหนจะขึ้นให้เลือกตอนกดปุ่มงานใด
+              · ติ๊กแล้วมีผลทันที ไม่ต้องกดบันทึก · <b>วัสดุไม่อยู่ในตารางนี้</b> เพราะเบิกใช้เป็นก้อน ไม่ได้เรียกรายครั้ง</div></div>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn" data-nav="assets">← กลับไปหน้าพัสดุ</button>
+        </div>
+
+        ${empty.length ? `<div class="au-warn">⚠️ งานที่<b>ยังไม่มีครุภัณฑ์</b>ให้เลือก — กดปุ่มงานเหล่านี้จะไม่มีป๊อปอัปเด้งขึ้นมา:
+          ${empty.map(x => `${x.act.icon} ${x.act.label}`).join(' · ')}</div>` : ''}
+
+        <div class="report-canvas" style="padding:0;overflow:auto">
+          <table class="data au-table">
+            <thead><tr><th>ครุภัณฑ์</th>
+              ${ASSET_ACTIONS.map(a => `<th class="au-cell" title="${this.esc(a.label)}">
+                <span class="au-ico">${a.icon}</span><span class="au-lbl">${this.esc(a.label)}</span>
+                ${a.timed ? '<i class="au-timed">จับเวลา</i>' : '<i class="au-once">ครั้งเดียว</i>'}</th>`).join('')}
+              <th class="num">ถูกใช้ไปแล้ว</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="empty-note" style="margin-top:10px">
+          <b>จับเวลา</b> = งานที่มีปุ่มเริ่มและปุ่มเสร็จสิ้น ระบบนับเวลาให้ตั้งแต่กดเริ่มจนกดจบ
+          · <b>ครั้งเดียว</b> = บันทึกครั้งเดียวจบ นับเป็นจำนวนครั้ง ไม่มีระยะเวลา
+          · ของที่ส่งซ่อมจะไม่ขึ้นให้เลือกจนกว่าจะปิดงานซ่อม</p>
+      </div>`);
+
+    document.querySelectorAll('.au-cell input').forEach(cb => cb.onchange = () => {
+      const a = DB.assets.find(x => x.id === cb.dataset.asset);
+      if (!a) return;
+      a.usageActions = a.usageActions || [];
+      const k = cb.dataset.act;
+      if (cb.checked) { if (!a.usageActions.includes(k)) a.usageActions.push(k); }
+      else a.usageActions = a.usageActions.filter(x => x !== k);
+      this.log('ตั้งค่าการเรียกใช้ครุภัณฑ์',
+        `${a.name} · ${cb.checked ? 'เพิ่ม' : 'เอาออก'} "${this.actionInfo(k).label}"`);
+      this.renderAssetUse();
+    });
   },
 
   // ---- user account helpers ----
@@ -6239,26 +6485,40 @@ const App = {
 
     if (canWeigh && !this.isEmptyProject(p) && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
       this.el('startWeighing').addEventListener('click', () => {
-        this.weighing = true;
-        this.weighSession = { done: new Set() };   // no cage weighed yet this round
-        this.renderDashboard();
+        this.openAssetPicker('weigh', p, ids => {
+          this.startAssetSession('weigh', p, ids);
+          this.weighing = true;
+          this.weighSession = { done: new Set() };   // no cage weighed yet this round
+          this.renderDashboard();
+        });
       });
     }
     if (canIntake && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
-      this.el('startIntake').addEventListener('click', () => { this.intake = true; this.renderDashboard(); });
+      this.el('startIntake').addEventListener('click', () => {
+        this.openAssetPicker('intake', p, ids => {
+          this.startAssetSession('intake', p, ids);
+          this.intake = true; this.renderDashboard();
+        });
+      });
     }
     if (canCare && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
       this.el('startCare').addEventListener('click', () => {
-        this.caring = true;
-        this.careSession = { done: new Set() };
-        this.renderDashboard();
+        this.openAssetPicker('care', p, ids => {
+          this.startAssetSession('care', p, ids);
+          this.caring = true;
+          this.careSession = { done: new Set() };
+          this.renderDashboard();
+        });
       });
     }
     if (canDose && !this.weighing && !this.editing && !this.intake && !this.caring && !this.dosing) {
       this.el('startDose').addEventListener('click', () => {
-        this.dosing = true;
-        this.doseSession = { done: new Set() };
-        this.renderDashboard();
+        this.openAssetPicker('dose', p, ids => {
+          this.startAssetSession('dose', p, ids);
+          this.dosing = true;
+          this.doseSession = { done: new Set() };
+          this.renderDashboard();
+        });
       });
     }
     if (this.dosing && this.dosePick) {
@@ -6288,6 +6548,7 @@ const App = {
     }
     if (this.dosing) {
       this.el('exitDose')?.addEventListener('click', () => {
+        this.endAssetSession('ให้สารทดสอบ');
         this.dosing = false; this.doseSession = null;
         this.dosePick = false; this.doseSel = new Set();
         this.renderDashboard();
@@ -6303,6 +6564,7 @@ const App = {
             detail: `บันทึก ${done} จาก ${mice.length} ตัว${done < mice.length ? ' (ยังไม่ครบ)' : ''}`
               + (paused ? ` · พักการทดสอบ ${paused} ตัว` : ''),
             project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
+          this.endAssetSession('ให้สารทดสอบ');
           this.dosing = false; this.doseSession = null;
           this.toast('ปิดรอบให้สารแล้ว — แจ้งผู้วิจัยเรียบร้อย');
           this.renderDashboard();
@@ -6319,6 +6581,7 @@ const App = {
     }
     if (this.caring) {
       this.el('exitCare').addEventListener('click', () => {
+        this.endAssetSession('ตรวจดูแลกรง');
         this.caring = false; this.careSession = null; this.renderDashboard();
       });
       // B4 — closing the round is what tells the research team the cages were
@@ -6335,6 +6598,7 @@ const App = {
             detail: `ตรวจ ${done} จาก ${cages.length} กรง${done < cages.length ? ' (ยังไม่ครบ)' : ''}`
               + (bad ? ` · พบผิดปกติ ${bad} กรง` : ' · ปกติทุกกรง'),
             project: p, to: this.nResearchers(p), link: { type: 'dashboard' } });
+          this.endAssetSession('ตรวจดูแลกรง');
           this.caring = false; this.careSession = null;
           this.toast('ปิดรอบตรวจแล้ว — แจ้งผู้วิจัยเรียบร้อย');
           this.renderDashboard();
@@ -6350,7 +6614,10 @@ const App = {
       });
     }
     if (this.intake) {
-      this.el('exitIntake').addEventListener('click', () => { this.intake = false; this.renderDashboard(); });
+      this.el('exitIntake').addEventListener('click', () => {
+        this.endAssetSession('รับหนูเข้าโครงการ');
+        this.intake = false; this.renderDashboard();
+      });
     }
     if (this.weighing) {
       this.el('exitWeighing').addEventListener('click', () => {
@@ -6364,6 +6631,7 @@ const App = {
         const total = p.cages.filter(c => c.mice.some(m => m.alive)).length;
         const done = this.weighSession ? this.weighSession.done.size : 0;
         const finish = () => {
+          this.endAssetSession(`ชั่งน้ำหนัก ${done}/${total} กรง`);
           this.log('เสร็จสิ้นรอบชั่งน้ำหนัก', `${done}/${total} กรง`, p.name);
           this.notify({ kind: 'weigh', title: `ชั่งน้ำหนัก${this.recRoundLabel()}เสร็จแล้ว`,
             detail: `บันทึก ${done} จาก ${total} กรง${done < total ? ' (ยังไม่ครบ)' : ''}`,
