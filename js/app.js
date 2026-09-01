@@ -866,6 +866,7 @@ const App = {
   // which tab a route belongs to (for highlighting)
   tabOfRoute(name) {
     if (name === 'assets' || name === 'assetuse') return 'assets';
+    if (name === 'sop') return null;      // เข้าจากเมนูบนหัว ไม่ใช่แท็บหลัก
     if (name === 'finance' || name === 'rates') return name;
     if (['projects', 'dashboard', 'reports', 'create', 'build', 'ochreport', 'quarantine'].includes(name)) return 'projects';
     return '';
@@ -901,6 +902,7 @@ const App = {
       case 'users':    this.go('users'); break;
       case 'assets':   this.go('assets'); break;
       case 'assetuse': this.go('assetuse'); break;
+      case 'sop':      this.go('sop'); break;
       case 'finance':  this.go('finance'); break;
       case 'rates':    this.go('rates'); break;
       case 'build':
@@ -917,6 +919,7 @@ const App = {
     // งานที่กำลังทำค้างอยู่ถือว่าจบตรงนี้ — ผู้ใช้เดินออกไปโดยไม่กดเสร็จสิ้น
     // เวลาที่ใช้ครุภัณฑ์ก็ยังต้องถูกบันทึก ไม่ใช่หายไปเฉย ๆ
     this.endAssetSession('ปิดอัตโนมัติเมื่อออกจากหน้า');
+    this.closeSopPanel();
     this.route = { name, projectId };
     this.weighing = false;
     this.editing = false;
@@ -938,6 +941,7 @@ const App = {
     if (name === 'users') return this.renderUsers();
     if (name === 'assets') return this.renderAssets();
     if (name === 'assetuse') return this.renderAssetUse();
+    if (name === 'sop') return this.renderSopLibrary();
     if (name === 'finance') return this.renderFinance();
     if (name === 'rates') return this.renderRates();
     if (this.PROJECT_MODULES[name]) return this.renderProjectModule(name);
@@ -3182,6 +3186,296 @@ const App = {
     });
   },
 
+  // =========================================================
+  // SOP — ปุ่มลอยมุมล่างซ้าย เปิดได้จากทุกหน้า
+  // =========================================================
+  // ใช้ overlay ของตัวเองแยกจาก openModal ทั้งหมด เพราะจุดประสงค์ของปุ่มนี้คือ
+  // "เปิดอ่านระหว่างทำงานโดยไม่สะดุด" — ถ้าไปใช้ระบบ modal เดิม การเปิด SOP
+  // จะปิดกล่องงานที่ผู้ใช้เปิดค้างอยู่ (openModal เรียก closeModal ก่อนเสมอ)
+  // ชั้นที่ 2 (รายละเอียด) ก็ซ้อนทับชั้นที่ 1 ไม่ใช่แทนที่ ปิดแล้วรายการยังอยู่
+
+  // งานที่ผู้ใช้กำลังทำอยู่ ณ ตอนนี้ — ตัวตัดสินว่าจะหยิบ SOP ฉบับไหนขึ้นมา
+  sopContext() {
+    const open = (DB.assetSessions || []).find(s => s.by === this.user.name);
+    if (open) return { action: open.action, assetIds: [...open.assetIds] };
+    const byMode = this.weighing ? 'weigh' : this.caring ? 'care'
+      : this.dosing ? 'dose' : this.intake ? 'intake'
+      : this.route.name === 'quarantine' ? 'qzDaily' : null;
+    // ไม่ได้เปิดเซสชันไว้ ก็ยังบอกได้ว่าครุภัณฑ์ชิ้นไหน "ใช้กับงานนี้"
+    return { action: byMode, assetIds: byMode ? this.assetsForAction(byMode).map(a => a.id) : [] };
+  },
+
+  sopsForAction(action) {
+    return DB.sops.filter(s => action
+      ? (s.actions || []).includes(action)
+      : !(s.actions || []).length && !(s.assetCodes || []).length);
+  },
+  sopsForAssets(assetIds) {
+    const codes = new Set(DB.assets.filter(a => assetIds.includes(a.id)).map(a => a.code));
+    return DB.sops.filter(s => (s.assetCodes || []).some(c => codes.has(c)));
+  },
+  sopAssetNames(s) {
+    return (s.assetCodes || []).map(c => (DB.assets.find(a => a.code === c) || {}).name).filter(Boolean);
+  },
+
+  openSopPanel() {
+    const ctx = this.sopContext();
+    const info = ctx.action ? this.actionInfo(ctx.action) : null;
+    const act = this.sopsForAction(ctx.action);
+    // ฉบับของครุภัณฑ์ที่ยังไม่ได้อยู่ในกลุ่มงาน (กันแสดงซ้ำสองที่)
+    const seen = new Set(act.map(s => s.id));
+    const equip = this.sopsForAssets(ctx.assetIds).filter(s => !seen.has(s.id));
+    const general = ctx.action ? DB.sops.filter(s => !(s.actions || []).length && !(s.assetCodes || []).length) : [];
+
+    const card = s => `<button class="sop-item" data-sop="${s.id}">
+        <span class="sop-no">${this.esc(s.no)}</span>
+        <span class="sop-ttl">${this.esc(s.title)}<i>v${this.esc(s.version)}${s.file ? ' · 📎 มีไฟล์แนบ' : ''}</i></span>
+        <span class="sop-go">›</span>
+      </button>`;
+    const group = (title, hint, list) => list.length
+      ? `<div class="sop-group"><div class="sop-gh">${title}<i>${hint}</i></div>${list.map(card).join('')}</div>` : '';
+
+    const body = (act.length || equip.length || general.length)
+      ? group(`📋 ของกิจกรรม${info ? ` — ${info.icon} ${this.esc(info.label)}` : ''}`,
+              info ? 'ระเบียบที่ต้องทำตามระหว่างทำงานนี้' : 'ระเบียบทั่วไปของหน่วยงาน', act)
+        + group('🔧 ของครุภัณฑ์', 'ระเบียบการใช้เครื่องมือที่เกี่ยวข้องกับงานนี้', equip)
+        + group('📖 ระเบียบทั่วไป', 'ใช้กับทุกงานในหน่วย', general)
+      : '<p class="empty-note">ยังไม่มี SOP ที่ผูกกับงานนี้</p>';
+
+    this.closeSopDetail();
+    const old = document.getElementById('sopOverlay');
+    if (old) old.remove();
+    const ov = document.createElement('div');
+    ov.className = 'sop-overlay';
+    ov.id = 'sopOverlay';
+    ov.innerHTML = `<div class="sop-panel">
+        <div class="sop-head">
+          <div><h3>📘 SOP ที่เกี่ยวข้อง</h3>
+            <div class="sub">${info ? `กำลัง${this.esc(info.label)}` : 'ระเบียบปฏิบัติของหน่วยงาน'} · ทุกโครงการใช้ชุดเดียวกัน</div></div>
+          <span class="spacer" style="flex:1"></span>
+          <button class="icon-btn" id="sopClose">✕</button>
+        </div>
+        <div class="sop-body">${body}</div>
+        <div class="sop-foot">
+          <span class="empty-note" style="flex:1">แตะรายการเพื่อดูเนื้อหาเต็ม — หน้าที่ทำงานอยู่ไม่ถูกปิด</span>
+          ${this.can('manageSop') ? `<button class="btn btn-sm" id="sopAll">คลัง SOP ทั้งหมด</button>` : ''}
+        </div>
+      </div>`;
+    ov.addEventListener('mousedown', e => { if (e.target === ov) this.closeSopPanel(); });
+    document.body.appendChild(ov);
+    this.el('sopClose').onclick = () => this.closeSopPanel();
+    if (this.el('sopAll')) this.el('sopAll').onclick = () => { this.closeSopPanel(); this.go('sop'); };
+    ov.querySelectorAll('.sop-item').forEach(b => b.onclick = () =>
+      this.openSopDetail(DB.sops.find(s => s.id === b.dataset.sop)));
+  },
+  closeSopPanel() { this.closeSopDetail(); const o = document.getElementById('sopOverlay'); if (o) o.remove(); },
+  closeSopDetail() { const o = document.getElementById('sopOverlay2'); if (o) o.remove(); },
+
+  // ชั้นที่ 2 — ซ้อนบนรายการ ปิดแล้วกลับมาเห็นรายการเหมือนเดิม
+  openSopDetail(s) {
+    if (!s) return;
+    this.closeSopDetail();
+    const names = this.sopAssetNames(s);
+    const ov = document.createElement('div');
+    ov.className = 'sop-overlay lv2';
+    ov.id = 'sopOverlay2';
+    ov.innerHTML = `<div class="sop-panel detail">
+        <div class="sop-head">
+          <div><h3><span class="sop-no big">${this.esc(s.no)}</span> ${this.esc(s.title)}</h3>
+            <div class="sub">ฉบับ v${this.esc(s.version)} · เริ่มใช้ ${this.thaiDate(s.effectiveDate)} · ${this.esc(s.owner)}</div></div>
+          <span class="spacer" style="flex:1"></span>
+          <button class="icon-btn" id="sopBack" title="กลับไปรายการ">✕</button>
+        </div>
+        <div class="sop-body">
+          ${s.summary ? `<p class="sop-sum">${this.esc(s.summary)}</p>` : ''}
+          <div class="sop-detail">${(s.detail || '—').split('\n').map(l =>
+            `<p>${this.esc(l)}</p>`).join('')}</div>
+          ${(s.actions || []).length ? `<div class="sop-tags"><b>ใช้กับงาน</b> ${
+            s.actions.map(k => `<span class="sop-tag">${this.actionInfo(k).icon} ${this.esc(this.actionInfo(k).label)}</span>`).join('')}</div>` : ''}
+          ${names.length ? `<div class="sop-tags"><b>ครุภัณฑ์</b> ${
+            names.map(n => `<span class="sop-tag">${this.esc(n)}</span>`).join('')}</div>` : ''}
+          ${s.file ? `<div class="sop-file">📎 <b>${this.esc(s.file.name)}</b>
+            ${s.file.url ? `<a class="btn btn-sm" href="${s.file.url}" target="_blank" rel="noopener">เปิดไฟล์</a>`
+                         : '<span class="empty-note">แนบไว้ในโปรโตไทป์ (รีเฟรชแล้วหาย)</span>'}</div>` : ''}
+        </div>
+        <div class="sop-foot">
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-sm" id="sopBack2">← กลับไปรายการ</button>
+        </div>
+      </div>`;
+    ov.addEventListener('mousedown', e => { if (e.target === ov) this.closeSopDetail(); });
+    document.body.appendChild(ov);
+    this.el('sopBack').onclick = () => this.closeSopDetail();
+    this.el('sopBack2').onclick = () => this.closeSopDetail();
+  },
+
+  // ---- คลัง SOP — สารานุกรมระเบียบปฏิบัติของหน่วยงาน ----
+  renderSopLibrary() {
+    if (!this.can('manageSop')) { this.toast('ไม่มีสิทธิ์จัดการคลัง SOP'); return this.go(this.homeRoute()); }
+    this.sopQ = this.sopQ || '';
+    const q = this.sopQ.trim().toLowerCase();
+    const list = DB.sops.filter(s => !q
+      || `${s.no} ${s.title} ${s.summary} ${s.detail}`.toLowerCase().includes(q));
+
+    const rows = list.map(s => {
+      const names = this.sopAssetNames(s);
+      const scope = [
+        ...(s.actions || []).map(k => `${this.actionInfo(k).icon} ${this.esc(this.actionInfo(k).label)}`),
+        ...names.map(n => `🔧 ${this.esc(n)}`),
+      ];
+      return `<tr data-sop="${s.id}">
+        <td><span class="sop-no">${this.esc(s.no)}</span></td>
+        <td><b>${this.esc(s.title)}</b>
+          <div class="sl-sum">${this.esc(s.summary) || '<span class="muted">—</span>'}</div></td>
+        <td><div class="sl-scope">${scope.length
+          ? scope.map(x => `<span class="sop-tag">${x}</span>`).join('')
+          : '<span class="sop-tag gen">📖 ระเบียบทั่วไป</span>'}</div></td>
+        <td class="num">v${this.esc(s.version)}<i>${this.thaiDate(s.effectiveDate)}</i></td>
+        <td>${s.file ? `📎 <span class="sl-file">${this.esc(s.file.name)}</span>` : '<span class="as-none">–</span>'}</td>
+        <td class="sl-act">
+          <button class="btn btn-sm" data-view="${s.id}">อ่าน</button>
+          <button class="btn btn-sm" data-edit="${s.id}">แก้ไข</button>
+          <button class="btn btn-sm btn-danger" data-del="${s.id}">ลบ</button>
+        </td>
+      </tr>`;
+    }).join('') || `<tr><td colspan="6" class="empty-note" style="text-align:center;padding:22px">ไม่พบ SOP ที่ตรงกับที่ค้นหา</td></tr>`;
+
+    this.shell('', `
+      <div class="page wide">
+        <div class="page-head">
+          <div><h2>📘 คลัง SOP</h2>
+            <div class="desc">ระเบียบปฏิบัติระดับหน่วยงาน — <b>ทุกโครงการใช้ชุดเดียวกัน</b>
+              · ผูกกับงานหรือครุภัณฑ์ไว้ เพื่อให้ปุ่ม SOP มุมล่างซ้ายหยิบเฉพาะฉบับที่เกี่ยวข้องขึ้นมาให้</div></div>
+          <span class="spacer" style="flex:1"></span>
+          <button class="btn btn-primary" id="slAdd">+ เพิ่ม SOP</button>
+        </div>
+        <div class="as-tools"><input id="slSearch" placeholder="ค้นหาเลขที่ ชื่อ หรือเนื้อหา…" value="${this.esc(this.sopQ)}"></div>
+        <div class="report-canvas" style="padding:0;overflow:auto">
+          <table class="data sl-table">
+            <thead><tr><th>เลขที่</th><th>ชื่อเรื่อง</th><th>ผูกกับ</th>
+              <th class="num">ฉบับ</th><th>ไฟล์แนบ</th><th></th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        <p class="empty-note" style="margin-top:10px">แสดง ${list.length} จาก ${DB.sops.length} ฉบับ
+          · ฉบับที่ไม่ผูกกับงานหรือครุภัณฑ์ใดเลยถือเป็น <b>ระเบียบทั่วไป</b> แสดงในทุกบริบท</p>
+      </div>`);
+
+    const sq = this.el('slSearch');
+    sq.oninput = () => { this.sopQ = sq.value; this.renderSopLibrary(); this.el('slSearch').focus(); };
+    this.el('slAdd').onclick = () => this.openSopForm(null);
+    document.querySelectorAll('[data-view]').forEach(b => b.onclick = () =>
+      this.openSopDetail(DB.sops.find(s => s.id === b.dataset.view)));
+    document.querySelectorAll('[data-edit]').forEach(b => b.onclick = () =>
+      this.openSopForm(DB.sops.find(s => s.id === b.dataset.edit)));
+    document.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      const s = DB.sops.find(x => x.id === b.dataset.del); if (!s) return;
+      this.confirmDialog({
+        title: 'ลบ SOP ฉบับนี้', body: `<b>${this.esc(s.no)}</b> — ${this.esc(s.title)}<br>ลบแล้วเรียกคืนไม่ได้`,
+        okLabel: 'ลบถาวร',
+        onOk: () => {
+          DB.sops.splice(DB.sops.indexOf(s), 1);
+          this.log('ลบ SOP', `${s.no} — ${s.title}`);
+          this.toast('ลบ SOP แล้ว'); this.renderSopLibrary();
+        },
+      });
+    });
+  },
+
+  openSopForm(s) {
+    const isNew = !s;
+    const d = isNew
+      ? { no: '', title: '', version: '1.0', effectiveDate: todayISO(), owner: 'หน่วยสัตว์ทดลอง',
+          summary: '', detail: '', actions: [], assetCodes: [], file: null }
+      : { ...s, actions: [...(s.actions || [])], assetCodes: [...(s.assetCodes || [])] };
+    const equip = DB.assets.filter(a => a.kind === 'asset' && a.status !== 'disposed');
+
+    this.openModal(`
+      <div class="modal-head"><div><h3>${isNew ? '➕ เพิ่ม SOP' : '✎ แก้ไข SOP'}</h3>
+        <div class="desc">ผูกกับงานหรือครุภัณฑ์เพื่อให้โผล่ตอนคนทำงานนั้น ๆ · ไม่ผูกเลย = ระเบียบทั่วไป</div></div>
+        <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
+      <div class="modal-body">
+        <div class="form-row2">
+          <div class="field"><label>เลขที่เอกสาร <span style="color:var(--red)">*</span></label>
+            <input id="spNo" placeholder="เช่น SOP-AN-005" value="${this.esc(d.no)}"></div>
+          <div class="field"><label>ฉบับที่</label><input id="spVer" placeholder="1.0" value="${this.esc(d.version)}"></div>
+        </div>
+        <div class="field"><label>ชื่อเรื่อง <span style="color:var(--red)">*</span></label>
+          <input id="spTitle" placeholder="เช่น การชั่งน้ำหนักสัตว์ทดลอง" value="${this.esc(d.title)}"></div>
+        <div class="field"><label>สรุปหนึ่งบรรทัด</label>
+          <input id="spSum" placeholder="ฉบับนี้ว่าด้วยอะไร" value="${this.esc(d.summary)}"></div>
+        <div class="field"><label>เนื้อหา (ขึ้นบรรทัดใหม่ = ข้อถัดไป)</label>
+          <textarea id="spDetail" rows="9" placeholder="1. ...&#10;2. ...">${this.esc(d.detail)}</textarea></div>
+        <div class="form-row2">
+          <div class="field"><label>ผู้รับผิดชอบ</label><input id="spOwner" value="${this.esc(d.owner)}"></div>
+          <div class="field"><label>วันที่เริ่มใช้</label><input id="spDate" type="date" value="${this.esc(d.effectiveDate)}"></div>
+        </div>
+        <div class="fc-sub">ผูกกับงาน</div>
+        <div class="sp-chips">${ASSET_ACTIONS.map(a => `
+          <label class="sp-chip"><input type="checkbox" class="sp-act" value="${a.key}"
+            ${d.actions.includes(a.key) ? 'checked' : ''}> ${a.icon} ${this.esc(a.label)}</label>`).join('')}</div>
+        <div class="fc-sub">ผูกกับครุภัณฑ์</div>
+        <div class="sp-chips">${equip.map(a => `
+          <label class="sp-chip"><input type="checkbox" class="sp-asset" value="${this.esc(a.code)}"
+            ${d.assetCodes.includes(a.code) ? 'checked' : ''}> ${this.esc(a.name)}</label>`).join('')}</div>
+        <div class="fc-sub">ไฟล์แนบ</div>
+        <div class="req-file" id="spFileRow">
+          <div class="rf-info"><b>เอกสาร PDF ฉบับเต็ม</b><span class="empty-note" id="spFileName">${
+            d.file ? '📎 ' + this.esc(d.file.name) : 'ยังไม่ได้แนบไฟล์'}</span></div>
+          <div class="rf-slot">
+            <label class="btn btn-sm rf-pick">แนบไฟล์<input type="file" accept="application/pdf" id="spFile" hidden></label>
+            ${d.file ? '<button class="mini-btn danger" id="spFileDel">ลบ</button>' : ''}
+          </div>
+        </div>
+        <p class="empty-note">โปรโตไทป์เก็บไฟล์ไว้ในหน่วยความจำชั่วคราวเท่านั้น (รีเฟรชแล้วหาย)</p>
+      </div>
+      <div class="modal-foot">
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn" id="spCancel">ยกเลิก</button>
+        <button class="btn btn-primary" id="spSave">${isNew ? 'เพิ่ม SOP' : 'บันทึก'}</button>
+      </div>`, { wide: true });
+
+    const close = () => { this.closeModal(); this.renderSopLibrary(); };
+    this.el('closeModal').onclick = close;
+    this.el('spCancel').onclick = close;
+    this.el('spFile').onchange = e => {
+      const f = e.target.files[0]; if (!f) return;
+      d.file = { name: f.name, url: URL.createObjectURL(f) };
+      this.el('spFileName').textContent = '📎 ' + f.name;
+    };
+    if (this.el('spFileDel')) this.el('spFileDel').onclick = () => {
+      d.file = null; this.el('spFileName').textContent = 'ยังไม่ได้แนบไฟล์';
+    };
+    this.el('spSave').onclick = () => {
+      const no = this.el('spNo').value.trim(), title = this.el('spTitle').value.trim();
+      if (!no) { this.el('spNo').focus(); return this.toast('กรอกเลขที่เอกสาร'); }
+      if (!title) { this.el('spTitle').focus(); return this.toast('กรอกชื่อเรื่อง'); }
+      // เลขที่เอกสารเป็นตัวอ้างอิงของคนทำงาน ซ้ำกันแล้วสั่งงานกันไม่รู้เรื่อง
+      if (DB.sops.some(x => x.no.trim().toLowerCase() === no.toLowerCase() && (isNew || x.id !== s.id))) {
+        return this.toast(`เลขที่ ${no} ถูกใช้แล้ว`);
+      }
+      const pick = cls => [...document.querySelectorAll(cls)].filter(c => c.checked).map(c => c.value);
+      const body = {
+        no, title, version: this.el('spVer').value.trim() || '1.0',
+        effectiveDate: this.el('spDate').value || todayISO(),
+        owner: this.el('spOwner').value.trim() || 'หน่วยสัตว์ทดลอง',
+        summary: this.el('spSum').value.trim(),
+        detail: this.el('spDetail').value,
+        actions: pick('.sp-act'), assetCodes: pick('.sp-asset'), file: d.file,
+      };
+      if (isNew) {
+        DB.sops.push({ id: 'SOP' + Date.now().toString(36), ...body });
+        this.log('เพิ่ม SOP', `${no} — ${title}`);
+      } else {
+        Object.assign(s, body);
+        this.log('แก้ไข SOP', `${no} — ${title} · ฉบับ v${body.version}`);
+      }
+      this.closeModal();
+      this.toast(isNew ? 'เพิ่ม SOP แล้ว' : 'บันทึกแล้ว');
+      this.renderSopLibrary();
+    };
+  },
+
   // ---- user account helpers ----
   adminCount() { return DB.users.filter(u => u.position === 'ADMIN').length; },
   isLastAdmin(u) { return u.position === 'ADMIN' && this.adminCount() <= 1; },
@@ -3423,12 +3717,14 @@ const App = {
                 <div><div class="u-name">${u.name}</div><div class="u-sys">${sysLabel}</div>${projRole ? `<div class="u-proj">บทบาทในโครงการนี้: <b>${projRole}</b></div>` : ''}</div>
               </div>
               <button class="ud-item" data-nav="roles">👤 ดูข้อมูลผู้ใช้ & สิทธิ์</button>
+              ${this.can('manageSop') ? `<button class="ud-item" data-nav="sop">📘 คลัง SOP</button>` : ''}
               <button class="ud-item danger" data-nav="logout">🚪 ออกจากระบบ</button>
             </div>
           </div>
         </header>
         <main>${bodyHTML}</main>
       </div>
+      <button class="sop-fab" id="sopFab" title="SOP ที่เกี่ยวข้องกับสิ่งที่กำลังทำอยู่">📘 SOP</button>
       <div class="demo-fab ${this.demoOpen ? 'open' : ''}" id="demoFab">
         <div class="demo-body">
           <div class="demo-label">🧪 โหมดสาธิต — ดูมุมมองตามตำแหน่ง</div>
@@ -3457,6 +3753,8 @@ const App = {
       this.demoOpen = !this.demoOpen;
       this.el('demoFab').classList.toggle('open', this.demoOpen);
     };
+    // ปุ่ม SOP ลอยอยู่ทุกหน้า — shell() วาดใหม่ทุกครั้ง จึงต้องผูกใหม่ทุกครั้ง
+    this.el('sopFab').onclick = () => this.openSopPanel();
     this.el('demoUser').addEventListener('change', (e) => {
       DB.currentUserId = e.target.value;
       this.recReset();        // เหตุผลการบันทึกย้อนหลังเป็นของคนเดิม ไม่ตามคนใหม่ไป
