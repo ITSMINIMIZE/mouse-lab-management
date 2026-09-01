@@ -319,17 +319,17 @@ function makeCage(id, code, groupId, shelf, position, mice, opts = {}) {
 // LAYER 1 — ชนิดอาหาร. `isDefault` is the diet a cage falls back to while the PI
 // has not assigned one (อาหารทั่วไป). Exactly one diet per project carries it.
 const dietsP1 = [
-  { id: 'D1', name: 'อาหารทั่วไป',  isDefault: true,  color: '#94a3b8', capacity: 24 },
-  { id: 'D2', name: 'ไขมันสูง',     isDefault: false, color: '#d97706', capacity: 24 },
+  { id: 'D1', name: 'อาหารทั่วไป',  isDefault: true,  color: '#A8A79C', capacity: 24 },
+  { id: 'D2', name: 'ไขมันสูง',     isDefault: false, color: '#B08B2E', capacity: 24 },
 ];
 
 // LAYER 2 — กลุ่มทดสอบ. `capacity` = จำนวนหนูสูงสุดต่อกลุ่มที่สัตวแพทย์อนุมัติ.
 // แต่ละกลุ่มมี 6 กรง × 2 ตัว = 12 ตัว — ตั้ง 14 ไว้ให้เหลือโควตา
 const groupsP1 = [
-  { id: 'G1', name: 'Control',      isControl: true,  color: '#64748b', capacity: 14 },
-  { id: 'G2', name: 'Treatment-1',  isControl: false, color: '#2563eb', capacity: 14 },
-  { id: 'G3', name: 'Treatment-2',  isControl: false, color: '#7c3aed', capacity: 14 },
-  { id: 'G4', name: 'Treatment-3',  isControl: false, color: '#dc2626', capacity: 14 },
+  { id: 'G1', name: 'Control',      isControl: true,  color: '#6B6F6A', capacity: 14 },
+  { id: 'G2', name: 'Treatment-1',  isControl: false, color: '#5F7355', capacity: 14 },
+  { id: 'G3', name: 'Treatment-2',  isControl: false, color: '#7B6A8D', capacity: 14 },
+  { id: 'G4', name: 'Treatment-3',  isControl: false, color: '#A85A3E', capacity: 14 },
 ];
 
 // per-group weight profile (baseline weight + average daily gain)
@@ -500,11 +500,11 @@ for (let si = 0; si < 4; si++) {
 // ------------------------------------------------------------
 // โครงการปิดแล้ว — โควตาเท่ากับจำนวนที่ใช้จริง (3 กรง × 2 ตัว) ตามแผนที่ดำเนินการจบ
 const dietsDone = [
-  { id: 'DD1', name: 'อาหารทั่วไป', isDefault: true,  color: '#94a3b8', capacity: 12 },
+  { id: 'DD1', name: 'อาหารทั่วไป', isDefault: true,  color: '#A8A79C', capacity: 12 },
 ];
 const groupsDone = [
-  { id: 'GD1', name: 'Control',   isControl: true,  color: '#64748b', capacity: 6 },
-  { id: 'GD2', name: 'Treatment', isControl: false, color: '#2563eb', capacity: 6 },
+  { id: 'GD1', name: 'Control',   isControl: true,  color: '#6B6F6A', capacity: 6 },
+  { id: 'GD2', name: 'Treatment', isControl: false, color: '#5F7355', capacity: 6 },
 ];
 const cagesDone = [];
 for (let si = 0; si < 2; si++) {
@@ -1315,12 +1315,12 @@ const DB = {
     const moveIn = isoPlus(release, 1);
     const endDate = isoPlus(moveIn, 84);
     const diets = [
-      { id: `${id}-D1`, name: 'อาหารทั่วไป', isDefault: true,  color: '#94a3b8', desc: 'อาหารมาตรฐาน', capacity: 10 },
-      { id: `${id}-D2`, name: 'ไขมันสูง',    isDefault: false, color: '#d97706', desc: 'อาหารไขมันสูง', capacity: 6 },
+      { id: `${id}-D1`, name: 'อาหารทั่วไป', isDefault: true,  color: '#A8A79C', desc: 'อาหารมาตรฐาน', capacity: 10 },
+      { id: `${id}-D2`, name: 'ไขมันสูง',    isDefault: false, color: '#B08B2E', desc: 'อาหารไขมันสูง', capacity: 6 },
     ];
     const groups = [
-      { id: `${id}-G1`, name: 'Control',   isControl: true,  color: '#64748b', desc: 'กลุ่มควบคุม', capacity: 4 },
-      { id: `${id}-G2`, name: 'Treatment', isControl: false, color: '#2563eb', desc: 'กลุ่มได้รับสารทดสอบ', capacity: 6 },
+      { id: `${id}-G1`, name: 'Control',   isControl: true,  color: '#6B6F6A', desc: 'กลุ่มควบคุม', capacity: 4 },
+      { id: `${id}-G2`, name: 'Treatment', isControl: false, color: '#5F7355', desc: 'กลุ่มได้รับสารทดสอบ', capacity: 6 },
     ];
     // shelf 1 has 3 cages, shelf 2 has 2 cages (deliberately unequal)
     const layout = [

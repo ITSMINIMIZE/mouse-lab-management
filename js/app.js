@@ -4262,9 +4262,9 @@ const App = {
   // ---------------------------------------------------------
   // 2b. CREATE PROJECT
   // ---------------------------------------------------------
-  GROUP_PALETTE: ['#64748b', '#2563eb', '#7c3aed', '#16a34a', '#dc2626', '#d97706', '#0891b2', '#db2777'],
+  GROUP_PALETTE: ['#6B6F6A', '#5F7355', '#7B6A8D', '#4F7D51', '#A85A3E', '#B08B2E', '#4E7A80', '#9C5F72'],
   // ชนิดอาหาร (layer 1) — warm tones so the two layers never look alike on screen
-  DIET_PALETTE: ['#94a3b8', '#d97706', '#b45309', '#a16207', '#9a3412', '#7c2d12'],
+  DIET_PALETTE: ['#A8A79C', '#B08B2E', '#9A7326', '#8A6A18', '#A85A3E', '#7C4A33'],
 
   // STAGE 1 — the PI's project REQUEST form. No cages here: the PI only declares
   // what the study needs; AV lays out the real cages later when building.
