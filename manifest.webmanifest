@@ -9,7 +9,6 @@
   "id": "/ilamp/",
   "display": "standalone",
   "display_override": ["standalone", "fullscreen"],
-  "orientation": "landscape",
   "background_color": "#F4F0E6",
   "theme_color": "#5F7355",
   "categories": ["productivity", "medical"],
