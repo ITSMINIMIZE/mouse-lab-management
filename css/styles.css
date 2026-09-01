@@ -2502,36 +2502,45 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 .sp-chip:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); font-weight: 600; }
 
 /* ==========================================================
-   บังคับใช้แนวนอน (โทรศัพท์ + แท็บเล็ต)
+   บังคับแนวนอน (โทรศัพท์ + แท็บเล็ต)
    ==========================================================
    ผังกรงเป็นตารางแร็ค × ชั้น และตารางบันทึกมีหลายคอลัมน์ — แนวตั้งบนมือถือ
-   บีบจนต้องเลื่อนซ้าย-ขวาตลอดเวลา ซึ่งเป็นท่าที่ทำงานจริงในห้องสัตว์ไม่ได้
-   จึงกันไว้ที่แนวตั้งแทนที่จะปล่อยให้ใช้แบบพิการ
+   บีบจนต้องเลื่อนซ้าย-ขวาตลอด ซึ่งทำงานหน้ากรงจริงไม่ได้
 
-   เงื่อนไขคือ "อุปกรณ์สัมผัส + ถือแนวตั้ง" ไม่ใช่แค่จอแคบ — คนย่อหน้าต่าง
-   บนคอมให้แคบไม่ควรโดนบล็อก */
-.rotate-gate { display: none; }
+   แทนที่จะขึ้นป้ายให้ผู้ใช้ไปหมุนเอง ใช้วิธี "หมุนเนื้อหาให้เลย" — ตะแคง
+   หน้าจอทั้งหน้า 90° เมื่อเครื่องถือแนวตั้ง ผู้ใช้แค่ตะแคงเครื่องตามก็ทำงานต่อได้
+   ไม่มีหน้าจอไหนมาขวาง
+
+   หมุนที่ <body> ไม่ใช่ #root เพราะกล่องซ้อน (modal / แผง SOP / toast) ถูกแขวน
+   ไว้ที่ body ถ้าหมุนแค่ #root กล่องพวกนั้นจะยังตั้งตรงอยู่คนละแนวกับแอป
+   และเพราะ element ที่มี transform กลายเป็น containing block ของลูกที่เป็น
+   position:fixed ทุกตัว กล่องซ้อนจึงอ้างอิงกรอบที่หมุนแล้วโดยอัตโนมัติ */
 @media (orientation: portrait) and (hover: none) and (pointer: coarse) {
-  .rotate-gate {
-    display: flex; position: fixed; inset: 0; z-index: 9999;
-    align-items: center; justify-content: center; padding: 28px;
-    background: var(--bg);
+  html { overflow: hidden; }
+  body {
+    position: fixed; top: 0; left: 0;
+    /* สลับด้าน: กว้างเท่าความสูงจอ สูงเท่าความกว้างจอ */
+    width: 100vh; height: 100vw;
+    transform-origin: top left;
+    /* หมุนแล้วเลื่อนกลับเข้ากรอบ — ลำดับนี้ทำให้มุมซ้ายบนไปอยู่ที่ (100vw, 0) พอดี */
+    transform: rotate(90deg) translateY(-100vw);
+    overflow: hidden;
   }
-  body { overflow: hidden; }
-  #root { display: none; }
+  /* เนื้อหาที่ยาวกว่าจอเลื่อนภายในกรอบที่หมุนแล้ว ไม่ใช่ที่ body */
+  #root { height: 100%; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 }
-.rg-box { max-width: 380px; text-align: center; }
-.rg-icon { font-size: 44px; line-height: 1; margin-bottom: 14px; }
-.rg-box h2 { font-size: 19px; margin: 0 0 10px; }
-.rg-box p { font-size: 14px; line-height: 1.7; color: var(--text-muted); margin: 0 0 18px; }
-.rg-hint { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 10px; }
 
 /* ==========================================================
    มือถือแนวนอน — จอเตี้ย (สูง ≤ 500px)
    ==========================================================
    ปัญหาของแนวนอนบนมือถือไม่ใช่ความกว้าง แต่คือ "ความสูง" เหลือ ~375–430px
    ทุก px แนวตั้งที่แถบหัวกินไป คือกรงที่หายไปจากสายตาหนึ่งแถว */
-@media (orientation: landscape) and (max-height: 500px) {
+/* สองเงื่อนไข = สถานการณ์เดียวกัน "พื้นที่แนวตั้งของ layout เหลือน้อย"
+     1) เครื่องถือแนวนอนอยู่แล้วและจอเตี้ย
+     2) เครื่องถือแนวตั้งแล้วโดนหมุนให้ — layout สูงเท่า "ความกว้างเครื่อง"
+        จึงเช็ก max-width แทน max-height */
+@media (orientation: landscape) and (max-height: 500px),
+       (orientation: portrait) and (hover: none) and (pointer: coarse) and (max-width: 500px) {
   .appbar { padding: 0 10px; gap: 6px; height: 46px; }
   /* ป้ายปุ่มสั้นอยู่แล้ว การปล่อยให้ตัดบรรทัดทำให้แถบสูงจาก 44 เป็น 60px
      โดยไม่ได้อะไรกลับมา — บนจอสูง 375px นั่นคือกรงหายไปหนึ่งแถว */
@@ -2581,7 +2590,18 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 }
 
 /* มือถือแนวนอนที่แคบมาก (เช่น iPhone SE 667×375) — ลดคอลัมน์ผังกรงลงอีก */
-@media (orientation: landscape) and (max-height: 500px) and (max-width: 740px) {
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 740px),
+       (orientation: portrait) and (hover: none) and (pointer: coarse) and (max-width: 500px) and (max-height: 740px) {
   .cage-row { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
   .page { padding: 8px 10px; }
+}
+
+/* ในสภาพที่หมุนเนื้อหาให้ 1vh ยังหมายถึงความสูงของ "จอเครื่อง" ซึ่งกลายเป็น
+   ความ*กว้าง*ของ layout ไปแล้ว ความสูงจริงของกรอบคือ 100vw — ของที่วัดด้วย vh
+   จึงล้นกรอบ (กล่องซ้อนสูง 715px ในกรอบสูง 375px) ต้องสลับหน่วยตาม
+   บล็อกนี้ต้องอยู่หลังบล็อกจอเตี้ยด้านบน เพราะ specificity เท่ากัน อันหลังชนะ */
+@media (orientation: portrait) and (hover: none) and (pointer: coarse) {
+  .modal { max-height: 94vw; }
+  .sop-panel { max-height: 94vw; }
+  .qz-rows { max-height: 46vw; }
 }

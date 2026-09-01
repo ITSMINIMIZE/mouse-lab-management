@@ -602,7 +602,6 @@ const App = {
 
   init() {
     this.recReset();
-    this.initOrientation();
     // นาฬิกาบนปุ่มวันที่ — เดินเองทุกครึ่งนาที ไม่ต้อง re-render ทั้งหน้า
     setInterval(() => { const c = this.el('recClock'); if (c) c.textContent = nowHM(); }, 30000);
     this.renderLogin();
@@ -3474,26 +3473,6 @@ const App = {
       this.closeModal();
       this.toast(isNew ? 'เพิ่ม SOP แล้ว' : 'บันทึกแล้ว');
       this.renderSopLibrary();
-    };
-  },
-
-  // ---- บังคับแนวนอนบนอุปกรณ์สัมผัส ----
-  // การล็อกจริงด้วย screen.orientation.lock() ใช้ได้เฉพาะบาง browser และต้องอยู่
-  // ในโหมดเต็มจอ (Android/Chrome) ส่วน Safari บน iOS ไม่รองรับเลย จึงถือว่า
-  // "ล็อกได้ก็ดี ไม่ได้ก็ต้องมีทางบอกผู้ใช้" — ด่าน .rotate-gate เป็นตัวหลักที่
-  // เชื่อถือได้ทุกเครื่อง ส่วนปุ่มล็อกเป็นทางลัดสำหรับเครื่องที่ทำได้
-  initOrientation() {
-    const gate = document.getElementById('rotateGate');
-    if (!gate) return;
-    const btn = document.getElementById('rgLock');
-    if (btn) btn.onclick = async () => {
-      try {
-        if (document.documentElement.requestFullscreen) await document.documentElement.requestFullscreen();
-        if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
-      } catch (e) {
-        // เครื่องไม่รองรับ (เช่น iOS) — ปล่อยให้ผู้ใช้หมุนเอง ด่านยังคงกันอยู่
-        this.toast('เครื่องนี้ล็อกให้อัตโนมัติไม่ได้ — กรุณาหมุนเครื่องเอง');
-      }
     };
   },
 

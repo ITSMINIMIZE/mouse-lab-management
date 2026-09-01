@@ -7,24 +7,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>iLAMP — Intelligent Laboratory Animal Management Platform</title>
   <!-- font is embedded (base64) — no external request, works offline -->
-  <link rel="stylesheet" href="css/fonts.css?v=181">
-  <link rel="stylesheet" href="css/styles.css?v=181">
+  <link rel="stylesheet" href="css/fonts.css?v=184">
+  <link rel="stylesheet" href="css/styles.css?v=184">
 </head>
 <body>
-  <!-- ด่านบังคับแนวนอน — อยู่นอก #root เพราะ #root ถูกวาดใหม่ทุกครั้งที่เปลี่ยนหน้า
-       แสดงเฉพาะบนอุปกรณ์สัมผัสที่ถือแนวตั้ง (ดู .rotate-gate ใน styles.css) -->
-  <div id="rotateGate" class="rotate-gate" role="alertdialog" aria-live="polite">
-    <div class="rg-box">
-      <div class="rg-icon">📱↻</div>
-      <h2>กรุณาหมุนเครื่องเป็นแนวนอน</h2>
-      <p>iLAMP ออกแบบมาให้ใช้แนวนอน — ผังกรงและตารางบันทึกต้องการความกว้าง
-         จึงจะเห็นทั้งแร็คในหน้าจอเดียวโดยไม่ต้องเลื่อนไปมา</p>
-      <button class="btn btn-primary" id="rgLock">↻ ล็อกแนวนอน</button>
-      <span class="rg-hint">ถ้ากดแล้วไม่หมุน ให้ปิดล็อกการหมุนหน้าจอของเครื่องก่อน</span>
-    </div>
-  </div>
   <div id="root"></div>
-  <script src="js/data.js?v=181"></script>
-  <script src="js/app.js?v=181"></script>
+  <script src="js/data.js?v=184"></script>
+  <script src="js/app.js?v=184"></script>
 </body>
 </html>
