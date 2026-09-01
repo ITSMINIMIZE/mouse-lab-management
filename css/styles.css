@@ -1342,6 +1342,15 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
 @media (max-width: 1180px) {
   .appbar { gap: 10px; padding: 0 14px; }
   .appbar .btn { padding: 8px 11px; font-size: 13px; }
+  /* ป้ายสั้น ๆ ไม่ควรตัดบรรทัด — บนแท็บเล็ตแนวนอนมันตัดเป็น 3 ชั้นจนล้นแถบ 60px */
+  .appbar .btn, .main-tab { white-space: nowrap; }
+  /* breadcrumb โดนบีบจนเหลือ "NAF" ซึ่งอ่านไม่ได้ความ — ซ่อนไปเลย
+     แท็บที่ติดไฟบอกอยู่แล้วว่าอยู่ส่วนไหน และหัวข้อหน้าบอกชื่อโครงการเต็ม ๆ */
+  .appbar .crumbs { display: none; }
+  /* พอทุกป้ายไม่ตัดบรรทัด แถบก็กว้างเกินจอ 90px — ชิปผู้ใช้กินไป 180px
+     เหลือแค่รูปวงกลม (ชื่อเต็มอยู่ในเมนูที่กดลงมา) แล้วทุกอย่างพอดีจอ */
+  .user-btn .user-meta { display: none; }
+  .user-btn { padding: 4px; }
   .role-switch select { max-width: 190px; }
   .mode-bar, .weighing-banner, .edit-banner { gap: 8px; }
 }
@@ -2491,3 +2500,88 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   font-size: 12.5px; padding: 6px 11px; border: 1px solid var(--border);
   border-radius: 999px; background: var(--surface-2); }
 .sp-chip:has(input:checked) { border-color: var(--primary); background: var(--primary-soft); font-weight: 600; }
+
+/* ==========================================================
+   บังคับใช้แนวนอน (โทรศัพท์ + แท็บเล็ต)
+   ==========================================================
+   ผังกรงเป็นตารางแร็ค × ชั้น และตารางบันทึกมีหลายคอลัมน์ — แนวตั้งบนมือถือ
+   บีบจนต้องเลื่อนซ้าย-ขวาตลอดเวลา ซึ่งเป็นท่าที่ทำงานจริงในห้องสัตว์ไม่ได้
+   จึงกันไว้ที่แนวตั้งแทนที่จะปล่อยให้ใช้แบบพิการ
+
+   เงื่อนไขคือ "อุปกรณ์สัมผัส + ถือแนวตั้ง" ไม่ใช่แค่จอแคบ — คนย่อหน้าต่าง
+   บนคอมให้แคบไม่ควรโดนบล็อก */
+.rotate-gate { display: none; }
+@media (orientation: portrait) and (hover: none) and (pointer: coarse) {
+  .rotate-gate {
+    display: flex; position: fixed; inset: 0; z-index: 9999;
+    align-items: center; justify-content: center; padding: 28px;
+    background: var(--bg);
+  }
+  body { overflow: hidden; }
+  #root { display: none; }
+}
+.rg-box { max-width: 380px; text-align: center; }
+.rg-icon { font-size: 44px; line-height: 1; margin-bottom: 14px; }
+.rg-box h2 { font-size: 19px; margin: 0 0 10px; }
+.rg-box p { font-size: 14px; line-height: 1.7; color: var(--text-muted); margin: 0 0 18px; }
+.rg-hint { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 10px; }
+
+/* ==========================================================
+   มือถือแนวนอน — จอเตี้ย (สูง ≤ 500px)
+   ==========================================================
+   ปัญหาของแนวนอนบนมือถือไม่ใช่ความกว้าง แต่คือ "ความสูง" เหลือ ~375–430px
+   ทุก px แนวตั้งที่แถบหัวกินไป คือกรงที่หายไปจากสายตาหนึ่งแถว */
+@media (orientation: landscape) and (max-height: 500px) {
+  .appbar { padding: 0 10px; gap: 6px; height: 46px; }
+  /* ป้ายปุ่มสั้นอยู่แล้ว การปล่อยให้ตัดบรรทัดทำให้แถบสูงจาก 44 เป็น 60px
+     โดยไม่ได้อะไรกลับมา — บนจอสูง 375px นั่นคือกรงหายไปหนึ่งแถว */
+  .appbar .btn, .main-tab, .mode-bar .btn { white-space: nowrap; }
+  .appbar .btn, .main-tab { padding: 6px 9px; font-size: 12px; }
+  .main-tab .mt-ico { font-size: 13px; }
+  .appbar .crumbs { display: none; }
+  /* ชิปผู้ใช้: พอสั่ง nowrap ทั้งแถบแล้ว ชื่อผู้ใช้ทำให้แถบกว้างเกินจอ 38px
+     จนทั้งหน้าเลื่อนซ้าย-ขวาได้ ซึ่งเป็นสิ่งที่ตั้งใจกำจัดตั้งแต่แรก
+     เหลือแค่รูปวงกลม — ชื่อเต็มยังอยู่ในเมนูที่กดลงมา */
+  .user-btn .user-meta { display: none; }
+  .user-btn { padding: 4px; }
+
+  .page { padding: 10px 12px; }
+  .page-head { margin-bottom: 8px; gap: 8px; }
+  .page-head h2 { font-size: 16px; }
+  /* คำอธิบายใต้ชื่อหน้าเป็นข้อความยาว กินสองบรรทัดเต็ม ๆ บนจอเตี้ย
+     ชื่อโครงการกับตำแหน่งห้องพอแล้วสำหรับการทำงานหน้ากรง */
+  .page-head .desc:not(.loc) { display: none; }
+  .page-head .desc.loc { font-size: 11.5px; }
+
+  /* แถบปุ่มงานเลื่อนแนวนอนแทนที่จะตัดบรรทัด — ไม่กินความสูง */
+  .mode-bar { flex-wrap: nowrap; overflow-x: auto; padding: 8px 10px 6px; gap: 6px; }
+  .mode-bar .btn { padding: 7px 11px; font-size: 12.5px; }
+  .mode-bar::-webkit-scrollbar { height: 3px; }
+
+  /* กล่องซ้อนต้องไม่สูงเกินจอ และเนื้อในต้องเลื่อนได้ */
+  .modal { max-height: 94vh; }
+  .modal-head { padding: 10px 14px; }
+  .modal-body { padding: 12px 14px; }
+  .modal-foot { padding: 9px 14px; }
+  .sop-panel { max-height: 94vh; }
+  .sop-head { padding: 11px 14px 9px; }
+  .sop-body { padding: 10px 14px; }
+
+  /* ปุ่มลอยสองตัวไม่ควรบังเนื้อหาบนจอเตี้ย */
+  .sop-fab { left: 10px; bottom: 10px; padding: 7px 11px; font-size: 11.5px; }
+  .demo-fab { right: 10px; bottom: 10px; }
+  .demo-toggle { padding: 7px 12px; font-size: 11.5px; }
+  .demo-body { width: 220px; padding: 11px; }
+
+  /* ผังกรง: บนจอเตี้ยเอาความกว้างเป็นหลัก แสดงได้มากคอลัมน์เท่าที่ไหว */
+  .cage-row { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+  .cage-card { padding: 7px 8px; }
+  .cage-supply { display: none; }
+  .toast { bottom: 56px; padding: 9px 16px; font-size: 13px; }
+}
+
+/* มือถือแนวนอนที่แคบมาก (เช่น iPhone SE 667×375) — ลดคอลัมน์ผังกรงลงอีก */
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 740px) {
+  .cage-row { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  .page { padding: 8px 10px; }
+}
