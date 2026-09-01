@@ -1,0 +1,21 @@
+{
+  "name": "iLAMP — Intelligent Laboratory Animal Management Platform",
+  "short_name": "iLAMP",
+  "description": "ระบบจัดการสัตว์ทดลอง — โครงการ กรง สุขภาพสัตว์ พัสดุ และการเงิน",
+  "lang": "th",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "id": "/ilamp/",
+  "display": "standalone",
+  "display_override": ["standalone", "fullscreen"],
+  "orientation": "landscape",
+  "background_color": "#F4F0E6",
+  "theme_color": "#5F7355",
+  "categories": ["productivity", "medical"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -6,6 +6,18 @@
        ไม่ปิด user-scalable — ผู้ใช้ต้องซูมอ่านตัวเลขเล็กได้ -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>iLAMP — Intelligent Laboratory Animal Management Platform</title>
+
+  <!-- PWA: ติดตั้งลงหน้าจอโฮมแล้วเปิดเต็มจอ ไม่มีแถบเบราว์เซอร์
+       manifest ตั้ง orientation: landscape ไว้ — Android/Chrome ล็อกให้จริง
+       ส่วน iOS ไม่สนใจค่านี้ จึงยังต้องพึ่งการหมุนด้วย CSS ใน styles.css -->
+  <link rel="manifest" href="manifest.webmanifest?v=184">
+  <meta name="theme-color" content="#5F7355">
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192" type="image/png">
+  <!-- iOS ไม่อ่านไอคอนจาก manifest -->
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="iLAMP">
   <!-- font is embedded (base64) — no external request, works offline -->
   <link rel="stylesheet" href="css/fonts.css?v=184">
   <link rel="stylesheet" href="css/styles.css?v=184">
@@ -14,5 +26,14 @@
   <div id="root"></div>
   <script src="js/data.js?v=184"></script>
   <script src="js/app.js?v=184"></script>
+  <script>
+    // ลงทะเบียน service worker — ต้องเป็น https หรือ localhost เท่านั้น
+    // ล้มเหลวก็ไม่เป็นไร แอปทำงานได้ตามปกติ แค่ไม่มีโหมดออฟไลน์
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
+  </script>
 </body>
 </html>
