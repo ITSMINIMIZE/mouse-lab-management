@@ -3683,6 +3683,7 @@ const App = {
   // Shell + header
   // ---------------------------------------------------------
   shell(crumbsHTML, bodyHTML) {
+    document.body.classList.remove('on-login');
     const u = this.user;
     const initial = (u.firstName || u.name || '?').trim().charAt(0);
     const proj = Data.getProject(this.route.projectId);
@@ -3794,6 +3795,10 @@ const App = {
   },
 
   renderLogin() {
+    // ทำเครื่องหมายไว้ที่ <body> ว่ากำลังอยู่หน้าเข้าสู่ระบบ เพื่อให้ CSS ทาพื้นไล่สี
+    // ได้เต็ม canvas — เดิมใช้ :has() ซึ่ง Safari รุ่นก่อน 15.4 ไม่รู้จัก แล้วพื้นครีม
+    // ของแอปจะโผล่ใต้การ์ดตอนคีย์บอร์ดเด้งขึ้นมาหรือตอนซูม
+    document.body.classList.add('on-login');
     this.el('root').innerHTML = `
       <div id="view-login">
         <div class="login-main">
