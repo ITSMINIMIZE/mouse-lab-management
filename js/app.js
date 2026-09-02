@@ -843,6 +843,18 @@ const App = {
     return this.isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
   },
 
+  // หน้าเข้าสู่ระบบใช้พื้นหลังคนละชุดกับส่วนที่เหลือของแอป — ทำเครื่องหมายไว้ที่
+  // <html> (ไม่ใช่ <body>) เพราะ `html, body { background: var(--bg) }` ตั้งพื้นครีม
+  // ไว้ที่ <html> ด้วย ถ้าทาทับแค่ body พื้นครีมของ html จะยังโผล่ตรงแถบสถานะ
+  //
+  // theme-color ก็ต้องสลับตาม — iOS/Android เอาค่านี้ไปย้อมแถบเบราว์เซอร์
+  // ถ้าปล่อยเป็นสีเสจของแอป ขอบบนจะเป็นคนละสีกับหน้าจอที่เป็นน้ำเงินเข้ม
+  markLogin(on) {
+    document.documentElement.classList.toggle('on-login', on);
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', on ? '#0b1836' : '#5F7355');
+  },
+
   // ---- โลโก้ ----------------------------------------------------------------
   // ประกาศไว้ที่เดียว เปลี่ยนไฟล์หรือข้อความแทนภาพได้จบในบรรทัดเดียว
   //   mark = สัญลักษณ์อย่างเดียว (ขวด) — ใช้ในแถบหัวที่มีที่จำกัด
@@ -3683,7 +3695,7 @@ const App = {
   // Shell + header
   // ---------------------------------------------------------
   shell(crumbsHTML, bodyHTML) {
-    document.body.classList.remove('on-login');
+    this.markLogin(false);
     const u = this.user;
     const initial = (u.firstName || u.name || '?').trim().charAt(0);
     const proj = Data.getProject(this.route.projectId);
@@ -3795,10 +3807,7 @@ const App = {
   },
 
   renderLogin() {
-    // ทำเครื่องหมายไว้ที่ <body> ว่ากำลังอยู่หน้าเข้าสู่ระบบ เพื่อให้ CSS ทาพื้นไล่สี
-    // ได้เต็ม canvas — เดิมใช้ :has() ซึ่ง Safari รุ่นก่อน 15.4 ไม่รู้จัก แล้วพื้นครีม
-    // ของแอปจะโผล่ใต้การ์ดตอนคีย์บอร์ดเด้งขึ้นมาหรือตอนซูม
-    document.body.classList.add('on-login');
+    this.markLogin(true);
     this.el('root').innerHTML = `
       <div id="view-login">
         <div class="login-main">

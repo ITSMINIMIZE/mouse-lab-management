@@ -85,8 +85,10 @@ input, select { font-family: inherit; }
 /* ============================================================
  * LOGIN
  * ============================================================ */
-/* พื้นหลังหน้าเข้าสู่ระบบ ประกาศไว้ที่เดียวแล้วใช้สองที่ (ดูหมายเหตุใต้บล็อกนี้) */
+/* พื้นหลังหน้าเข้าสู่ระบบ — แยกสีพื้นกับภาพไล่สีออกจากกัน
+   สีพื้นสำคัญเพราะ Safari เอาไปใช้ย้อมแถบสถานะด้านบน (ภาพไล่สีมันไม่อ่าน) */
 :root {
+  --login-bg-color: #0b1836;
   --login-bg:
     radial-gradient(1100px 620px at 12% -15%, #24429a 0%, transparent 62%),
     linear-gradient(135deg, #0b1836 0%, #3C4A35 45%, #4A5B42 100%);
@@ -94,19 +96,20 @@ input, select { font-family: inherit; }
 #view-login {
   min-height: 100vh; min-height: 100dvh;
   display: flex; flex-direction: column;
-  background: var(--login-bg);
+  background-color: var(--login-bg-color);
+  background-image: var(--login-bg);
 }
-/* พื้นที่ว่างใต้/ข้างการ์ดต้องเป็นสีเดียวกับหน้า login ไม่ใช่พื้นครีมของแอป
-   เจอตอนซูมเข้า และตอนคีย์บอร์ดเด้งขึ้นมา (คีย์บอร์ดทำให้ 100dvh หดลง
-   #view-login เลยเตี้ยกว่าเอกสาร แล้วพื้นของ body โผล่ใต้การ์ด)
+/* พื้นที่ว่างรอบการ์ดต้องเป็นสีเดียวกับหน้า login ไม่ใช่พื้นครีมของแอป
+   โผล่ได้สองจังหวะ: ตอนซูมเข้า และตอนคีย์บอร์ดเด้ง (คีย์บอร์ดทำให้ 100dvh
+   หดลง #view-login เลยเตี้ยกว่าเอกสาร)
 
-   ทาไว้ที่ <body> เพราะเมื่อ <html> ไม่ได้ตั้งพื้นหลัง เบราว์เซอร์จะ propagate
-   พื้นของ body ไปทาเต็ม canvas — ครอบคลุมทุกระดับการซูมและตอนดึงเกินขอบ
-
-   ใช้คลาสที่ JS ใส่ให้ ไม่ใช้ :has() เพราะ Safari ก่อน 15.4 ไม่รู้จัก
-   แล้วเครื่องเหล่านั้นจะยังเห็นพื้นครีมโผล่อยู่เหมือนเดิม */
-body.on-login {
-  background: var(--login-bg);
+   ต้องทาที่ <html> ไม่ใช่แค่ <body> — กฎ `html, body { background: var(--bg) }`
+   ด้านบนตั้งพื้นครีมไว้ที่ <html> ด้วย เมื่อ <html> มีพื้นของตัวเองแล้ว
+   เบราว์เซอร์จะไม่เอาพื้นของ body ไป propagate ให้ canvas อีก พื้นครีมของ
+   <html> จึงยังโผล่อยู่ — เห็นชัดที่สุดตรงแถบสถานะด้านบนของ iPhone */
+html.on-login, html.on-login body {
+  background-color: var(--login-bg-color);
+  background-image: var(--login-bg);
   background-attachment: fixed;
 }
 .login-main { flex: 1; display: grid; place-items: center; width: 100%; padding: 32px 20px; }
