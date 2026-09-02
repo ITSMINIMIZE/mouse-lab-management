@@ -98,13 +98,10 @@ input, select { font-family: inherit; }
   border-radius: 18px; padding: 40px 34px 30px; box-shadow: var(--shadow-lg);
   text-align: center;
 }
-.login-logo-slot {                          /* placeholder — the unit's real logo drops in here */
-  width: 96px; height: 96px; margin: 0 auto 22px; border-radius: 22px;
-  display: grid; place-items: center;
-  background: var(--surface-2); border: 1px dashed #CFC9B8; color: var(--text-muted);
-}
-.login-logo-slot svg { width: 38px; height: 38px; opacity: .7; }
-.login-sys { font-size: 30px; font-weight: 700; letter-spacing: -.01em; margin: 0; color: var(--text); }
+/* h1 ของหน้าเข้าสู่ระบบคือตัวโลโก้ — คงหัวข้อระดับ 1 ไว้เพื่อโครงสร้างหน้า
+   ส่วนคำว่า iLAMP อ่านได้จาก alt ของรูป */
+.login-sys { margin: 0 0 2px; line-height: 0; }
+.login-logo { width: min(210px, 62%); height: auto; }
 .login-sysfull { font-size: 13px; color: var(--text-muted); margin: 6px 0 26px; line-height: 1.5; }
 .login-card .field { text-align: left; }
 .login-card .field input { min-height: 48px; }
@@ -188,8 +185,10 @@ input, select { font-family: inherit; }
   padding: 0 22px; height: 60px; background: var(--surface);
   border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20;
 }
-.appbar .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; white-space: nowrap; }
-.appbar .brand .mark { font-size: 22px; }
+.appbar .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 16px; white-space: nowrap; }
+/* ความสูงคุมไว้ ปล่อยความกว้างตามสัดส่วนภาพ — โลโก้กว้างกว่าสูงราว 1.4 เท่า */
+.appbar .brand-logo { height: 30px; width: auto; display: block; }
+.appbar .brand-name { letter-spacing: -.01em; }
 .appbar .spacer { flex: 1; }
 /* top-level tabs: โครงการ / ครุภัณฑ์ (only those the position may see) */
 .main-tabs { display: flex; align-items: center; gap: 6px; margin-left: 14px; }
@@ -1409,8 +1408,9 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   .user-btn { padding: 4px; }
   /* เหลือแค่ไอคอนแบรนด์ — คืนที่ให้รูปผู้ใช้ขึ้นมาอยู่แถวบนได้ครบในบรรทัดเดียว
      ชื่อ iLAMP ไม่ได้ช่วยอะไรบนจอ 375px ที่ผู้ใช้เปิดแอปนี้เองอยู่แล้ว */
-  .appbar .brand { font-size: 0; gap: 0; }
-  .appbar .brand .mark { font-size: 21px; }
+  .appbar .brand { gap: 0; }
+  .appbar .brand-name { display: none; }
+  .appbar .brand-logo { height: 26px; }
   .main-tabs {
     order: 10; flex: 1 0 100%;
     overflow-x: auto; overflow-y: hidden; padding-bottom: 6px;
@@ -2544,6 +2544,8 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   /* ป้ายปุ่มสั้นอยู่แล้ว การปล่อยให้ตัดบรรทัดทำให้แถบสูงจาก 44 เป็น 60px
      โดยไม่ได้อะไรกลับมา — บนจอสูง 375px นั่นคือกรงหายไปหนึ่งแถว */
   .appbar .btn, .main-tab, .mode-bar .btn { white-space: nowrap; }
+  .appbar .brand-logo { height: 24px; }
+  .appbar .brand-name { display: none; }
   .appbar .btn, .main-tab { padding: 6px 9px; font-size: 12px; }
   .main-tab .mt-ico { font-size: 13px; }
   .appbar .crumbs { display: none; }

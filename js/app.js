@@ -843,6 +843,20 @@ const App = {
     return this.isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
   },
 
+  // ---- โลโก้ ----------------------------------------------------------------
+  // ประกาศไว้ที่เดียว เปลี่ยนไฟล์หรือข้อความแทนภาพได้จบในบรรทัดเดียว
+  //   mark = สัญลักษณ์อย่างเดียว (ขวด) — ใช้ในแถบหัวที่มีที่จำกัด
+  //   full = สัญลักษณ์ + คำว่า iLAMP — ใช้หน้าเข้าสู่ระบบ
+  // ทั้งสองไฟล์เป็น PNG พื้นโปร่งใส จึงวางได้ทั้งบนพื้นขาวและพื้นครีมของแอป
+  LOGO: {
+    mark: 'assets/logo/ilamp-mark.png',
+    full: 'assets/logo/ilamp-logo.png',
+    alt: 'iLAMP',
+  },
+  logoImg(variant, cls) {
+    return `<img class="${cls}" src="${this.LOGO[variant]}" alt="${this.LOGO.alt}" decoding="async">`;
+  },
+
   // ---- top-level tabs (โครงการ / พัสดุ / การเงิน) -------------------------
   // Visibility is per capability: GM sees พัสดุ + การเงิน only, everyone else
   // sees โครงการ and — if entitled — the other two alongside it.
@@ -3693,7 +3707,7 @@ const App = {
     this.el('root').innerHTML = `
       <div id="app-shell">
         <header class="appbar">
-          <div class="brand"><span class="mark">🐭</span> iLAMP</div>
+          <div class="brand">${this.logoImg('mark', 'brand-logo')}<span class="brand-name">iLAMP</span></div>
           <nav class="main-tabs">${tabsHTML}</nav>
           <nav class="crumbs">${crumbsHTML}</nav>
           <div class="spacer"></div>
@@ -3784,8 +3798,7 @@ const App = {
       <div id="view-login">
         <div class="login-main">
           <form class="login-card" id="loginForm" novalidate>
-            <div class="login-logo-slot" title="พื้นที่สำหรับโลโก้หน่วยงาน">${this.ICO.flask}</div>
-            <h1 class="login-sys">iLAMP</h1>
+            <h1 class="login-sys">${this.logoImg('full', 'login-logo')}</h1>
             <p class="login-sysfull">Intelligent Laboratory Animal Management Platform</p>
 
             <p class="login-error hidden" id="loginError" role="alert"></p>

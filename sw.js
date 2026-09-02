@@ -10,6 +10,7 @@ const SHELL = [
   './css/styles.css', './css/fonts.css',
   './js/data.js', './js/app.js',
   './icons/icon-192.png', './icons/icon-512.png',
+  './assets/logo/ilamp-mark.png', './assets/logo/ilamp-logo.png',
 ];
 
 self.addEventListener('install', e => {
