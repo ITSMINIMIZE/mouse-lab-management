@@ -85,12 +85,29 @@ input, select { font-family: inherit; }
 /* ============================================================
  * LOGIN
  * ============================================================ */
+/* พื้นหลังหน้าเข้าสู่ระบบ ประกาศไว้ที่เดียวแล้วใช้สองที่ (ดูหมายเหตุใต้บล็อกนี้) */
+:root {
+  --login-bg:
+    radial-gradient(1100px 620px at 12% -15%, #24429a 0%, transparent 62%),
+    linear-gradient(135deg, #0b1836 0%, #3C4A35 45%, #4A5B42 100%);
+}
 #view-login {
   min-height: 100vh; min-height: 100dvh;
   display: flex; flex-direction: column;
-  background:
-    radial-gradient(1100px 620px at 12% -15%, #24429a 0%, transparent 62%),
-    linear-gradient(135deg, #0b1836 0%, #3C4A35 45%, #4A5B42 100%);
+  background: var(--login-bg);
+}
+/* ตอนซูมเข้า เนื้อหาจะกว้าง/สูงเกิน viewport แล้วโผล่พื้นสีขาวของ canvas
+   ที่ขอบ เพราะ #view-login กว้างแค่เท่ากล่องแม่ ไม่ได้กว้างเท่าพื้นที่เลื่อนจริง
+
+   แก้โดยทาพื้นหลังเดียวกันไว้ที่ <body> ด้วย — เบราว์เซอร์จะ propagate พื้นหลัง
+   ของ body ไปทาเต็ม canvas เมื่อ <html> ไม่ได้ตั้งพื้นหลังไว้ จึงเต็มทุกระดับการซูม
+   รวมถึงตอนดึงเกินขอบ (overscroll) ด้วย
+
+   ใช้ :has() เพื่อให้มีผลเฉพาะหน้าเข้าสู่ระบบ — หน้าอื่นยังใช้พื้นครีมตามเดิม
+   เบราว์เซอร์เก่าที่ไม่รู้จัก :has() จะข้ามกฎนี้ไปและได้ผลเท่าเดิม ไม่พัง */
+body:has(#view-login) {
+  background: var(--login-bg);
+  background-attachment: fixed;
 }
 .login-main { flex: 1; display: grid; place-items: center; width: 100%; padding: 32px 20px; }
 .login-card {
