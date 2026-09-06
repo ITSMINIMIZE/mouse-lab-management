@@ -2647,3 +2647,20 @@ svg.chart .pt:hover { r: 5; stroke: #fff; stroke-width: 1.5; }
   .cage-mice .mw { font-size: 10.5px; }
 }
 
+
+/* ป้ายบอกว่ากำลังอยู่ในโหมดสาธิต — ต้องเห็นตลอดเวลา ไม่ใช่ซ่อนอยู่ในเมนู
+   เพราะสิ่งที่แย่ที่สุดคือมีคนอ่านตัวเลขจากข้อมูลตัวอย่างแล้วเข้าใจว่าเป็นของจริง */
+.demo-tag {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .04em;
+  color: var(--amber); background: var(--amber-soft);
+  border: 1px solid #e7cf8f; border-radius: 999px;
+  padding: 2px 8px; white-space: nowrap; flex: none;
+}
+.login-demo-note {
+  margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--border);
+  font-size: 12px; line-height: 1.7; color: var(--text-muted); text-align: left;
+}
+.login-demo-note b { color: var(--text); }
+.login-demo-note span { display: block; margin-top: 3px; font-size: 11.5px; }
+@media (max-width: 900px) and (orientation: portrait) { .demo-tag { display: none; } }
+@media (orientation: landscape) and (max-height: 500px) { .demo-tag { display: none; } }

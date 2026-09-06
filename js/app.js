@@ -843,6 +843,17 @@ const App = {
     return this.isoOf(d.getFullYear(), d.getMonth() + 1, d.getDate());
   },
 
+  // ---- โหมดการทำงาน: สาธิต vs ระบบจริง -------------------------------------
+  // เว้นช่องผู้ใช้ว่าง = โหมดสาธิต ใช้ข้อมูลจำลองใน js/data.js
+  // กรอกชื่อผู้ใช้    = ระบบจริง ต้องอ่าน-เขียนฐานข้อมูลจริง
+  //
+  // ตอนนี้ฝั่งระบบจริงยังไม่มีฐานข้อมูล จึงต้อง "บอกตรง ๆ ว่ายังต่อไม่ได้"
+  // ไม่ใช่ปล่อยให้เข้ามาแล้วเห็นข้อมูลจำลอง — เพราะถ้าลูกค้าเผลอเข้าทางนี้แล้ว
+  // เห็นตัวเลขที่ดูเหมือนจริง จะแยกไม่ออกว่าอันไหนของจริงอันไหนของปลอม
+  mode: 'demo',
+  hasDemoData() { return typeof DB !== 'undefined' && !!(DB.users || []).length; },
+  isDemo() { return this.mode === 'demo'; },
+
   // หน้าเข้าสู่ระบบใช้พื้นหลังคนละชุดกับส่วนที่เหลือของแอป — ทำเครื่องหมายไว้ที่
   // <html> (ไม่ใช่ <body>) เพราะ `html, body { background: var(--bg) }` ตั้งพื้นครีม
   // ไว้ที่ <html> ด้วย ถ้าทาทับแค่ body พื้นครีมของ html จะยังโผล่ตรงแถบสถานะ
@@ -3721,6 +3732,7 @@ const App = {
       <div id="app-shell">
         <header class="appbar">
           <div class="brand">${this.logoImg('mark', 'brand-logo')}<span class="brand-name">iLAMP</span></div>
+          ${this.isDemo() ? '<span class="demo-tag" title="ข้อมูลในระบบตอนนี้เป็นข้อมูลตัวอย่าง ไม่ใช่ข้อมูลจริง">สาธิต</span>' : ''}
           <nav class="main-tabs">${tabsHTML}</nav>
           <nav class="crumbs">${crumbsHTML}</nav>
           <div class="spacer"></div>
@@ -3831,6 +3843,11 @@ const App = {
             </div>
 
             <button class="btn btn-primary btn-block btn-lg" type="submit" id="loginBtn">เข้าสู่ระบบ</button>
+
+            ${this.hasDemoData() ? `<p class="login-demo-note">
+              <b>เว้นช่องผู้ใช้ว่างแล้วกดเข้าสู่ระบบ</b> เพื่อดู<b>โหมดสาธิต</b>ที่มีข้อมูลตัวอย่างครบทุกสถานะ
+              <span>กรอกชื่อผู้ใช้ = เข้าระบบจริงกับฐานข้อมูลจริง (ยังไม่เปิดใช้)</span>
+            </p>` : ''}
           </form>
         </div>
         <footer class="login-owner">Preclinical Laboratory Animal Center, Faculty of Medicine, Chiang Mai University&nbsp;: PLAC</footer>
@@ -3876,14 +3893,25 @@ const App = {
       // A typed-but-unknown address is a mistake worth reporting, not a silent fallback.
       // (the password is NOT checked — this is a click-through prototype)
       const email = (emailIn.value || '').trim().toLowerCase();
-      const match = email ? DB.users.find(u => (u.email || '').toLowerCase() === email) : { id: DB.currentUserId };
-      if (!match) return showErr('ไม่พบบัญชีนี้ในระบบ กรุณาตรวจสอบอีเมลอีกครั้ง', 'fieldEmail');
+
+      // กรอกชื่อผู้ใช้ = ขอเข้าระบบจริง ซึ่งยังไม่มีฐานข้อมูลให้ต่อ
+      if (email) {
+        this.mode = 'live';
+        return showErr(
+          'ระบบจริงยังไม่ได้เชื่อมฐานข้อมูล — เว้นช่องนี้ว่างแล้วกดเข้าสู่ระบบ เพื่อดูโหมดสาธิต',
+          'fieldEmail');
+      }
+
+      // เว้นว่าง = โหมดสาธิต
+      if (!this.hasDemoData()) {
+        return showErr('ไม่พบข้อมูลสาธิตในระบบนี้ (ถูกลบออกตอนส่งมอบแล้ว)', 'fieldEmail');
+      }
+      this.mode = 'demo';
 
       // brief pending state so the click has an acknowledgement (see UX: submit feedback)
       btn.disabled = true;
       btn.innerHTML = `<span class="spin"></span> กำลังเข้าสู่ระบบ…`;
       setTimeout(() => {
-        DB.currentUserId = match.id;
         // land on the first tab this position is entitled to (GM starts at พัสดุ)
         this.go(this.homeRoute());
       }, 350);
