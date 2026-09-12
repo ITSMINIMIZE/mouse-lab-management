@@ -889,23 +889,68 @@ const SOPS = [
 // อัตรากลางค่าฝากเลี้ยง — โครงการหนึ่งตั้งอัตราของตัวเองทับได้ (project.billing.rate)
 const BOARDING_RATE = 20;              // บาท / ตัว / วัน
 
-// หัตถการที่โครงการ "ฝากหน่วยทำ" — คิดเป็นครั้ง แยกจากค่าฝากเลี้ยงรายวัน
-// แก้ไขได้ในแอปที่ การเงิน → จัดการรายการหัตถการ (ผู้ดูแลระบบเท่านั้น)
+// หัตถการที่โครงการ "ฝากหน่วยทำ" — แยกจากค่าฝากเลี้ยงรายวัน
+// แก้ไขได้ในแอปที่เมนู อัตราค่าบริการ (ผู้ดูแลระบบเท่านั้น)
 //
 //   key    รหัสถาวร — รายการที่บันทึกไปแล้วอ้างถึงตัวนี้ ตั้งแล้วห้ามแก้
-//   price  ราคาปัจจุบัน ใช้ตอน "เลือก" เท่านั้น — รายการที่บันทึกไปแล้วเก็บราคา
+//   label  ชื่อรายการ
+//   price  ราคาต่อ 1 หน่วย ใช้ตอน "เลือก" เท่านั้น — รายการที่บันทึกไปแล้วเก็บราคา
 //          ของตัวเองไว้ (services[].price) ปรับราคาที่นี่จึงไม่ทำให้ยอดเดือนเก่าขยับ
+//   unit   หน่วยที่คิดเงิน อ้างถึง PROC_UNITS ข้างล่าง — เป็นตัวกำหนดว่าเวลาสั่ง
+//          รายการนี้ต้องกรอกอะไรบ้าง (กี่ตัว กี่วัน กี่มล. กี่กม. ...)
 //   active false = เลิกให้บริการ ไม่โผล่ในช่องเลือกอีก แต่ประวัติเก่ายังอ่านชื่อได้
 //          (ลบทิ้งจริงทำได้เฉพาะรายการที่ไม่เคยมีใครใช้)
 //
+// อัตราชุดนี้ถูกใช้สองทาง และทั้งสองทางคิดเงินด้วยสูตรเดียวกัน:
+//   1. PI ร้องขอไว้ตั้งแต่ยื่นคำขอ  → project.request.services  (ประมาณการ)
+//   2. เกิดขึ้นภายหลังระหว่างทำจริง → project.billing.services  (ยอดเรียกเก็บจริง)
+//
+// หน่วยของอัตรา — ตัวคูณของแต่ละหน่วยคือ fields ที่ต้องกรอก
+//   ปริมาณที่คิดเงิน = ผลคูณของทุกช่องใน fields (ไม่มีช่องเลย = 1 หน่วยต่อโครงการ)
+//   เช่น 'บาท / ตัว / วัน' ต้องกรอกจำนวนหนูและจำนวนวัน → 12 ตัว × 5 วัน = 60 ตัว-วัน
+// เพิ่มหน่วยใหม่ได้ที่นี่ที่เดียว ทั้งฟอร์มคำขอของ PI และหน้าการเงินอ่านจากตารางนี้
+const PROC_UNITS = [
+  { key: 'mouse',      label: 'บาท / ตัว',              qtyUnit: 'ตัว',       fields: ['mice'] },
+  { key: 'time',       label: 'บาท / ครั้ง',            qtyUnit: 'ครั้ง',     fields: ['times'] },
+  { key: 'mouse_day',  label: 'บาท / ตัว / วัน',        qtyUnit: 'ตัว-วัน',   fields: ['mice', 'days'] },
+  { key: 'mouse_time', label: 'บาท / ตัว / ครั้ง',      qtyUnit: 'ตัว-ครั้ง', fields: ['mice', 'times'] },
+  { key: 'ml_mouse',   label: 'บาท / มิลลิลิตร / ตัว',  qtyUnit: 'มล.-ตัว',   fields: ['ml', 'mice'] },
+  { key: 'hour',       label: 'บาท / ชั่วโมง',          qtyUnit: 'ชั่วโมง',   fields: ['hours'] },
+  { key: 'box',        label: 'บาท / กล่อง',            qtyUnit: 'กล่อง',     fields: ['boxes'] },
+  { key: 'km',         label: 'บาท / กิโลเมตร',         qtyUnit: 'กม.',       fields: ['km'] },
+  { key: 'project',    label: 'บาท / โครงการ',          qtyUnit: 'โครงการ',   fields: [] },
+  { key: 'kg',         label: 'บาท / กิโลกรัม',         qtyUnit: 'กก.',       fields: ['kg'] },
+];
+
+// ช่องกรอกที่หน่วยข้างบนเรียกใช้ — mice เป็นช่องเดียวที่ระบบเอาไปเทียบกับ
+// จำนวนสัตว์ทดลองทั้งโครงการ (ขอทำเกินจำนวนที่ขออนุมัติไว้ไม่ได้)
+const PROC_FIELDS = {
+  mice:  { label: 'หนู (ตัว)',     short: 'ตัว',    step: 1,   min: 1,   int: true },
+  days:  { label: 'จำนวนวัน',      short: 'วัน',    step: 1,   min: 1,   int: true },
+  times: { label: 'จำนวนครั้ง',    short: 'ครั้ง',  step: 1,   min: 1,   int: true },
+  ml:    { label: 'ปริมาณ (มล.)',  short: 'มล.',    step: 0.1, min: 0.1, int: false },
+  hours: { label: 'ชั่วโมง',       short: 'ชม.',    step: 0.5, min: 0.5, int: false },
+  boxes: { label: 'จำนวนกล่อง',    short: 'กล่อง',  step: 1,   min: 1,   int: true },
+  km:    { label: 'ระยะทาง (กม.)', short: 'กม.',    step: 1,   min: 1,   int: false },
+  kg:    { label: 'น้ำหนัก (กก.)', short: 'กก.',    step: 0.1, min: 0.1, int: false },
+};
+
 // ⚠️ ราคาด้านล่างเป็นตัวเลขตัวอย่าง ยังไม่ใช่อัตราจริงของศูนย์ฯ
 const PROCEDURES = [
-  { key: 'gavage',   label: 'ป้อนสารทางปาก (Oral gavage)',  price: 35,  active: true },
-  { key: 'inject',   label: 'ฉีดสารทดสอบ (IP / SC / IV)',   price: 40,  active: true },
-  { key: 'blood',    label: 'เจาะเลือดเพื่อส่งตรวจ',          price: 120, active: true },
-  { key: 'weigh',    label: 'ชั่งน้ำหนัก + บันทึกข้อมูลให้',   price: 15,  active: true },
-  { key: 'euth',     label: 'การุณยฆาตตามหลักมนุษยธรรม',     price: 150, active: true },
-  { key: 'necropsy', label: 'ผ่าซาก / เก็บอวัยวะส่งตรวจ',     price: 350, active: true },
+  { key: 'gavage',   label: 'ป้อนสารทางปาก (Oral gavage)',   price: 35,   unit: 'mouse_time', active: true },
+  { key: 'inject',   label: 'ฉีดสารทดสอบ (IP / SC / IV)',    price: 40,   unit: 'mouse_time', active: true },
+  { key: 'blood',    label: 'เจาะเลือดเพื่อส่งตรวจ',           price: 120,  unit: 'mouse_time', active: true },
+  { key: 'weigh',    label: 'ชั่งน้ำหนัก + บันทึกข้อมูลให้',    price: 15,   unit: 'mouse_time', active: true },
+  { key: 'euth',     label: 'การุณยฆาตตามหลักมนุษยธรรม',      price: 150,  unit: 'mouse',      active: true },
+  { key: 'necropsy', label: 'ผ่าซาก / เก็บอวัยวะส่งตรวจ',      price: 350,  unit: 'mouse',      active: true },
+  { key: 'sampling', label: 'เก็บตัวอย่างตามปริมาตรที่กำหนด',   price: 60,   unit: 'ml_mouse',   active: true },
+  { key: 'postop',   label: 'ดูแลพิเศษหลังผ่าตัด',             price: 45,   unit: 'mouse_day',  active: true },
+  { key: 'anesth',   label: 'วางยาสลบ + เฝ้าระวังระหว่างหัตถการ', price: 400,  unit: 'hour',       active: true },
+  { key: 'washcage', label: 'ล้าง–นึ่งกรงนอกรอบปกติ',          price: 250,  unit: 'time',       active: true },
+  { key: 'supply',   label: 'วัสดุสิ้นเปลืองเฉพาะโครงการ',      price: 450,  unit: 'box',        active: true },
+  { key: 'transport',label: 'ขนส่งสัตว์ทดลอง (รับ–ส่ง)',        price: 25,   unit: 'km',         active: true },
+  { key: 'carcass',  label: 'กำจัดซากตามระเบียบ',              price: 80,   unit: 'kg',         active: true },
+  { key: 'consult',  label: 'ที่ปรึกษาออกแบบการทดลอง',         price: 3000, unit: 'project',    active: true },
 ];
 
 // หมวดค่าใช้จ่ายอื่น — ที่ไม่ได้มาจากทะเบียนพัสดุ
@@ -1004,6 +1049,15 @@ const DB = {
         ],
         protocolEndpoint: 'สิ้นสุดเมื่อครบ 12 สัปดาห์ของการให้อาหารตามชนิดที่กำหนด และเก็บตัวอย่างตับครบทุกตัว',
         humaneEndpoint: 'น้ำหนักลดเกิน 20% ของน้ำหนักเริ่มต้น · ไม่กินอาหาร/น้ำเกิน 24 ชม. · ขนหยองซึม ไม่ตอบสนองต่อสิ่งเร้า — ให้ทำการุณยฆาตทันที',
+        // ทางที่หนึ่งของค่าใช้จ่าย — ผู้วิจัยร้องขอไว้เองตั้งแต่ยื่นคำขอ เป็นประมาณการ
+        // ราคาถูกแช่แข็ง ณ วันที่ยื่น (price) และเก็บหน่วยติดไว้ด้วย เพื่อให้อ่านย้อนได้
+        // ว่ายอดมาจากการคูณอะไร แม้อัตรากลางจะถูกแก้ไปแล้วก็ตาม
+        services: [
+          { key: 'weigh',  label: 'ชั่งน้ำหนัก + บันทึกข้อมูลให้',  price: 15,  unit: 'mouse_time', mice: 48, times: 12, qty: 576, amount: 8640 },
+          { key: 'gavage', label: 'ป้อนสารทางปาก (Oral gavage)',  price: 35,  unit: 'mouse_time', mice: 36, times: 8,  qty: 288, amount: 10080 },
+          { key: 'blood',  label: 'เจาะเลือดเพื่อส่งตรวจ',          price: 120, unit: 'mouse_time', mice: 24, times: 2,  qty: 48,  amount: 5760 },
+          { key: 'consult', label: 'ที่ปรึกษาออกแบบการทดลอง',      price: 3000, unit: 'project',   qty: 1,   amount: 3000 },
+        ],
       },
       // ตำแหน่งที่สัตวแพทย์จัดสรร — เป็น "สถานะปัจจุบัน" ของหนูในโครงการนี้
       facility: { roomNo: 'AR02', rackNo: 'R3 · R4', racks: ['R3', 'R4'], quarantineDate: isoDaysAgo(21), moveInDate: isoDaysAgo(14) },
@@ -1022,13 +1076,25 @@ const DB = {
       //               เมื่อมีการปรับราคากลางภายหลัง
       billing: {
         rate: null,
+        //   src  quoted = ผู้วิจัยร้องขอไว้ในคำขอตั้งแต่แรก · extra = เกิดขึ้นภายหลัง
+        //   qty  ผลคูณของช่องตามหน่วยของรายการนั้น (mouse_time = mice × times)
         services: [
-          { date: isoDaysAgo(12), key: 'weigh',  qty: 48, price: 15,  by: 'Sci — นักวิทยาศาสตร์', note: 'ชั่งน้ำหนักแรกเข้าทั้งโครงการ' },
-          { date: isoDaysAgo(7),  key: 'gavage', qty: 36, price: 35,  by: 'AHS — นักวิจัยปฏิบัติการ', note: 'เริ่มให้สารทดสอบ 3 กลุ่ม' },
-          { date: isoDaysAgo(5),  key: 'weigh',  qty: 46, price: 15,  by: 'Sci — นักวิทยาศาสตร์', note: 'รอบชั่งประจำสัปดาห์' },
-          { date: isoDaysAgo(3),  key: 'blood',  qty: 8,  price: 120, by: 'AHS — นักวิจัยปฏิบัติการ', note: 'เก็บเลือดกลุ่ม Treatment-3' },
-          { date: isoDaysAgo(2),  key: 'euth',   qty: 1,  price: 150, by: 'AV — สัตวแพทย์ประจำหน่วย', note: 'D-01-2 humane endpoint' },
-          { date: isoDaysAgo(1),  key: 'necropsy', qty: 1, price: 350, by: 'Sci — นักวิทยาศาสตร์', note: 'ผ่าซาก D-01-2 เก็บตับ' },
+          { date: isoDaysAgo(12), key: 'weigh',  unit: 'mouse_time', mice: 48, times: 1, qty: 48, price: 15,  src: 'quoted',
+            by: 'Sci — นักวิทยาศาสตร์', note: 'ชั่งน้ำหนักแรกเข้าทั้งโครงการ' },
+          { date: isoDaysAgo(7),  key: 'gavage', unit: 'mouse_time', mice: 12, times: 3, qty: 36, price: 35,  src: 'quoted',
+            by: 'AHS — นักวิจัยปฏิบัติการ', note: 'เริ่มให้สารทดสอบ 3 กลุ่ม' },
+          { date: isoDaysAgo(5),  key: 'weigh',  unit: 'mouse_time', mice: 46, times: 1, qty: 46, price: 15,  src: 'quoted',
+            by: 'Sci — นักวิทยาศาสตร์', note: 'รอบชั่งประจำสัปดาห์' },
+          { date: isoDaysAgo(3),  key: 'blood',  unit: 'mouse_time', mice: 8,  times: 1, qty: 8,  price: 120, src: 'quoted',
+            by: 'AHS — นักวิจัยปฏิบัติการ', note: 'เก็บเลือดกลุ่ม Treatment-3' },
+          { date: isoDaysAgo(2),  key: 'euth',   unit: 'mouse', mice: 1, qty: 1, price: 150, src: 'extra',
+            by: 'AV — สัตวแพทย์ประจำหน่วย', note: 'D-01-2 humane endpoint — ไม่ได้อยู่ในแผนเดิม' },
+          { date: isoDaysAgo(2),  key: 'anesth', unit: 'hour', hours: 1.5, qty: 1.5, price: 400, src: 'extra',
+            by: 'AV — สัตวแพทย์ประจำหน่วย', note: 'วางยาสลบก่อนการุณยฆาต' },
+          { date: isoDaysAgo(1),  key: 'necropsy', unit: 'mouse', mice: 1, qty: 1, price: 350, src: 'extra',
+            by: 'Sci — นักวิทยาศาสตร์', note: 'ผ่าซาก D-01-2 เก็บตับ' },
+          { date: isoDaysAgo(1),  key: 'carcass', unit: 'kg', kg: 2.4, qty: 2.4, price: 80, src: 'extra',
+            by: 'GM — จนท.บริหารงานทั่วไป', note: 'ส่งกำจัดซากรอบสัปดาห์' },
         ],
       },
       // (seedTeam below replaces these with the standard demo team)
@@ -1088,9 +1154,14 @@ const DB = {
       billing: {
         rate: 15,
         services: [
-          { date: '2026-01-08', key: 'weigh', qty: 12, price: 15, by: 'Sci — นักวิทยาศาสตร์', note: 'ชั่งน้ำหนักแรกเข้า' },
-          { date: '2026-02-10', key: 'weigh', qty: 12, price: 15, by: 'Sci — นักวิทยาศาสตร์', note: 'รอบเดือนกุมภาพันธ์' },
-          { date: '2026-04-02', key: 'euth',  qty: 12, price: 150, by: 'AV — สัตวแพทย์ประจำหน่วย', note: 'สิ้นสุดการทดลอง' },
+          { date: '2026-01-02', key: 'transport', unit: 'km', km: 18, qty: 18, price: 25, src: 'quoted',
+            by: 'GM — จนท.บริหารงานทั่วไป', note: 'รับสัตว์จากศูนย์เพาะเลี้ยง' },
+          { date: '2026-01-08', key: 'weigh', unit: 'mouse_time', mice: 12, times: 1, qty: 12, price: 15, src: 'quoted',
+            by: 'Sci — นักวิทยาศาสตร์', note: 'ชั่งน้ำหนักแรกเข้า' },
+          { date: '2026-02-10', key: 'weigh', unit: 'mouse_time', mice: 12, times: 1, qty: 12, price: 15, src: 'quoted',
+            by: 'Sci — นักวิทยาศาสตร์', note: 'รอบเดือนกุมภาพันธ์' },
+          { date: '2026-04-02', key: 'euth',  unit: 'mouse', mice: 12, qty: 12, price: 150, src: 'quoted',
+            by: 'AV — สัตวแพทย์ประจำหน่วย', note: 'สิ้นสุดการทดลอง' },
         ],
       },
       members: [{ userId: 'u_pi', roles: ['PI'] }],

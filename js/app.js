@@ -1855,11 +1855,52 @@ const App = {
     const md = this.mouseDaysInMonth(p, key);
     return { ...md, rate: this.boardingRate(p), amount: md.days * this.boardingRate(p) };
   },
+  // "ตามคำขอ 2 · เกิดภายหลัง 1" — เห็นได้ทันทีว่ายอดของเดือนมาจากทางไหนบ้าง
+  // แถวเก่าที่ยังไม่มีธง src นับเป็น "ตามคำขอ" เพราะตอนนั้นยังไม่มีการแยกสองทาง
+  svcSrcSplit(rows) {
+    const e = rows.filter(x => x.src === 'extra').length;
+    const q = rows.length - e;
+    return [q ? `ตามคำขอ ${q}` : '', e ? `เกิดภายหลัง ${e}` : ''].filter(Boolean).join(' · ');
+  },
   servicesInMonth(p, key) {
     const rows = this.billingOf(p).services.filter(x => this.inMonth(x.date, key));
     return { rows, amount: rows.reduce((s, x) => s + (x.qty || 0) * (x.price || 0), 0) };
   },
-  procOf(k) { return PROCEDURES.find(x => x.key === k) || { key: k, label: k || 'หัตถการ', price: 0 }; },
+  procOf(k) { return PROCEDURES.find(x => x.key === k) || { key: k, label: k || 'หัตถการ', price: 0, unit: 'time' }; },
+
+  // ---- หน่วยของอัตราค่าบริการ -------------------------------------------
+  // หน่วยเป็นตัวบอกว่ารายการหนึ่ง "ต้องกรอกอะไรบ้าง" และ "คูณกันยังไง"
+  // ทุกที่ที่คิดเงินหัตถการ (คำขอของ PI และการเรียกเก็บจริง) ผ่านสามฟังก์ชันนี้
+  // เพิ่มหน่วยใหม่ที่ PROC_UNITS ใน data.js แล้วทั้งสองหน้าจะรองรับเองทันที
+  unitOf(u) { return PROC_UNITS.find(x => x.key === u) || PROC_UNITS[1]; },   // ค่าตั้งต้น = บาท/ครั้ง
+  unitOfProc(k) { return this.unitOf(this.procOf(k).unit); },
+  fieldDef(f) { return PROC_FIELDS[f] || { label: f, short: f, step: 1, min: 1, int: true }; },
+
+  // ปริมาณที่คิดเงินของหนึ่งรายการ = ผลคูณของทุกช่องที่หน่วยนั้นต้องการ
+  // หน่วยที่ไม่มีช่องเลย (บาท/โครงการ) คิดเป็น 1 หน่วยเสมอ
+  // ช่องไหนยังว่างหรือไม่เป็นบวก = ยังคิดไม่ได้ คืน 0 ไม่ใช่ NaN ยอดรวมจะได้ยังบวกต่อได้
+  svcQtyOf(unitKey, vals) {
+    const fields = this.unitOf(unitKey).fields;
+    if (!fields.length) return 1;
+    let q = 1;
+    for (const f of fields) {
+      const v = Number(vals[f]);
+      if (!Number.isFinite(v) || v <= 0) return 0;
+      q *= v;
+    }
+    return Math.round(q * 1000) / 1000;
+  },
+  // ปริมาณอาจมีทศนิยม (มล. · กก. · ชั่วโมง) — ตัดหางที่ไม่จำเป็นทิ้ง
+  qtyNum(v) { return (Math.round((+v || 0) * 100) / 100).toLocaleString('en-US', { maximumFractionDigits: 2 }); },
+  qtyText(qty, unitKey) { return `${this.qtyNum(qty)} ${this.unitOf(unitKey).qtyUnit}`; },
+  // "12 ตัว × 5 ครั้ง" — ตัวเลขที่กรอกไว้จริง อ่านย้อนได้ว่ายอดมาจากไหน
+  svcInputText(row) {
+    const un = this.unitOf(row.unit || this.procOf(row.key).unit);
+    if (!un.fields.length) return 'ทั้งโครงการ';
+    return un.fields.map(f => `${this.qtyNum(row[f])} ${this.fieldDef(f).short}`).join(' × ');
+  },
+  // "35 บาท / ตัว / ครั้ง" — ข้อความอัตราที่ใช้ซ้ำทั้งแอป
+  rateText(pr) { return `${this.baht(pr.price)} ${this.unitOf(pr.unit).label}`; },
   // ตัวเลือกใน <select> — รายการที่เปิดให้บริการ บวกรายการที่แถวนี้เลือกไว้อยู่แล้ว
   // แม้จะเลิกให้บริการไปแล้ว ไม่งั้นการเปิดคำขอเก่ามาแก้จะทำให้ค่าที่เลือกไว้หายเงียบ ๆ
   procOptions(selected) {
@@ -1867,7 +1908,8 @@ const App = {
     const cur = PROCEDURES.find(x => x.key === selected);
     if (cur && cur.active === false) list.push(cur);
     return list.map(x => `<option value="${x.key}" ${selected === x.key ? 'selected' : ''}>${
-      this.esc(x.label)}${x.active === false ? ' (เลิกให้บริการแล้ว)' : ''}</option>`).join('');
+      this.esc(x.label)} — ${this.esc(this.rateText(x))}${
+      x.active === false ? ' (เลิกให้บริการแล้ว)' : ''}</option>`).join('');
   },
   // โครงการที่มีสิทธิ์ถูกเรียกเก็บในเดือนนั้น — โครงการที่ยังไม่ผ่านอนุมัติยังไม่มีหนู
   billableProjects() { return DB.projects.filter(p => this.isReal(p)); },
@@ -1928,7 +1970,8 @@ const App = {
         <td class="num">${r.board.days ? r.board.days.toLocaleString('en-US') : '–'}</td>
         <td class="num">${this.baht(r.board.rate)}<i class="fin-unit">/ตัว/วัน</i></td>
         <td class="num"><b>${this.baht(r.board.amount)}</b></td>
-        <td class="num">${r.svc.amount ? `<b>${this.baht(r.svc.amount)}</b><i class="fin-unit">${r.svc.rows.length} รายการ</i>` : '–'}</td>
+        <td class="num">${r.svc.amount ? `<b>${this.baht(r.svc.amount)}</b><i class="fin-unit">${
+          this.svcSrcSplit(r.svc.rows)}</i>` : '–'}</td>
         <td class="num fin-tot"><b>${this.baht(r.total)}</b></td>
         <td class="fin-act">${canEdit ? `<button class="btn btn-sm" data-svc="${r.p.id}">+ หัตถการ</button>
           <button class="btn btn-sm" data-rate="${r.p.id}">อัตรา</button>` : ''}</td>
@@ -1936,9 +1979,11 @@ const App = {
         const pr = this.procOf(x.key);
         // ตำแหน่งจริงในลิสต์ของโครงการ — สองแถวที่ค่าเหมือนกันทุกช่องยังลบถูกตัว
         const at = this.billingOf(r.p).services.indexOf(x);
+        const un = x.unit || pr.unit;
         return `<tr class="fin-det">
           <td colspan="5"><span class="fin-dot">↳</span> ${this.thaiDate(x.date)} · ${this.esc(pr.label)}
-            <span class="fin-x">${x.qty} × ${this.baht(x.price)}</span>
+            <span class="fin-src ${x.src === 'quoted' ? 'q' : 'e'}">${x.src === 'quoted' ? 'ตามคำขอ' : 'เกิดภายหลัง'}</span>
+            <span class="fin-x">${this.esc(this.qtyText(x.qty || 0, un))} × ${this.baht(x.price)}</span>
             ${x.note ? `<i class="fin-note">${this.esc(x.note)}</i>` : ''}</td>
           <td class="num">${this.baht((x.qty || 0) * (x.price || 0))}</td>
           <td class="num"></td>
@@ -2103,11 +2148,11 @@ const App = {
         if (!gone) return;
         this.confirmDialog({
           title: 'ลบหัตถการนี้',
-          body: `${this.esc(this.procOf(gone.key).label)} · ${gone.qty} ครั้ง — ยอดรายรับของเดือนจะลดลงทันที`,
+          body: `${this.esc(this.procOf(gone.key).label)} · ${this.esc(this.qtyText(gone.qty || 0, gone.unit || this.procOf(gone.key).unit))} — ยอดรายรับของเดือนจะลดลงทันที`,
           okLabel: 'ลบรายการ',
           onOk: () => {
             list.splice(i, 1);
-            this.log('ลบหัตถการที่เรียกเก็บ', `${this.procOf(gone.key).label} · ${gone.qty} ครั้ง`, p.name);
+            this.log('ลบหัตถการที่เรียกเก็บ', `${this.procOf(gone.key).label} · ${this.qtyText(gone.qty || 0, gone.unit || this.procOf(gone.key).unit)}`, p.name);
             this.toast('ลบรายการแล้ว');
             this.renderFinance();
           },
@@ -2174,27 +2219,37 @@ const App = {
   },
 
   // ---- หัตถการที่โครงการฝากหน่วยทำ ----
+  // ที่นี่คือทางที่สองของการคิดเงิน: บันทึก "ตามที่ทำจริง" ในเดือนนั้น
+  // ทางแรกคือหัตถการที่ผู้วิจัยร้องขอไว้ในคำขอ ซึ่งเป็นแค่ประมาณการ ยังไม่เรียกเก็บ
+  // ทุกแถวจึงติดธง src ไว้ว่ามาจากทางไหน เพื่อให้เทียบ "ขอไว้ / ทำจริง" ได้ภายหลัง
   openServiceForm(p) {
     if (!p) return;
     const live = this.activeProcedures();
     if (!live.length) { this.toast('ยังไม่มีรายการหัตถการที่เปิดให้บริการ'); return; }
     const first = live[0];
     const def = this.monthDefaultDate(this.finMonthKey());
+    // หัตถการที่โครงการนี้ขอไว้ในคำขอ — ใช้ตั้งค่าตั้งต้นของช่อง "ที่มา" ให้ถูกเอง
+    const quoted = new Set(((p.request && p.request.services) || []).map(x => x.key));
     this.openModal(`
       <div class="modal-head"><div><h3>🧾 บันทึกหัตถการที่ฝากทำ</h3>
-        <div class="desc">${this.esc(p.name)} — คิดเป็นครั้ง แยกจากค่าฝากเลี้ยงรายวัน</div></div>
+        <div class="desc">${this.esc(p.name)} — คิดตามหน่วยของรายการ แยกจากค่าฝากเลี้ยงรายวัน</div></div>
         <span class="spacer"></span><button class="icon-btn" id="closeModal">✕</button></div>
       <div class="modal-body">
         <div class="field"><label>หัตถการ</label>
-          <select id="svKey">${this.activeProcedures().map(x =>
-            `<option value="${x.key}" data-price="${x.price}">${x.label} — ${this.baht(x.price)} บาท/ครั้ง</option>`).join('')}</select></div>
-        <div class="form-row3">
+          <select id="svKey">${live.map(x =>
+            `<option value="${x.key}" data-price="${x.price}">${this.esc(x.label)} — ${this.esc(this.rateText(x))}</option>`).join('')}</select></div>
+        <div class="field"><label>ที่มาของค่าใช้จ่าย</label>
+          <select id="svSrc">
+            <option value="quoted">ผู้วิจัยร้องขอไว้ในคำขอตั้งแต่แรก</option>
+            <option value="extra">เกิดขึ้นภายหลัง ไม่ได้อยู่ในคำขอ</option>
+          </select></div>
+        <div class="form-row2">
           <div class="field"><label>วันที่ทำ</label>${this.dateChip('svDate', def, 'เลือกวันที่')}</div>
-          <div class="field"><label>จำนวน (ครั้ง) <span style="color:var(--red)">*</span></label>
-            <input id="svQty" type="number" min="1" step="1" value="1"></div>
-          <div class="field"><label>ราคาต่อครั้ง (บาท)</label>
+          <div class="field"><label>ราคาต่อหน่วย (บาท)</label>
             <input id="svPrice" type="number" min="0" step="1" value="${first.price}"></div>
         </div>
+        <div class="field"><label id="svQtyLabel">ปริมาณ <span style="color:var(--red)">*</span></label>
+          <div class="sv-fields" id="svFields"></div></div>
         <div class="form-row2">
           <div class="field"><label>รวมเป็นเงิน</label><input id="svTotal" value="${this.baht(first.price)}" disabled></div>
           <div class="field"><label>หมายเหตุ</label><input id="svNote" placeholder="เช่น เก็บเลือดกลุ่ม Treatment-3"></div>
@@ -2208,23 +2263,72 @@ const App = {
       </div>`, { compact: true });
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('svCancel').onclick = () => this.closeModal();
-    const sel = this.el('svKey'), qty = this.el('svQty'), price = this.el('svPrice'), tot = this.el('svTotal');
-    const recalc = () => { tot.value = this.baht((Number(qty.value) || 0) * (Number(price.value) || 0)); };
-    sel.onchange = () => { price.value = sel.selectedOptions[0].dataset.price; recalc(); };
-    qty.oninput = recalc; price.oninput = recalc;
+
+    const sel = this.el('svKey'), price = this.el('svPrice'), tot = this.el('svTotal');
+    const fieldBox = this.el('svFields'), qtyLabel = this.el('svQtyLabel'), srcSel = this.el('svSrc');
+    // ค่าที่กรอกอยู่เก็บนอก DOM — สลับหัตถการไปมาแล้วเลขเดิมยังอยู่
+    const vals = {};
+    const curUnit = () => this.procOf(sel.value).unit;
+
+    const recalc = () => {
+      const un = this.unitOf(curUnit());
+      un.fields.forEach(f => { const i = this.el('svF_' + f); if (i) vals[f] = i.value; });
+      const qty = this.svcQtyOf(un.key, vals);
+      tot.value = qty
+        ? `${this.baht(qty * (Number(price.value) || 0))}  (${this.qtyText(qty, un.key)})`
+        : this.baht(0);
+    };
+    // ช่องที่ต้องกรอกเปลี่ยนตามหน่วยของหัตถการที่เลือก — วาดใหม่ทุกครั้งที่สลับรายการ
+    const drawFields = () => {
+      const un = this.unitOf(curUnit());
+      qtyLabel.innerHTML = un.fields.length
+        ? `ปริมาณ — คิดเป็น ${this.esc(un.qtyUnit)} <span style="color:var(--red)">*</span>`
+        : 'ปริมาณ';
+      fieldBox.innerHTML = un.fields.length
+        ? un.fields.map((f, n) => {
+            const fd = this.fieldDef(f);
+            return (n ? '<span class="rs-x">×</span>' : '')
+              + `<div class="rs-num"><label>${this.esc(fd.label)}</label>
+                   <input id="svF_${f}" type="number" min="${fd.min}" step="${fd.step}" value="${this.esc(vals[f] ?? '')}" placeholder="0"></div>`;
+          }).join('')
+        : '<span class="sv-fixed">คิดครั้งเดียวต่อโครงการ — ไม่ต้องกรอกจำนวน</span>';
+      fieldBox.querySelectorAll('input').forEach(i => i.oninput = recalc);
+      recalc();
+    };
+    sel.onchange = () => {
+      price.value = sel.selectedOptions[0].dataset.price;
+      srcSel.value = quoted.has(sel.value) ? 'quoted' : 'extra';
+      drawFields();
+    };
+    price.oninput = recalc;
+    srcSel.value = quoted.has(sel.value) ? 'quoted' : 'extra';
+    drawFields();
+
     let date = def;
     const chip = this.el('svDate');
     chip.onclick = (ev) => this.openThaiCalendar(ev.currentTarget, date, iso => {
       date = iso || def; this.setDateChip(chip, date, 'เลือกวันที่');
     });
     this.el('svSave').onclick = () => {
-      const n = Number(qty.value), pr = Number(price.value);
+      const pr = Number(price.value);
+      const un = this.unitOf(curUnit());
       if (!date) return this.toast('เลือกวันที่ก่อน');
-      if (!(n > 0)) return this.toast('จำนวนครั้งต้องมากกว่า 0');
-      if (!(pr >= 0)) return this.toast('ราคาต่อครั้งไม่ถูกต้อง');
-      this.billingOf(p).services.push({ date, key: sel.value, qty: n, price: pr, by: this.user.name,
-        note: this.el('svNote').value.trim() });
-      this.log('บันทึกหัตถการที่เรียกเก็บ', `${this.procOf(sel.value).label} · ${n} ครั้ง · ${this.baht(n * pr)} บาท`, p.name);
+      for (const f of un.fields) {
+        const fd = this.fieldDef(f);
+        const v = Number(this.el('svF_' + f).value);
+        if (!Number.isFinite(v) || v < fd.min) return this.toast(`กรอก "${fd.label}" อย่างน้อย ${fd.min}`);
+        vals[f] = fd.int ? Math.round(v) : v;
+      }
+      const n = this.svcQtyOf(un.key, vals);
+      if (!(n > 0)) return this.toast('ปริมาณต้องมากกว่า 0');
+      if (!(pr >= 0)) return this.toast('ราคาต่อหน่วยไม่ถูกต้อง');
+      const row = { date, key: sel.value, unit: un.key, qty: n, price: pr, src: srcSel.value,
+        by: this.user.name, note: this.el('svNote').value.trim() };
+      un.fields.forEach(f => { row[f] = vals[f]; });
+      this.billingOf(p).services.push(row);
+      this.log('บันทึกหัตถการที่เรียกเก็บ',
+        `${this.procOf(sel.value).label} · ${this.qtyText(n, un.key)} · ${this.baht(n * pr)} บาท`
+        + ` · ${srcSel.value === 'quoted' ? 'ตามคำขอ' : 'เกิดขึ้นภายหลัง'}`, p.name);
       this.closeModal();
       this.finMonth = this.monthKey(date) === this.monthKey(todayISO()) ? null : this.monthKey(date);
       this.toast('บันทึกหัตถการแล้ว');
@@ -2320,10 +2424,15 @@ const App = {
     const rows = PROCEDURES.map((x, i) => {
       const use = this.procUsage(x.key);
       const off = x.active === false;
+      const un = this.unitOf(x.unit);
       return `<tr class="${off ? 'rt-off' : ''}" data-key="${x.key}">
         <td><b>${this.esc(x.label)}</b>
           <div class="rt-key"><span class="mono">${this.esc(x.key)}</span>${off ? ' · <span class="rt-tag">เลิกให้บริการ</span>' : ''}</div></td>
-        <td class="num rt-price"><b>${this.baht(x.price)}</b><i>บาท / ครั้ง</i></td>
+        <td class="num rt-price"><b>${this.baht(x.price)}</b><i>บาท</i></td>
+        <td class="rt-unit">${this.esc(un.label)}
+          <i>${un.fields.length
+            ? 'กรอก ' + un.fields.map(f => this.esc(this.fieldDef(f).label)).join(' × ')
+            : 'คิดครั้งเดียวต่อโครงการ'}</i></td>
         <td class="num">${use.total
           ? `${use.total} รายการ<i class="rt-use">คำขอ ${use.quoted} · เรียกเก็บแล้ว ${use.billed}</i>`
           : '<span class="rt-none">ยังไม่มีใครใช้</span>'}</td>
@@ -2342,9 +2451,18 @@ const App = {
         <div class="page-head">
           <div><h2>🧾 อัตราค่าบริการ</h2>
             <div class="desc">อัตรากลางของทั้งหน่วย — <b>ทุกโครงการคิดจากชุดเดียวกันนี้</b>
-              · เป็นต้นทางของราคาทั้งในคำขอของผู้วิจัยและในการเรียกเก็บรายเดือน · แก้ได้เฉพาะผู้ดูแลระบบ</div></div>
+              · หนึ่งรายการมี <b>ชื่อ · ราคา · หน่วย</b> โดยหน่วยเป็นตัวกำหนดว่าเวลาสั่งต้องกรอกอะไรบ้าง
+              · แก้ได้เฉพาะผู้ดูแลระบบ</div></div>
           <span class="spacer" style="flex:1"></span>
           <button class="btn btn-primary" id="rtAdd">+ เพิ่มหัตถการ</button>
+        </div>
+
+        <div class="rt-two">
+          <div><b>1 · ผู้วิจัยร้องขอไว้ตั้งแต่แรก</b>
+            เลือกรายการในฟอร์มคำขอ ระบบคิดเป็น<b>ประมาณการ</b>ให้เห็นก่อนกดยื่น
+            ยังไม่ใช่ยอดเรียกเก็บ</div>
+          <div><b>2 · เกิดขึ้นภายหลังระหว่างทำจริง</b>
+            เจ้าหน้าที่บันทึกที่หน้าการเงินตามที่ทำจริง เป็น<b>ยอดเรียกเก็บจริง</b>ของเดือนนั้น</div>
         </div>
 
         <div class="rt-safe">
@@ -2355,7 +2473,7 @@ const App = {
 
         <div class="report-canvas" style="padding:0;overflow:auto">
           <table class="data rt-table">
-            <thead><tr><th>หัตถการ</th><th class="num">ราคา</th><th class="num">ถูกใช้ไปแล้ว</th><th></th></tr></thead>
+            <thead><tr><th>หัตถการ</th><th class="num">ราคา</th><th>หน่วย</th><th class="num">ถูกใช้ไปแล้ว</th><th></th></tr></thead>
             <tbody>${rows}</tbody>
           </table>
         </div>
@@ -2382,7 +2500,7 @@ const App = {
       const off = pr.active === false;
       if (off) {                                   // เปิดใช้อีกครั้ง — ไม่ต้องถาม
         pr.active = true;
-        this.log('เปิดใช้หัตถการอีกครั้ง', `${pr.label} · ${this.baht(pr.price)} บาท/ครั้ง`);
+        this.log('เปิดใช้หัตถการอีกครั้ง', `${pr.label} · ${this.rateText(pr)}`);
         this.toast('เปิดใช้รายการนี้แล้ว');
         return this.renderRates();
       }
@@ -2408,7 +2526,7 @@ const App = {
       if (this.procUsage(pr.key).total) { this.toast('รายการนี้ถูกใช้ไปแล้ว ลบไม่ได้'); return this.renderRates(); }
       this.confirmDialog({
         title: 'ลบหัตถการนี้ถาวร',
-        body: `<b>${this.esc(pr.label)}</b> · ${this.baht(pr.price)} บาท/ครั้ง<br>ยังไม่มีใครใช้รายการนี้ จึงลบทิ้งได้ — แต่ลบแล้วเรียกคืนไม่ได้`,
+        body: `<b>${this.esc(pr.label)}</b> · ${this.rateText(pr)}<br>ยังไม่มีใครใช้รายการนี้ จึงลบทิ้งได้ — แต่ลบแล้วเรียกคืนไม่ได้`,
         okLabel: 'ลบถาวร',
         onOk: () => {
           PROCEDURES.splice(PROCEDURES.indexOf(pr), 1);
@@ -2424,6 +2542,7 @@ const App = {
   openProcForm(pr) {
     const isNew = !pr;
     const use = isNew ? { total: 0 } : this.procUsage(pr.key);
+    const curUnit = isNew ? 'time' : (pr.unit || 'time');
     this.openModal(`
       <div class="modal-head"><div><h3>${isNew ? '➕ เพิ่มหัตถการ' : '✎ แก้ไขหัตถการ'}</h3>
         <div class="desc">${isNew ? 'รายการใหม่จะปรากฏในช่องเลือกทันที' : `รหัส <span class="mono">${this.esc(pr.key)}</span> · แก้ไม่ได้`}</div></div>
@@ -2431,8 +2550,14 @@ const App = {
       <div class="modal-body">
         <div class="field"><label>ชื่อหัตถการ <span style="color:var(--red)">*</span></label>
           <input id="pcLabel" placeholder="เช่น เจาะเลือดเพื่อส่งตรวจ" value="${this.esc(isNew ? '' : pr.label)}"></div>
-        <div class="field"><label>ราคาต่อครั้ง (บาท) <span style="color:var(--red)">*</span></label>
-          <input id="pcPrice" type="number" min="0" step="1" placeholder="0" value="${isNew ? '' : pr.price}"></div>
+        <div class="form-row2">
+          <div class="field"><label>ราคา (บาท) <span style="color:var(--red)">*</span></label>
+            <input id="pcPrice" type="number" min="0" step="1" placeholder="0" value="${isNew ? '' : pr.price}"></div>
+          <div class="field"><label>หน่วย <span style="color:var(--red)">*</span></label>
+            <select id="pcUnit">${PROC_UNITS.map(u =>
+              `<option value="${u.key}" ${u.key === curUnit ? 'selected' : ''}>${this.esc(u.label)}</option>`).join('')}</select></div>
+        </div>
+        <p class="af-hint" id="pcUnitHint"></p>
         <p class="af-hint">${use.total
           ? `💡 รายการนี้ถูกใช้ไปแล้ว <b>${use.total}</b> รายการ — ราคาใหม่มีผลกับสิ่งที่บันทึก<b>หลังจากนี้</b>เท่านั้น ยอดเดิมไม่ขยับ`
           : '💡 ราคาที่ตั้งไว้จะถูกคัดลอกไปเก็บกับทุกรายการที่บันทึก ทำให้ปรับราคาภายหลังได้โดยยอดเก่าไม่เปลี่ยน'}</p>
@@ -2444,20 +2569,35 @@ const App = {
       </div>`, { compact: true });
     this.el('closeModal').onclick = () => this.closeModal();
     this.el('pcCancel').onclick = () => this.closeModal();
+    // ตัวอย่างการคิดเงินของหน่วยที่เลือกอยู่ — บอกทันทีว่าคนสั่งจะต้องกรอกอะไร
+    const unitSel = this.el('pcUnit'), unitHint = this.el('pcUnitHint');
+    const showUnit = () => {
+      const un = this.unitOf(unitSel.value);
+      const price = Number(this.el('pcPrice').value) || 0;
+      unitHint.innerHTML = un.fields.length
+        ? `📐 เวลาสั่งต้องกรอก <b>${un.fields.map(f => this.esc(this.fieldDef(f).label)).join('</b> และ <b>')}</b>`
+          + ` — ระบบคูณกันเป็นจำนวน <b>${this.esc(un.qtyUnit)}</b> แล้วคูณราคา`
+          + (price ? ` (เช่น ${un.fields.map(() => '2').join(' × ')} = ${Math.pow(2, un.fields.length)} ${this.esc(un.qtyUnit)} = ${this.baht(price * Math.pow(2, un.fields.length))} บาท)` : '')
+        : `📐 คิดครั้งเดียวต่อโครงการ ไม่ต้องกรอกจำนวน${price ? ` — โครงการละ ${this.baht(price)} บาท` : ''}`;
+    };
+    unitSel.onchange = showUnit;
+    this.el('pcPrice').oninput = showUnit;
+    showUnit();
     this.el('pcSave').onclick = () => {
       const label = this.el('pcLabel').value.trim();
       const price = Number(this.el('pcPrice').value);
+      const unit = unitSel.value;
       if (!label) return this.toast('กรอกชื่อหัตถการก่อน');
       if (!Number.isFinite(price) || price < 0) return this.toast('ราคาต้องเป็นตัวเลขไม่ติดลบ');
       const dup = PROCEDURES.some(x => x.label.trim() === label && (isNew || x.key !== pr.key));
       if (dup) return this.toast('มีหัตถการชื่อนี้อยู่แล้ว');
       if (isNew) {
-        PROCEDURES.push({ key: this.newProcKey(label), label, price, active: true });
-        this.log('เพิ่มหัตถการในรายการ', `${label} · ${this.baht(price)} บาท/ครั้ง`);
+        PROCEDURES.push({ key: this.newProcKey(label), label, price, unit, active: true });
+        this.log('เพิ่มหัตถการในรายการ', `${label} · ${this.rateText({ price, unit })}`);
       } else {
-        const was = pr.price;
-        pr.label = label; pr.price = price;
-        this.log('แก้ไขหัตถการ', `${label} · ราคา ${this.baht(was)} → ${this.baht(price)} บาท/ครั้ง`);
+        const wasRate = this.rateText(pr);
+        pr.label = label; pr.price = price; pr.unit = unit;
+        this.log('แก้ไขหัตถการ', `${label} · อัตรา ${wasRate} → ${this.rateText(pr)}`);
       }
       this.closeModal();
       this.toast(isNew ? 'เพิ่มรายการแล้ว' : 'บันทึกการแก้ไขแล้ว');
@@ -4067,7 +4207,11 @@ const App = {
       approvalDoc: req.approvalDoc || null,
       extraDocs: (req.extraDocs || []).map(x => ({ _id: this.uid(), label: x.label || '', file: x.file || null })),
       appointments: (req.appointments || []).map(a => ({ password: '', ...a })),
-      services: (req.services || []).map(x => ({ _id: this.uid(), key: x.key, mice: x.mice ?? '', days: x.days ?? '' })),
+      services: (req.services || []).map(x => {
+        const row = this.blankSvcRow(x.key);
+        this.unitOfProc(x.key).fields.forEach(f => { row[f] = x[f] ?? ''; });
+        return row;
+      }),
     };
     if (!this.draft.diets.some(x => x.isDefault)) this.draft.diets[0].isDefault = true;
     this.go('create');
@@ -4193,13 +4337,13 @@ const App = {
     const svcBlock = (req.services || []).length
       ? `<div class="section-title">หัตถการที่ร้องขอเพิ่มเติม</div>
          <table class="pi-svc">
-           <thead><tr><th>รายการ</th><th class="num">หนู</th><th class="num">วัน</th><th class="num">ครั้ง</th><th class="num">เป็นเงิน</th></tr></thead>
+           <thead><tr><th>รายการ</th><th>ปริมาณที่ขอ</th><th class="num">รวมเป็น</th><th class="num">เป็นเงิน</th></tr></thead>
            <tbody>${req.services.map(x => `<tr>
-             <td>${this.esc(x.label)}<i>@ ${this.baht(x.price)} บาท/ครั้ง</i></td>
-             <td class="num">${x.mice}</td><td class="num">${x.days}</td>
-             <td class="num">${(x.qty || 0).toLocaleString('en-US')}</td>
+             <td>${this.esc(x.label)}<i>@ ${this.esc(this.rateText({ price: x.price, unit: x.unit || this.procOf(x.key).unit }))}</i></td>
+             <td>${this.esc(this.svcInputText(x))}</td>
+             <td class="num">${this.esc(this.qtyText(x.qty || 0, x.unit || this.procOf(x.key).unit))}</td>
              <td class="num"><b>${this.baht(x.amount)}</b></td></tr>`).join('')}</tbody>
-           <tfoot><tr><td colspan="4">รวมประมาณการ</td>
+           <tfoot><tr><td colspan="3">รวมประมาณการ</td>
              <td class="num"><b>${this.baht(req.services.reduce((s, x) => s + (x.amount || 0), 0))}</b></td></tr></tfoot>
          </table>
          <p class="empty-note">ราคา ณ วันที่ยื่นคำขอ · ยอดที่เรียกเก็บจริงคิดตามที่ทำจริงในแต่ละเดือน</p>`
@@ -4352,9 +4496,9 @@ const App = {
       diagram: null, aup: null, approvalDoc: null,
       extraDocs: [],      // เอกสารเพิ่มเติมที่ PI แนบเองได้ไม่จำกัด [{_id,label,file}]
       appointments: [],
-      // หัตถการที่ขอให้หน่วยทำให้ — [{_id, key, mice, days}] ราคามาจาก PROCEDURES
-      // เก็บแค่ "เลือกอะไร กี่ตัว กี่วัน" ส่วนจำนวนครั้งและค่าใช้จ่ายคำนวณสด
-      // ไม่เก็บซ้ำ ตัวเลขบนจอกับตอนยื่นจึงตรงกันเสมอ
+      // หัตถการที่ขอให้หน่วยทำให้ — [{_id, key, ...ช่องตามหน่วยของรายการ}]
+      // เก็บแค่ "เลือกอะไร กรอกเท่าไร" ส่วนราคา ปริมาณรวม และค่าใช้จ่ายคำนวณสด
+      // จากแคตตาล็อก ไม่เก็บซ้ำ ตัวเลขบนจอกับตอนยื่นจึงตรงกันเสมอ
       services: [],
     };
   },
@@ -4509,7 +4653,8 @@ const App = {
               <button class="btn btn-ghost btn-sm" id="cpAddSvc" style="margin-left:auto"><span class="ico-plus">+</span> เพิ่มหัตถการ</button>
             </div>
             <p class="empty-note" style="margin-top:0">หัตถการที่ขอให้ <b>เจ้าหน้าที่ของหน่วย</b> ทำให้ (ไม่ใช่สิ่งที่ทีมวิจัยทำเอง)
-              · เลือกรายการ ระบุจำนวนหนูและจำนวนวัน ระบบคิดจำนวนครั้งและค่าใช้จ่ายให้
+              · เลือกรายการแล้วกรอกตามช่องที่ขึ้นให้ (<b>ช่องเปลี่ยนตามหน่วยของรายการนั้น</b> — กี่ตัว กี่วัน กี่มล. กี่กม.)
+              ระบบคิดปริมาณและค่าใช้จ่ายให้
               · ราคาเป็น<b>อัตราปัจจุบัน</b> ใช้ประมาณการ ยอดจริงเรียกเก็บตามที่ทำจริง</p>
             <div id="cpServices"></div>
             <div class="req-sum" id="cpSvcSum"></div>
@@ -4606,7 +4751,7 @@ const App = {
       const live = this.activeProcedures();
       if (!live.length) return this.toast('ยังไม่มีรายการหัตถการที่เปิดให้บริการ');
       this.captureReqServices();
-      this.draft.services.push({ _id: this.uid(), key: live[0].key, mice: '', days: '' });
+      this.draft.services.push(this.blankSvcRow(live[0].key));
       this.renderReqServices();
     };
 
@@ -4754,16 +4899,40 @@ const App = {
   },
 
   // ---- ร้องขอหัตถการเพิ่มเติม (ฟอร์มคำขอของ PI) -------------------------
-  // หนึ่งแถว = หัตถการหนึ่งรายการ · จำนวนครั้ง = จำนวนหนู × จำนวนวัน
-  // ราคาไม่ได้เก็บในแถว แต่อ่านจาก PROCEDURES ทุกครั้งที่วาด — ตอนนี้ยังไม่มีหน้า
-  // จัดการรายการหัตถการ ราคาจึงมาจากที่เดียวคือแคตตาล็อก พอมีหน้านั้นเมื่อไหร่
-  // หน้านี้ไม่ต้องแก้ตาม (ราคาจะถูก "แช่แข็ง" ลงคำขอตอนกดยื่น ดู submitCreateProject)
-  svcQty(row) {
-    const mice = Math.max(0, Math.round(+row.mice) || 0);
-    const days = Math.max(0, Math.round(+row.days) || 0);
-    return mice * days;
+  // หนึ่งแถว = หัตถการหนึ่งรายการ · ช่องที่ต้องกรอกมาจาก "หน่วย" ของรายการนั้น
+  //   บาท/ตัว/วัน → กรอก หนู กับ วัน · บาท/กิโลเมตร → กรอก ระยะทาง ช่องเดียว
+  //   บาท/โครงการ → ไม่ต้องกรอกอะไรเลย คิดครั้งเดียว
+  // ราคาไม่ได้เก็บในแถว แต่อ่านจากแคตตาล็อกทุกครั้งที่วาด ราคาจึงมาจากที่เดียว
+  // (ราคาจะถูก "แช่แข็ง" ลงคำขอตอนกดยื่น ดู submitCreateProject)
+  // แถวเปล่า — ทุกช่องที่หน่วยไหนก็ตามอาจเรียกใช้ ตั้งเป็นค่าว่างไว้ก่อน
+  // (เปลี่ยนหัตถการกลับไปกลับมาแล้วเลขที่เคยกรอกไว้จะยังอยู่ ไม่หายไปเงียบ ๆ)
+  blankSvcRow(key) {
+    const row = { _id: this.uid(), key };
+    Object.keys(PROC_FIELDS).forEach(f => { row[f] = ''; });
+    return row;
   },
+  svcQty(row) { return this.svcQtyOf(this.procOf(row.key).unit, row); },
   svcAmount(row) { return this.svcQty(row) * (this.procOf(row.key).price || 0); },
+  // จำนวนหนูของแถว — ใช้เทียบกับจำนวนสัตว์ทดลองทั้งโครงการ
+  // หน่วยที่ไม่ได้คิดเป็นรายตัว (กม. · กก. · โครงการ) ไม่มีอะไรให้เทียบ คืน 0
+  svcMice(row) { return this.unitOfProc(row.key).fields.includes('mice') ? (+row.mice || 0) : 0; },
+  svcOver(row, totalMice) { return totalMice > 0 && this.svcMice(row) > totalMice; },
+  svcOverText(row, totalMice) {
+    return `ขอทำ ${this.svcMice(row).toLocaleString('en-US')} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice.toLocaleString('en-US')} ตัว`;
+  },
+
+  // ช่องกรอกของแถวหนึ่ง — คั่นด้วย × ให้อ่านเป็นสูตรคูณจากซ้ายไปขวา
+  svcFieldsHTML(row, i) {
+    const un = this.unitOfProc(row.key);
+    if (!un.fields.length) return '<div class="rs-fixed">คิดครั้งเดียวต่อโครงการ</div>';
+    return un.fields.map((f, n) => {
+      const fd = this.fieldDef(f);
+      return (n ? '<span class="rs-x">×</span>' : '')
+        + `<div class="rs-num"><label>${this.esc(fd.label)}</label>
+             <input class="rs-f" type="number" min="${fd.min}" step="${fd.step}"
+               data-i="${i}" data-f="${f}" value="${this.esc(row[f] ?? '')}" placeholder="0"></div>`;
+    }).join('');
+  },
 
   renderReqServices() {
     const box = this.el('cpServices');
@@ -4776,24 +4945,20 @@ const App = {
     box.innerHTML = d.services.map((row, i) => {
       const pr = this.procOf(row.key);
       const qty = this.svcQty(row);
-      const over = totalMice > 0 && (+row.mice || 0) > totalMice;
+      const over = this.svcOver(row, totalMice);
       return `
       <div class="req-svc${over ? ' over' : ''}" data-i="${i}">
         <select class="rs-key" data-i="${i}">
           ${this.procOptions(row.key)}
         </select>
-        <div class="rs-num"><label>หนู (ตัว)</label>
-          <input class="rs-mice" type="number" min="1" step="1" data-i="${i}" value="${this.esc(row.mice)}" placeholder="0"></div>
-        <span class="rs-x">×</span>
-        <div class="rs-num"><label>จำนวนวัน</label>
-          <input class="rs-days" type="number" min="1" step="1" data-i="${i}" value="${this.esc(row.days)}" placeholder="0"></div>
+        ${this.svcFieldsHTML(row, i)}
         <div class="rs-calc">
-          <span class="rs-qty">${qty ? `${qty.toLocaleString('en-US')} ครั้ง` : '—'}</span>
-          <i>@ ${this.baht(pr.price)} บาท</i>
+          <span class="rs-qty">${qty ? this.qtyText(qty, pr.unit) : '—'}</span>
+          <i>@ ${this.esc(this.rateText(pr))}</i>
         </div>
         <div class="rs-amt">${qty ? this.baht(this.svcAmount(row)) : '—'}</div>
         <button type="button" class="icon-btn rs-del" data-i="${i}" title="ลบ">🗑️</button>
-        ${over ? `<div class="rs-warn">ขอทำ ${(+row.mice).toLocaleString('en-US')} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice.toLocaleString('en-US')} ตัว</div>` : ''}
+        ${over ? `<div class="rs-warn">${this.svcOverText(row, totalMice)}</div>` : ''}
       </div>`;
     }).join('') || '<p class="empty-note">ยังไม่ได้ร้องขอหัตถการเพิ่มเติม — ทีมวิจัยดำเนินการเองทั้งหมด</p>';
 
@@ -4806,13 +4971,15 @@ const App = {
       : '';
 
     // พิมพ์เลขแล้วคิดยอดใหม่ทันที แต่ไม่วาดใหม่ทั้งบล็อก เคอร์เซอร์จะได้ไม่กระโดด
-    box.querySelectorAll('.rs-mice, .rs-days').forEach(inp => inp.oninput = () => {
+    box.querySelectorAll('.rs-f').forEach(inp => inp.oninput = () => {
       this.captureReqServices();
       this.refreshReqSvcRow(+inp.dataset.i);
     });
+    // เปลี่ยนหัตถการ = เปลี่ยนหน่วย = ช่องที่ต้องกรอกเปลี่ยนตาม จึงต้องวาดใหม่ทั้งบล็อก
     box.querySelectorAll('.rs-key').forEach(sel => sel.onchange = () => {
       this.captureReqServices();
-      this.refreshReqSvcRow(+sel.dataset.i);
+      this.draft.services[+sel.dataset.i].key = sel.value;
+      this.renderReqServices();
     });
     box.querySelectorAll('.rs-del').forEach(b => b.onclick = () => {
       this.captureReqServices();
@@ -4829,14 +4996,14 @@ const App = {
     const pr = this.procOf(row.key);
     const qty = this.svcQty(row);
     const totalMice = this.reqTotalMice();
-    const over = totalMice > 0 && (+row.mice || 0) > totalMice;
-    el.querySelector('.rs-qty').textContent = qty ? `${qty.toLocaleString('en-US')} ครั้ง` : '—';
-    el.querySelector('.rs-calc i').textContent = `@ ${this.baht(pr.price)} บาท`;
+    const over = this.svcOver(row, totalMice);
+    el.querySelector('.rs-qty').textContent = qty ? this.qtyText(qty, pr.unit) : '—';
+    el.querySelector('.rs-calc i').textContent = `@ ${this.rateText(pr)}`;
     el.querySelector('.rs-amt').textContent = qty ? this.baht(this.svcAmount(row)) : '—';
     el.classList.toggle('over', over);
     let warn = el.querySelector('.rs-warn');
     if (over && !warn) { warn = document.createElement('div'); warn.className = 'rs-warn'; el.appendChild(warn); }
-    if (over) warn.textContent = `ขอทำ ${(+row.mice).toLocaleString('en-US')} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice.toLocaleString('en-US')} ตัว`;
+    if (over) warn.textContent = this.svcOverText(row, totalMice);
     else if (warn) warn.remove();
 
     const total = d.services.reduce((s, r) => s + this.svcAmount(r), 0);
@@ -4852,8 +5019,7 @@ const App = {
     box.querySelectorAll('.req-svc').forEach((el, i) => {
       const row = this.draft.services[i]; if (!row) return;
       row.key = el.querySelector('.rs-key').value;
-      row.mice = el.querySelector('.rs-mice').value;
-      row.days = el.querySelector('.rs-days').value;
+      el.querySelectorAll('.rs-f').forEach(inp => { row[inp.dataset.f] = inp.value; });
     });
   },
 
@@ -5199,17 +5365,26 @@ const App = {
       }
     }
 
-    // หัตถการที่ร้องขอ — ทิ้งแถวที่ยังว่างทั้งแถว ส่วนแถวที่กรอกมาต้องครบและสมเหตุผล
-    d.services = (d.services || []).filter(x => (x.mice !== '' && x.mice != null) || (x.days !== '' && x.days != null));
+    // หัตถการที่ร้องขอ — ทิ้งแถวที่ยังไม่ได้กรอกอะไรเลย ส่วนแถวที่กรอกมาต้องครบทุกช่อง
+    // ที่หน่วยนั้นต้องการ (หน่วยที่ไม่มีช่องเลย เช่น บาท/โครงการ ถือว่าครบเสมอ)
+    const svcFilled = x => this.unitOfProc(x.key).fields.some(f => x[f] !== '' && x[f] != null);
+    d.services = (d.services || []).filter(x => !this.unitOfProc(x.key).fields.length || svcFilled(x));
     for (const x of d.services) {
-      const label = this.procOf(x.key).label;
-      const mice = Math.round(+x.mice), days = Math.round(+x.days);
-      if (!Number.isFinite(mice) || mice < 1) { this.toast(`กรุณาระบุจำนวนหนูของ "${label}" (อย่างน้อย 1 ตัว)`); this.renderReqServices(); return; }
-      if (!Number.isFinite(days) || days < 1) { this.toast(`กรุณาระบุจำนวนวันของ "${label}" (อย่างน้อย 1 วัน)`); this.renderReqServices(); return; }
+      const pr = this.procOf(x.key), label = pr.label;
+      for (const f of this.unitOfProc(x.key).fields) {
+        const fd = this.fieldDef(f);
+        let v = Number(x[f]);
+        if (fd.int) v = Math.round(v);
+        if (!Number.isFinite(v) || v < fd.min) {
+          this.toast(`กรุณาระบุ "${fd.label}" ของ "${label}" (อย่างน้อย ${fd.min})`);
+          this.renderReqServices(); return;
+        }
+        x[f] = v;
+      }
       // ทำหัตถการกับหนูมากกว่าที่ขอมาทั้งโครงการไม่ได้ — จับตรงนี้ ไม่ใช่ปล่อยให้
       // ผู้ตรวจมาเจอเอง (ตัวเลขด้านบนแก้ได้ตลอด เลยต้องเช็กตอนยื่น ไม่ใช่ตอนพิมพ์)
-      if (mice > totalMice) {
-        this.toast(`"${label}" ขอทำ ${mice} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice} ตัว`);
+      if (this.svcOver(x, totalMice)) {
+        this.toast(`"${label}" ขอทำ ${this.svcMice(x)} ตัว แต่โครงการระบุสัตว์ทดลองไว้ ${totalMice} ตัว`);
         this.renderReqServices(); return;
       }
     }
@@ -5242,8 +5417,12 @@ const App = {
       // แล้วคือข้อตกลง ปรับราคากลางทีหลังไม่ควรทำให้ยอดในคำขอเก่าขยับเอง
       services: d.services.map(x => {
         const pr = this.procOf(x.key);
-        const mice = Math.round(+x.mice), days = Math.round(+x.days);
-        return { key: x.key, label: pr.label, price: pr.price, mice, days, qty: mice * days, amount: mice * days * pr.price };
+        const un = this.unitOf(pr.unit);
+        const qty = this.svcQtyOf(pr.unit, x);
+        // เก็บทั้งหน่วยและตัวเลขที่กรอกไว้กับแถว — อ่านคำขอเก่าได้ครบแม้อัตราจะถูกแก้ทีหลัง
+        const row = { key: x.key, label: pr.label, price: pr.price, unit: pr.unit, qty, amount: qty * pr.price };
+        un.fields.forEach(f => { row[f] = Number(x[f]); });
+        return row;
       }),
       appointments: d.appointments.map(a => a.userId === '__new__'
         ? { role: a.role, userId: '__new__', firstName: a.firstName, lastName: a.lastName || '', email: a.email,
