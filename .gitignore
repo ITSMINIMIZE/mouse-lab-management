@@ -17,3 +17,19 @@ CLAUDE.md
 # pattern rather than filenames: these are double-click scripts each person makes
 # for their own machine, and the next one should not need a gitignore edit too
 *.command
+
+# กุญแจของ Firebase ฝั่งเซิร์ฟเวอร์ — ข้ามทุกสิทธิ์ได้ทั้งโปรเจกต์
+# หลุดเมื่อไหร่ต้อง revoke ที่ Google Cloud ทันที ลบ commit อย่างเดียวไม่พอ
+*service-account*.json
+*serviceAccount*.json
+firebase-adminsdk-*.json
+.env
+.env.*
+# ของที่ firebase CLI สร้างระหว่างทาง
+.firebase/
+firebase-debug.log
+
+# ค่าตั้งต้น Firebase ฝั่งเว็บ — ยังไม่ได้ import เข้าแอป และ repo ยังเป็น public
+# ไม่ใช่ความลับตามสเปกของ Firebase แต่ยังไม่มีเหตุต้องฝากไว้ในประวัติถาวรตอนนี้
+# เอาออกจากรายการนี้ได้เลยตอนเริ่มต่อ DB จริง (ดึงใหม่จาก Console ได้ตลอด)
+js/firebase-config.js
